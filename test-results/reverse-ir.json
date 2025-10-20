@@ -1,0 +1,71 @@
+{
+  "ir": {
+    "version": "1.0.0",
+    "agents": [
+      {
+        "name": "detected-project",
+        "intent": "Reverse-engineered from existing structure in out/",
+        "constraints": [
+          {
+            "lhs": "latency_p50_ms",
+            "op": "<=",
+            "rhs": 100
+          },
+          {
+            "lhs": "pii_leak",
+            "op": "==",
+            "rhs": false
+          }
+        ],
+        "capabilities": [
+          {
+            "kind": "fs",
+            "args": [
+              "./out"
+            ],
+            "optional": false
+          }
+        ],
+        "checks": [
+          {
+            "kind": "policy",
+            "name": "no-pii",
+            "expect": "scan.artifacts.no_personal_data()"
+          }
+        ],
+        "emit": [
+          {
+            "type": "service",
+            "target": "./out/api"
+          },
+          {
+            "type": "service",
+            "target": "./out/axiom.json"
+          },
+          {
+            "type": "service",
+            "target": "./out/docker"
+          },
+          {
+            "type": "service",
+            "target": "./out/notes.manifest.json"
+          },
+          {
+            "type": "service",
+            "target": "./out/tests"
+          },
+          {
+            "type": "service",
+            "subtype": "web-app",
+            "target": "./out/web"
+          },
+          {
+            "type": "manifest",
+            "target": "./manifest.json"
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostics": []
+}

@@ -1,0 +1,15 @@
+agent "bad-scan" {
+  intent "test scan.artifacts without fs capability"
+  
+  capabilities {
+    net("http")
+  }
+  
+  checks {
+    policy "no-pii" expect scan.artifacts.no_personal_data()
+  }
+  
+  emit {
+    manifest target="./out/bad.manifest.json"
+  }
+}

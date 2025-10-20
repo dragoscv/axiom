@@ -1,10 +1,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseAxiomSource } from "@axiom/core/dist/parser.js";
 import { validateIR } from "@axiom/core/dist/validator.js";
 import { generate } from "@axiom/engine/dist/generate.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../..");
 const axmPath = path.join(repoRoot, "examples/blog.axm");
 const source = fs.readFileSync(axmPath, "utf-8");

@@ -17,7 +17,6 @@
     "out\\api\\package.json",
     "out\\api\\tsconfig.json",
     "out\\api\\.gitignore",
-    "out\\axiom.json\\README.md",
-    "manifest.json"
+    "out\\axiom.json\\README.md"
   ]
 }

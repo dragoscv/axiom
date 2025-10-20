@@ -1,0 +1,35 @@
+{
+  "ir": {
+    "version": "1.0.0",
+    "agents": [
+      {
+        "name": "bad-http",
+        "intent": "test http without net capability",
+        "constraints": [],
+        "capabilities": [
+          {
+            "kind": "fs",
+            "args": [
+              "./out"
+            ],
+            "optional": false
+          }
+        ],
+        "checks": [
+          {
+            "kind": "unit",
+            "name": "api",
+            "expect": "http.healthy(\"http://localhost:4000/health\")"
+          }
+        ],
+        "emit": [
+          {
+            "type": "manifest",
+            "target": "./out/bad.manifest.json"
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostics": []
+}

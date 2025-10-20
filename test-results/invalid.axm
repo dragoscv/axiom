@@ -1,0 +1,15 @@
+agent "bad-http" {
+  intent "test http without net capability"
+  
+  capabilities {
+    fs("./out")
+  }
+  
+  checks {
+    unit "api" expect http.healthy("http://localhost:4000/health")
+  }
+  
+  emit {
+    manifest target="./out/bad.manifest.json"
+  }
+}
