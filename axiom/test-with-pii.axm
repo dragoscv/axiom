@@ -1,0 +1,12 @@
+agent "test-with-pii" {
+  intent "test PII detection"
+  constraints { pii_leak == false }
+  capabilities { fs("./out") }
+  checks {
+    policy "no-pii" expect scan.artifacts.no_personal_data()
+  }
+  emit {
+    service type="web-app" target="./out/test-pii"
+    manifest target="./out/test-pii.manifest.json"
+  }
+}

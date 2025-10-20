@@ -1,0 +1,17 @@
+{
+  "name": "edge",
+  "description": "Edge-optimized profile: worker-like compatibility, strict timeouts, minimal FS usage",
+  "constraints": {
+    "timeout_ms": 50,
+    "memory_mb": 128,
+    "max_artifact_size_mb": 50,
+    "cold_start_ms": 100,
+    "no_fs_heavy": true
+  },
+  "map": {
+    "web-app": "@axiom/emitter-webapp",
+    "api-service": "@axiom/emitter-apiservice",
+    "batch-job": "@axiom/emitter-batchjob",
+    "docker-image": "@axiom/emitter-docker"
+  }
+}

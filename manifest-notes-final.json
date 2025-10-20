@@ -1,0 +1,77 @@
+{
+  "version": "1.0.0",
+  "buildId": "1760908749430",
+  "irHash": "6d0f18b46e5dc3c899b7294f2afe93eff16dcdf234a0a8c9b63b30a1f1ca2bd1",
+  "profile": "default",
+  "artifacts": [
+    {
+      "path": "out\\web\\notes\\README.md",
+      "kind": "file",
+      "sha256": "a239777e422d7284e7441306e2b3eded3684750a5f0db853341a079631e98267",
+      "bytes": 43
+    },
+    {
+      "path": "out\\api\\notes\\README.md",
+      "kind": "file",
+      "sha256": "a239777e422d7284e7441306e2b3eded3684750a5f0db853341a079631e98267",
+      "bytes": 43
+    },
+    {
+      "path": "out\\docker\\notes\\README.md",
+      "kind": "file",
+      "sha256": "a239777e422d7284e7441306e2b3eded3684750a5f0db853341a079631e98267",
+      "bytes": 43
+    },
+    {
+      "path": "out\\tests\\notes\\README.md",
+      "kind": "file",
+      "sha256": "953de5a3f5bbb6c810b98a3cb4f31269c81a14c6bd8212ae8b389b99cb63c11f",
+      "bytes": 41
+    },
+    {
+      "path": "out\\notes.manifest.json\\README.md",
+      "kind": "file",
+      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
+      "bytes": 44
+    },
+    {
+      "path": "manifest.json",
+      "kind": "file",
+      "sha256": "6deaf2488a4cd35f66c7b53aa7fd6e64eac5e67ba1b79b9aa36e2ad5c1d7d539",
+      "bytes": 1864
+    }
+  ],
+  "evidence": [
+    {
+      "checkName": "no-pii",
+      "kind": "policy",
+      "passed": true,
+      "details": {
+        "expression": "scan.artifacts.no_personal_data()",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    },
+    {
+      "checkName": "p50",
+      "kind": "sla",
+      "passed": true,
+      "details": {
+        "expression": "latency_p50_ms <= 80",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    },
+    {
+      "checkName": "api-health",
+      "kind": "unit",
+      "passed": false,
+      "details": {
+        "expression": "http.healthy(\"http://localhost:4000/health\")",
+        "evaluated": false,
+        "message": "Check failed"
+      }
+    }
+  ],
+  "createdAt": "2025-10-19T21:19:09.43Z"
+}

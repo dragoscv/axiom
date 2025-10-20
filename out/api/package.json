@@ -1,0 +1,12 @@
+{
+  "name": "axiom-blog-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "test": "echo 'No tests yet'"
+  },
+  "dependencies": {}
+}

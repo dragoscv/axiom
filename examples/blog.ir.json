@@ -1,0 +1,64 @@
+{
+  "ir": {
+    "version": "1.0.0",
+    "agents": [
+      {
+        "name": "blog",
+        "intent": "blog public cu admin",
+        "constraints": [
+          {
+            "lhs": "latency_p50_ms",
+            "op": "<=",
+            "rhs": 80
+          },
+          {
+            "lhs": "monthly_budget_usd",
+            "op": "<=",
+            "rhs": 3
+          },
+          {
+            "lhs": "pii_leak",
+            "op": "==",
+            "rhs": false
+          }
+        ],
+        "capabilities": [
+          {
+            "kind": "fs",
+            "args": [
+              "./out"
+            ]
+          }
+        ],
+        "checks": [
+          {
+            "kind": "policy",
+            "name": "no-pii",
+            "expect": "scan.artifacts.no_personal_data()"
+          },
+          {
+            "kind": "sla",
+            "name": "p50",
+            "expect": "latency_p50_ms <= 80"
+          }
+        ],
+        "emit": [
+          {
+            "type": "service",
+            "subtype": "web-app",
+            "target": "./out/web"
+          },
+          {
+            "type": "service",
+            "subtype": "api-service",
+            "target": "./out/api"
+          },
+          {
+            "type": "manifest",
+            "target": "./out/axiom.json"
+          }
+        ]
+      }
+    ]
+  }
+}

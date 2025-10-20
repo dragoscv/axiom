@@ -1,0 +1,26 @@
+agent "edge-notes" {
+  intent "aplicație notes optimizată pentru edge computing cu latență ultra-joasă"
+  constraints {
+    latency_p50_ms <= 50
+    monthly_budget_usd <= 5
+    pii_leak == false
+    cold_start_ms <= 100
+  }
+  capabilities {
+    fs("./out")
+    net("http")
+    secret("EDGE_AUTH")
+  }
+  checks {
+    policy "no-pii" expect scan.artifacts.no_personal_data()
+    sla "ultra-low-latency" expect latency_p50_ms <= 50
+    sla "cold-start" expect cold_start_ms <= 100
+  }
+  emit {
+    service type="web-app" target="./out/edge/web"
+    service type="api-service" target="./out/edge/api"
+    service type="docker-image" target="./out/edge/docker"
+    tests type="contract" target="./out/edge/tests"
+    manifest target="./out/edge.manifest.json"
+  }
+}

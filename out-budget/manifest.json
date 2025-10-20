@@ -1,0 +1,173 @@
+{
+  "version": "1.0.0",
+  "buildId": "1760911100519",
+  "irHash": "36d61135c9a3d72acf6c413369ab15ce61ebe8bc6d9cd9eee6a930e46e7a169f",
+  "profile": "budget",
+  "artifacts": [
+    {
+      "path": "out\\web\\notes\\README.md",
+      "kind": "file",
+      "sha256": "3cb7f5306ffc264039cde0dd643bb449cc8c6813e0443d61ad3655469bd02951",
+      "bytes": 304
+    },
+    {
+      "path": "out\\web\\notes\\next.config.ts",
+      "kind": "file",
+      "sha256": "a263ff6b73fdd058e579a041a89f441a89025ca44b0a36260d739f066a49145e",
+      "bytes": 47
+    },
+    {
+      "path": "out\\web\\notes\\app\\layout.tsx",
+      "kind": "file",
+      "sha256": "4812a550332a19b0d4ced58768e5a837f345b01e431366f76a4dcfc83ee5d3fe",
+      "bytes": 951
+    },
+    {
+      "path": "out\\web\\notes\\app\\page.tsx",
+      "kind": "file",
+      "sha256": "c0560ed6fe47b9e2d247692c272eaf697fcf74c2efef1cc5879bfb90a525cf7f",
+      "bytes": 487
+    },
+    {
+      "path": "out\\web\\notes\\app\\notes\\page.tsx",
+      "kind": "file",
+      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
+      "bytes": 2419
+    },
+    {
+      "path": "out\\web\\notes\\app\\notes\\new\\page.tsx",
+      "kind": "file",
+      "sha256": "b7ffa44589b5e4a5ea8689942fdb5fbe8676760ebef059e2514aecd858b95aa9",
+      "bytes": 2896
+    },
+    {
+      "path": "out\\web\\notes\\app\\notes\\[id]\\page.tsx",
+      "kind": "file",
+      "sha256": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
+      "bytes": 2192
+    },
+    {
+      "path": "out\\web\\notes\\package.json",
+      "kind": "file",
+      "sha256": "34e2278f5936558392bdb18720c29febc8aef65767bc5424aed5263b65acd50f",
+      "bytes": 325
+    },
+    {
+      "path": "out\\web\\notes\\tsconfig.json",
+      "kind": "file",
+      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
+      "bytes": 644
+    },
+    {
+      "path": "out\\web\\notes\\.gitignore",
+      "kind": "file",
+      "sha256": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
+      "bytes": 51
+    },
+    {
+      "path": "out\\api\\notes\\README.md",
+      "kind": "file",
+      "sha256": "67dfe444e1917823e8b1c20b16a3a5c9bc62b380f6262e526d9123e8ff044220",
+      "bytes": 484
+    },
+    {
+      "path": "out\\api\\notes\\src\\index.ts",
+      "kind": "file",
+      "sha256": "fd2f7e0f7de96d2ab1bcab411bf2ceb2390a6c341ace2a190fdd4d07031aeb70",
+      "bytes": 8603
+    },
+    {
+      "path": "out\\api\\notes\\package.json",
+      "kind": "file",
+      "sha256": "b46526ab14b3e1ad12217a6a23072683a4757f108a63247c22188cb198967e6d",
+      "bytes": 242
+    },
+    {
+      "path": "out\\api\\notes\\tsconfig.json",
+      "kind": "file",
+      "sha256": "efc7abc7fab69f40ffa3486d1a26345503e30b2d62b6d8d0d2188e548c5972be",
+      "bytes": 401
+    },
+    {
+      "path": "out\\api\\notes\\.gitignore",
+      "kind": "file",
+      "sha256": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
+      "bytes": 46
+    },
+    {
+      "path": "out\\docker\\notes\\Dockerfile",
+      "kind": "file",
+      "sha256": "1ceef6cd55b6c1d32f942cf872b3381c46b8366398f1a0f95b930419d73187a0",
+      "bytes": 85
+    },
+    {
+      "path": "out\\docker\\notes\\.dockerignore",
+      "kind": "file",
+      "sha256": "7c12a77f46e042412273b579d497f70d7ba24c3892a295b393a06c84fc4921c3",
+      "bytes": 27
+    },
+    {
+      "path": "out\\docker\\notes\\index.js",
+      "kind": "file",
+      "sha256": "1eb968a0ea034b091af552a531f8cdb39f937495b31a41603b43058c2f4e4de1",
+      "bytes": 47
+    },
+    {
+      "path": "out\\docker\\notes\\README.md",
+      "kind": "file",
+      "sha256": "758f534cd85460059b2f92f0c4ab2c227bda455fca57dc3667402144ca322b43",
+      "bytes": 52
+    },
+    {
+      "path": "out\\tests\\notes\\README.md",
+      "kind": "file",
+      "sha256": "dac8ea681d303c7d4de5e8885d03072c5090c999066f135ce738d2e7ce3840fe",
+      "bytes": 44
+    },
+    {
+      "path": "out\\notes.manifest.json\\README.md",
+      "kind": "file",
+      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
+      "bytes": 44
+    },
+    {
+      "path": "manifest.json",
+      "kind": "file",
+      "sha256": "97f2abc64ba6c3106af2168b6cee7b07c649398f6410303522d5ae149f6c76b7",
+      "bytes": 4867
+    }
+  ],
+  "evidence": [
+    {
+      "checkName": "no-pii",
+      "kind": "policy",
+      "passed": true,
+      "details": {
+        "expression": "scan.artifacts.no_personal_data()",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    },
+    {
+      "checkName": "p50",
+      "kind": "sla",
+      "passed": true,
+      "details": {
+        "expression": "latency_p50_ms <= 80",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    },
+    {
+      "checkName": "api-health",
+      "kind": "unit",
+      "passed": false,
+      "details": {
+        "expression": "http.healthy(\"http://localhost:4000/health\")",
+        "evaluated": false,
+        "message": "Check failed"
+      }
+    }
+  ],
+  "createdAt": "2025-10-19T21:58:20.519Z"
+}

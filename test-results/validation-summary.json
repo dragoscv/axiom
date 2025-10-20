@@ -1,0 +1,33 @@
+{
+  "ReverseIR": {
+    "Workaround": "Manual IR representation based on existing files",
+    "Implemented": false
+  },
+  "Snapshots": {
+    "BudgetArtifacts": 16,
+    "BudgetSnapshot": "packages\\axiom-tests\\snapshots\\budget-profile.snapshot.json",
+    "EdgeArtifacts": 16,
+    "EdgeSnapshot": "packages\\axiom-tests\\snapshots\\edge-profile.snapshot.json"
+  },
+  "PRApply": {
+    "Workaround": "Manual git branch + commit + PR creation",
+    "Implemented": false
+  },
+  "ProfileEnforcement": {
+    "EdgeChecks": 2,
+    "EdgePassed": 2,
+    "BudgetChecks": 2,
+    "BudgetPassed": 2
+  },
+  "Capabilities": {
+    "WithCaps": true,
+    "WithoutCaps": true,
+    "NegativeTestPassed": true
+  },
+  "Determinism": {
+    "EdgeArtifacts": 17,
+    "BudgetDeterministic": true,
+    "BudgetArtifacts": 17,
+    "EdgeDeterministic": true
+  }
+}

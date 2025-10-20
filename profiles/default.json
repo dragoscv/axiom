@@ -1,0 +1,8 @@
+{
+  "map": {
+    "web-app": "@axiom/emitter-webapp",
+    "api-service": "@axiom/emitter-apiservice",
+    "batch-job": "@axiom/emitter-batchjob",
+    "docker-image": "@axiom/emitter-docker"
+  }
+}

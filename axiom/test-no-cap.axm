@@ -1,0 +1,14 @@
+agent "test-no-cap" {
+  intent "test lipsă capabilities"
+  constraints { latency_p50_ms <= 80 }
+  capabilities {
+    fs("./out")
+  }
+  checks {
+    unit "api-health" expect http.healthy("http://example.com")
+  }
+  emit {
+    service type="web-app" target="./out/test"
+    manifest target="./out/test.manifest.json"
+  }
+}

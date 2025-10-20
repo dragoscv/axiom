@@ -1,0 +1,23 @@
+{
+  "name": "@axiom/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "axiom-mcp": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "postinstall": "node dist/postinstall.js"
+  },
+  "dependencies": {
+    "@axiom/core": "workspace:*",
+    "@axiom/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.0"
+  }
+}

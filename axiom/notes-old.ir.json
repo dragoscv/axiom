@@ -1,0 +1,92 @@
+{
+  "version": "1.0.0",
+  "agents": [
+    {
+      "name": "notes",
+      "intent": "aplicație notes cu login, creare/ștergere/căutare note",
+      "constraints": [
+        {
+          "lhs": "latency_p50_ms",
+          "op": "<=",
+          "rhs": 80
+        },
+        {
+          "lhs": "monthly_budget_usd",
+          "op": "<=",
+          "rhs": 10
+        },
+        {
+          "lhs": "pii_leak",
+          "op": "==",
+          "rhs": false
+        }
+      ],
+      "capabilities": [
+        {
+          "kind": "fs",
+          "args": [
+            "./out"
+          ],
+          "optional": false
+        },
+        {
+          "kind": "net",
+          "args": [
+            "http"
+          ],
+          "optional": false
+        },
+        {
+          "kind": "secret",
+          "args": [
+            "AUTH_TOKEN"
+          ],
+          "optional": false
+        }
+      ],
+      "checks": [
+        {
+          "kind": "policy",
+          "name": "no-pii",
+          "expect": "scan.artifacts.no_personal_data()"
+        },
+        {
+          "kind": "sla",
+          "name": "p50",
+          "expect": "latency_p50_ms <= 80"
+        },
+        {
+          "kind": "unit",
+          "name": "api-health",
+          "expect": "http.healthy(\"http://localhost:4000/health\")"
+        }
+      ],
+      "emit": [
+        {
+          "type": "service",
+          "subtype": "web-app",
+          "target": "./out/web/notes"
+        },
+        {
+          "type": "service",
+          "subtype": "api-service",
+          "target": "./out/api/notes"
+        },
+        {
+          "type": "service",
+          "subtype": "docker-image",
+          "target": "./out/docker/notes"
+        },
+        {
+          "type": "tests",
+          "subtype": "contract",
+          "target": "./out/tests/notes"
+        },
+        {
+          "type": "manifest",
+          "target": "./out/notes.manifest.json"
+        }
+      ]
+    }
+  ]
+}

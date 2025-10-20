@@ -1,0 +1,13 @@
+node_modules
+.pnpm-cache
+dist
+*.log
+
+# Test outputs (keep test-results/ for evidence)
+out-edge-r*/
+out-budget-r*/
+*.manifest.json
+
+# Keep golden snapshots and test results for CI
+!packages/axiom-tests/snapshots/
+!test-results/

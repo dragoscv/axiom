@@ -1,0 +1,27 @@
+agent "notes" {
+  intent "aplicație notes cu login, creare/ștergere/căutare note"
+  constraints {
+    latency_p50_ms <= 80
+    monthly_budget_usd <= 10
+    pii_leak == false
+  }
+  capabilities {
+    fs("./out")
+    net("http")
+    secret("AUTH_TOKEN")
+  }
+  checks {
+    policy "no-pii" expect scan.artifacts.no_personal_data()
+    sla "p50" expect latency_p50_ms <= 80
+    unit "api-health" expect http.healthy("http://localhost:4000/health")
+    policy "auth-secure" expect scan.artifacts.no_personal_data()
+  }
+  emit {
+    service type="web-app" target="./out/web/notes"
+    service type="api-service" target="./out/api/notes"
+    service type="docker-image" target="./out/docker/notes"
+    tests type="contract" target="./out/tests/notes"
+    tests type="integration" target="./out/tests/integration"
+    manifest target="./out/notes.manifest.json"
+  }
+}

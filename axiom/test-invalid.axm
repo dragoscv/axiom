@@ -1,0 +1,12 @@
+agent "test-invalid" {
+  intent "test capabilities validation"
+  constraints { latency_p50_ms <= 80 }
+  capabilities { fs("./out") }
+  checks {
+    unit "api-health" expect http.healthy("http://localhost:4000/health")
+  }
+  emit {
+    service type="web-app" target="./out/test"
+    manifest target="./out/test.manifest.json"
+  }
+}
