@@ -129,9 +129,9 @@ async function calculateRealMetrics(manifest: Manifest, outRoot: string): Promis
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath, "utf-8");
         // Denylist pentru operații FS heavy
-        if (content.includes("fs.readFileSync") || 
-            content.includes("fs.writeFileSync") ||
-            content.includes("fs.createReadStream")) {
+        if (content.includes("fs.readFileSync") ||
+          content.includes("fs.writeFileSync") ||
+          content.includes("fs.createReadStream")) {
           hasFsHeavy = true;
         }
       }

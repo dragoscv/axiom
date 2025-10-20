@@ -1,0 +1,89 @@
+{
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.4",
+    "version": 1,
+    "metadata": {
+        "timestamp": "2025-10-20T02:10:00Z",
+        "component": {
+            "type": "application",
+            "name": "axiom",
+            "version": "1.0.0",
+            "description": "Deterministic MCP generation with strict capability sandbox",
+            "licenses": [
+                {
+                    "license": {
+                        "id": "MIT"
+                    }
+                }
+            ]
+        }
+    },
+    "components": [
+        {
+            "type": "library",
+            "name": "@axiom/core",
+            "version": "1.0.0",
+            "description": "AXIOM IR parser and validator"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/engine",
+            "version": "1.0.0",
+            "description": "AXIOM code generation engine"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/mcp",
+            "version": "1.0.0",
+            "description": "AXIOM MCP server (HTTP endpoints)"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/policies",
+            "version": "1.0.0",
+            "description": "AXIOM policy evaluation engine"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/emitter-webapp",
+            "version": "1.0.0",
+            "description": "Web app emitter (Next.js, React)"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/emitter-apiservice",
+            "version": "1.0.0",
+            "description": "API service emitter (Express, Fastify)"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/emitter-docker",
+            "version": "1.0.0",
+            "description": "Docker image emitter"
+        },
+        {
+            "type": "library",
+            "name": "@axiom/emitter-batchjob",
+            "version": "1.0.0",
+            "description": "Batch job emitter"
+        },
+        {
+            "type": "library",
+            "name": "typescript",
+            "version": "5.6.3",
+            "description": "TypeScript language compiler"
+        },
+        {
+            "type": "library",
+            "name": "zod",
+            "version": "3.23.8",
+            "description": "Schema validation library"
+        },
+        {
+            "type": "library",
+            "name": "tsx",
+            "version": "4.19.0",
+            "description": "TypeScript execution runtime"
+        }
+    ]
+}

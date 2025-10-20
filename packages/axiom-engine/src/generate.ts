@@ -40,13 +40,13 @@ async function getEmitter(subtype: string, profileName?: string): Promise<Emitte
 
 export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: string): Promise<{ artifacts: Artifact[]; manifest: Manifest }> {
   const artifacts: Artifact[] = [];
-  
+
   // Deterministic buildId: hash(IR + profile) pentru eliminarea dependenței de timp
   const irNormalized = JSON.stringify(ir, Object.keys(ir).sort());
   const profileNormalized = profile || "default";
   const buildId = sha256(irNormalized + profileNormalized);
   const irHash = sha256(irNormalized);
-  
+
   // createdAt devine deterministic: hash-based timestamp pentru reproducibilitate
   const createdAt = `deterministic-${buildId.substring(0, 16)}`;
 
