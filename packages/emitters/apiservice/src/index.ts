@@ -361,7 +361,7 @@ server.listen(PORT, () => {
 `);
 
     // Package.json
-    const dependencies: Record<string, string> = isBudget 
+    const dependencies: Record<string, string> = isBudget
       ? {}
       : { "pino": "^8.16.2" };
 

@@ -17,7 +17,7 @@ async function getEmitter(subtype: string, profileName?: string): Promise<Emitte
   if (subtype === "api-service") return apiserviceEmitterImpl;
   if (subtype === "batch-job") return batchjobEmitterImpl;
   if (subtype === "docker-image") return dockerEmitterImpl;
-  
+
   // Fallback: try profile mapping for custom emitters
   try {
     const fs = await import("node:fs");
@@ -33,16 +33,22 @@ async function getEmitter(subtype: string, profileName?: string): Promise<Emitte
       }
     }
   } catch { }
-  
+
   return undefined;
 }
 
 
 export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: string): Promise<{ artifacts: Artifact[]; manifest: Manifest }> {
   const artifacts: Artifact[] = [];
-  const buildId = String(Date.now());
-  const irHash = sha256(JSON.stringify(ir));
-  const createdAt = new Date().toISOString();
+  
+  // Deterministic buildId: hash(IR + profile) pentru eliminarea dependenței de timp
+  const irNormalized = JSON.stringify(ir, Object.keys(ir).sort());
+  const profileNormalized = profile || "default";
+  const buildId = sha256(irNormalized + profileNormalized);
+  const irHash = sha256(irNormalized);
+  
+  // createdAt devine deterministic: hash-based timestamp pentru reproducibilitate
+  const createdAt = `deterministic-${buildId.substring(0, 16)}`;
 
   function writer(rel: string, content: string) {
     const { full } = writeFile(outRoot, rel, content);
@@ -79,14 +85,14 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
     evidence: [],
     createdAt
   };
-  
+
   const checkResult = await check(manifestTemp, ir, outRoot);
-  
+
   const manifest: Manifest = {
     ...manifestTemp,
     evidence: checkResult.report
   };
-  
+
   writer("manifest.json", JSON.stringify(manifest, null, 2));
   return { artifacts, manifest };
 }

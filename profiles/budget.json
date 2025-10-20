@@ -1,16 +1,16 @@
 {
-  "name": "budget",
-  "description": "Budget-optimized profile: minimal dependencies, smallest output, no analytics",
-  "constraints": {
-    "max_bundle_size_kb": 500,
-    "max_dependencies": 5,
-    "no_analytics": true,
-    "no_telemetry": true
-  },
-  "map": {
-    "web-app": "@axiom/emitter-webapp",
-    "api-service": "@axiom/emitter-apiservice",
-    "batch-job": "@axiom/emitter-batchjob",
-    "docker-image": "@axiom/emitter-docker"
-  }
+    "name": "budget",
+    "description": "Budget-optimized profile: minimal dependencies, smallest output, no analytics",
+    "constraints": {
+        "max_bundle_size_kb": 500,
+        "max_dependencies": 5,
+        "no_analytics": true,
+        "no_telemetry": true
+    },
+    "map": {
+        "web-app": "@axiom/emitter-webapp",
+        "api-service": "@axiom/emitter-apiservice",
+        "batch-job": "@axiom/emitter-batchjob",
+        "docker-image": "@axiom/emitter-docker"
+    }
 }

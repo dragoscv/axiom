@@ -9,7 +9,7 @@ export interface PolicyContext {
 }
 
 // Tokenizer simple pentru mini-DSL
-type Token = 
+type Token =
   | { type: 'identifier'; value: string }
   | { type: 'number'; value: number }
   | { type: 'boolean'; value: boolean }
@@ -22,16 +22,16 @@ type Token =
 function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
-  
+
   while (i < expr.length) {
     const char = expr[i];
-    
+
     // Skip whitespace
     if (/\s/.test(char)) {
       i++;
       continue;
     }
-    
+
     // Operators
     if (char === '<' && expr[i + 1] === '=') {
       tokens.push({ type: 'operator', value: '<=' });
@@ -58,7 +58,7 @@ function tokenize(expr: string): Token[] {
       i++;
       continue;
     }
-    
+
     // Punctuation
     if (char === '.') {
       tokens.push({ type: 'dot', value: '.' });
@@ -75,7 +75,7 @@ function tokenize(expr: string): Token[] {
       i++;
       continue;
     }
-    
+
     // String literals
     if (char === '"' || char === "'") {
       const quote = char;
@@ -89,7 +89,7 @@ function tokenize(expr: string): Token[] {
       tokens.push({ type: 'string', value: str });
       continue;
     }
-    
+
     // Numbers
     if (/\d/.test(char)) {
       let num = '';
@@ -100,7 +100,7 @@ function tokenize(expr: string): Token[] {
       tokens.push({ type: 'number', value: parseFloat(num) });
       continue;
     }
-    
+
     // Identifiers and booleans
     if (/[a-zA-Z_]/.test(char)) {
       let ident = '';
@@ -117,10 +117,10 @@ function tokenize(expr: string): Token[] {
       }
       continue;
     }
-    
+
     throw new Error(`Unexpected character: ${char}`);
   }
-  
+
   return tokens;
 }
 
@@ -129,12 +129,12 @@ async function evalExpression(tokens: Token[], ctx: PolicyContext): Promise<any>
   if (tokens.length === 0) {
     throw new Error("Empty expression");
   }
-  
+
   // Function calls: identifier.identifier.identifier(args)
   if (tokens[0].type === 'identifier') {
     const parts: string[] = [tokens[0].value];
     let i = 1;
-    
+
     // Colectează chain-ul de proprietăți
     while (i < tokens.length && tokens[i].type === 'dot') {
       i++; // skip dot
@@ -143,12 +143,12 @@ async function evalExpression(tokens: Token[], ctx: PolicyContext): Promise<any>
         i++;
       }
     }
-    
+
     // Dacă urmează paranteze, e function call
     if (i < tokens.length && tokens[i].type === 'lparen') {
       i++; // skip (
       const args: any[] = [];
-      
+
       // Parse arguments (simple: doar string literals pentru acum)
       while (i < tokens.length && tokens[i].type !== 'rparen') {
         if (tokens[i].type === 'string') {
@@ -159,17 +159,17 @@ async function evalExpression(tokens: Token[], ctx: PolicyContext): Promise<any>
           i++;
         }
       }
-      
+
       // Evaluează function call whitelisted
       return await evalFunctionCall(parts, args, ctx);
     }
-    
+
     // Altfel, e comparație: identifier op value
     if (i < tokens.length && tokens[i].type === 'operator') {
       const leftValue = ctx.metrics[parts[0]];
       const operator = tokens[i].value;
       i++;
-      
+
       let rightValue: any;
       if (tokens[i].type === 'number') {
         rightValue = tokens[i].value;
@@ -180,14 +180,14 @@ async function evalExpression(tokens: Token[], ctx: PolicyContext): Promise<any>
       } else if (tokens[i].type === 'identifier') {
         rightValue = ctx.metrics[String(tokens[i].value)];
       }
-      
+
       return compareValues(leftValue, String(operator), rightValue);
     }
-    
+
     // Doar identificator - returnează valoarea
     return ctx.metrics[parts[0]];
   }
-  
+
   throw new Error(`Cannot evaluate expression: ${JSON.stringify(tokens)}`);
 }
 
@@ -205,7 +205,7 @@ function compareValues(left: any, op: string, right: any): boolean {
 
 async function evalFunctionCall(parts: string[], args: any[], ctx: PolicyContext): Promise<any> {
   const fullPath = parts.join('.');
-  
+
   // http.healthy(url)
   if (fullPath === 'http.healthy') {
     // Verifică capability
@@ -213,20 +213,20 @@ async function evalFunctionCall(parts: string[], args: any[], ctx: PolicyContext
     if (!hasNetHttp) {
       throw new Error("http.healthy requires capability net('http')");
     }
-    
+
     if (args.length !== 1 || typeof args[0] !== 'string') {
       throw new Error("http.healthy expects one string argument (URL)");
     }
-    
+
     return await checkHttpHealthy(args[0]);
   }
-  
+
   // scan.artifacts.no_personal_data()
   if (fullPath === 'scan.artifacts.no_personal_data') {
     // Nu cere capability explicit pentru scan (e implicit că poate scana artefactele generate)
     return await scanArtifactsForPII(ctx);
   }
-  
+
   throw new Error(`Unknown function: ${fullPath}`);
 }
 
@@ -234,26 +234,26 @@ async function checkHttpHealthy(url: string): Promise<boolean> {
   try {
     const http = await import('node:http');
     const https = await import('node:https');
-    
+
     const urlObj = new URL(url);
     const isHttps = urlObj.protocol === 'https:';
     const client = isHttps ? https : http;
-    
+
     return new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
         resolve(false);
       }, 1000);
-      
+
       const req = client.request(url, { method: 'HEAD' }, (res: any) => {
         clearTimeout(timeout);
         resolve(res.statusCode ? res.statusCode >= 200 && res.statusCode < 400 : false);
       });
-      
+
       req.on('error', () => {
         clearTimeout(timeout);
         resolve(false);
       });
-      
+
       req.end();
     });
   } catch {
@@ -275,16 +275,16 @@ async function scanArtifactsForPII(ctx: PolicyContext): Promise<boolean> {
     // Pattern pentru "password:", "secret:", "token:" urmat de valori
     /\b(password|secret|token|api[_-]?key)\s*[:=]\s*['"]?[^\s'"]+/i
   ];
-  
+
   // Dacă avem outRoot, citim artifacts de pe disc
   if (ctx.outRoot) {
     for (const artifact of ctx.artifacts) {
       try {
         const fullPath = path.join(ctx.outRoot, artifact.path);
         if (!fs.existsSync(fullPath)) continue;
-        
+
         const content = fs.readFileSync(fullPath, 'utf-8');
-        
+
         for (const pattern of piiPatterns) {
           if (pattern.test(content)) {
             return false; // Found PII
@@ -295,7 +295,7 @@ async function scanArtifactsForPII(ctx: PolicyContext): Promise<boolean> {
       }
     }
   }
-  
+
   // Check artifacts cu content în memorie
   for (const artifact of ctx.artifacts) {
     if (artifact.content) {
@@ -306,7 +306,7 @@ async function scanArtifactsForPII(ctx: PolicyContext): Promise<boolean> {
       }
     }
   }
-  
+
   return true; // No PII detected
 }
 

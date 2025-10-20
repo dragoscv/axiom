@@ -107,7 +107,7 @@ describe("Check Evaluator", () => {
         ...baseCtx,
         capabilities: [{ kind: "fs", args: ["./out"] }]
       };
-      
+
       await assert.rejects(
         async () => await evalCheck(ctx, 'http.healthy("http://example.com")'),
         /requires capability net\('http'\)/
@@ -128,7 +128,7 @@ describe("Check Evaluator", () => {
         ...baseCtx,
         metrics: { ...baseCtx.metrics }
       };
-      
+
       // Note: Our tokenizer doesn't support ===, so this should fail
       await assert.rejects(
         async () => await evalCheck(ctx, "latency_p50_ms === 45"),

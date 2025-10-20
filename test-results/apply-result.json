@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "mode": "fs",
+  "filesWritten": [
+    "out\\web\\README.md",
+    "out\\web\\next.config.ts",
+    "out\\web\\app\\layout.tsx",
+    "out\\web\\app\\page.tsx",
+    "out\\web\\app\\notes\\page.tsx",
+    "out\\web\\app\\notes\\new\\page.tsx",
+    "out\\web\\app\\notes\\[id]\\page.tsx",
+    "out\\web\\package.json",
+    "out\\web\\tsconfig.json",
+    "out\\web\\.gitignore",
+    "out\\api\\README.md",
+    "out\\api\\src\\index.ts",
+    "out\\api\\package.json",
+    "out\\api\\tsconfig.json",
+    "out\\api\\.gitignore",
+    "out\\axiom.json\\README.md",
+    "manifest.json"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/agents/0/intent",
+      "value": "blog public cu admin - with contract test"
+    },
+    {
+      "op": "replace",
+      "path": "/agents/0/capabilities",
+      "value": [
+        {
+          "kind": "fs",
+          "args": [
+            "./out"
+          ],
+          "optional": false
+        },
+        {
+          "kind": "net",
+          "args": [
+            "http"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "op": "add",
+      "path": "/agents/0/checks/-",
+      "value": {
+        "kind": "unit",
+        "name": "contract",
+        "expect": "http.healthy(\"http://localhost:4000/health\")"
+      }
+    }
+  ]
+}

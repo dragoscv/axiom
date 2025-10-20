@@ -1,23 +1,91 @@
 {
-  "artifactHashes": {
-    "out\\web\\tsconfig.json": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
-    "out\\axiom.json\\README.md": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
-    "out\\web\\.gitignore": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
-    "out\\api\\.gitignore": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
-    "out\\web\\app\\layout.tsx": "ac710a71a20357b09e59edebbf294ab5b0eef4e1016344f427bc196bb9c6bc51",
-    "out\\web\\README.md": "e2ace12a3dddc4d1dcb52763c9a95a1a560623a815527672f456860458ebf7d9",
-    "out\\api\\README.md": "d89e595539a487ecc00e85af241287554f1955accc0bb57f9b5ab012cbd51c5e",
-    "out\\api\\package.json": "215da3622460f52597b447ec91e9273b4578988a73a014cd443cb91863ff4ce2",
-    "out\\api\\tsconfig.json": "efc7abc7fab69f40ffa3486d1a26345503e30b2d62b6d8d0d2188e548c5972be",
-    "out\\web\\next.config.ts": "a263ff6b73fdd058e579a041a89f441a89025ca44b0a36260d739f066a49145e",
-    "out\\web\\package.json": "debf329fc3fd521c05f21c10724e0d997fd3166cbb17c67370383a364205d5b0",
-    "out\\web\\app\\notes\\page.tsx": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
-    "out\\web\\app\\notes\\new\\page.tsx": "b7ffa44589b5e4a5ea8689942fdb5fbe8676760ebef059e2514aecd858b95aa9",
-    "out\\web\\app\\page.tsx": "a29721c458d1ed614fd6142f7abc1185c72a73197dbc133543ea706d0684c416",
-    "out\\web\\app\\notes\\[id]\\page.tsx": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
-    "out\\api\\src\\index.ts": "4828dd4de2c30291a35ebf58ce0600833a3d068689584e692a0265414f9a9fe9"
-  },
-  "totalBytes": 20127.0,
-  "totalArtifacts": 16,
+  "totalBytes": 24414.0,
+  "artifacts": [
+    {
+      "path": "out\\web\\README.md",
+      "sha256": "e2ace12a3dddc4d1dcb52763c9a95a1a560623a815527672f456860458ebf7d9",
+      "bytes": 303
+    },
+    {
+      "path": "out\\web\\next.config.ts",
+      "sha256": "a263ff6b73fdd058e579a041a89f441a89025ca44b0a36260d739f066a49145e",
+      "bytes": 47
+    },
+    {
+      "path": "out\\web\\app\\layout.tsx",
+      "sha256": "ac710a71a20357b09e59edebbf294ab5b0eef4e1016344f427bc196bb9c6bc51",
+      "bytes": 950
+    },
+    {
+      "path": "out\\web\\app\\page.tsx",
+      "sha256": "a29721c458d1ed614fd6142f7abc1185c72a73197dbc133543ea706d0684c416",
+      "bytes": 486
+    },
+    {
+      "path": "out\\web\\app\\notes\\page.tsx",
+      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
+      "bytes": 2419
+    },
+    {
+      "path": "out\\web\\app\\notes\\new\\page.tsx",
+      "sha256": "b7ffa44589b5e4a5ea8689942fdb5fbe8676760ebef059e2514aecd858b95aa9",
+      "bytes": 2896
+    },
+    {
+      "path": "out\\web\\app\\notes\\[id]\\page.tsx",
+      "sha256": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
+      "bytes": 2192
+    },
+    {
+      "path": "out\\web\\package.json",
+      "sha256": "debf329fc3fd521c05f21c10724e0d997fd3166cbb17c67370383a364205d5b0",
+      "bytes": 324
+    },
+    {
+      "path": "out\\web\\tsconfig.json",
+      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
+      "bytes": 644
+    },
+    {
+      "path": "out\\web\\.gitignore",
+      "sha256": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
+      "bytes": 51
+    },
+    {
+      "path": "out\\api\\README.md",
+      "sha256": "d89e595539a487ecc00e85af241287554f1955accc0bb57f9b5ab012cbd51c5e",
+      "bytes": 483
+    },
+    {
+      "path": "out\\api\\src\\index.ts",
+      "sha256": "4828dd4de2c30291a35ebf58ce0600833a3d068689584e692a0265414f9a9fe9",
+      "bytes": 8600
+    },
+    {
+      "path": "out\\api\\package.json",
+      "sha256": "215da3622460f52597b447ec91e9273b4578988a73a014cd443cb91863ff4ce2",
+      "bytes": 241
+    },
+    {
+      "path": "out\\api\\tsconfig.json",
+      "sha256": "efc7abc7fab69f40ffa3486d1a26345503e30b2d62b6d8d0d2188e548c5972be",
+      "bytes": 401
+    },
+    {
+      "path": "out\\api\\.gitignore",
+      "sha256": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
+      "bytes": 46
+    },
+    {
+      "path": "out\\axiom.json\\README.md",
+      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
+      "bytes": 44
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "13dfefd138bea96c760cafb687280c31511ffd19697079d03c6ad5599cc4d07a",
+      "bytes": 4287
+    }
+  ],
   "profile": "budget"
 }

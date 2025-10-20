@@ -47,11 +47,11 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, result);
       }
       if (req.method === "POST" && req.url === "/reverse") {
-        const result = await reverseIR({
+        const ir = await reverseIR({
           repoPath: input.repoPath || process.cwd(),
           outDir: input.outDir || "out",
         });
-        return send(res, 200, result);
+        return send(res, 200, { ir, diagnostics: [] });
       }
       if (req.method === "POST" && req.url === "/diff") {
         const oldParse = AxiomIR.safeParse(input.oldIr);

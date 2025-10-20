@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "buildId": "1760919588697",
-  "irHash": "3238ef8fb0dc123f57c6a84c1661da4d08b315c6a6af2d86fc918a6294f6c1eb",
+  "buildId": "65b952edba8015c1ce61bda1b4935a35a7d40e90b30ed5231c639df8b06a4883",
+  "irHash": "f09ad9422c1e66569409a6fbe9a9fd3251d7e7fbce2881153c71f61f88827903",
   "profile": "budget",
   "artifacts": [
     {
@@ -109,7 +109,18 @@
       "details": {
         "expression": "scan.artifacts.no_personal_data()",
         "evaluated": true,
-        "message": "Check passed"
+        "message": "Check passed",
+        "measurements": {
+          "latency_p50_ms": 45,
+          "monthly_budget_usd": 2,
+          "pii_leak": false,
+          "cold_start_ms": 80,
+          "max_dependencies": 3,
+          "frontend_bundle_kb": 0,
+          "no_analytics": true,
+          "no_fs_heavy": true,
+          "no_telemetry": true
+        }
       }
     },
     {
@@ -119,9 +130,20 @@
       "details": {
         "expression": "latency_p50_ms <= 80",
         "evaluated": true,
-        "message": "Check passed"
+        "message": "Check passed",
+        "measurements": {
+          "latency_p50_ms": 45,
+          "monthly_budget_usd": 2,
+          "pii_leak": false,
+          "cold_start_ms": 80,
+          "max_dependencies": 3,
+          "frontend_bundle_kb": 0,
+          "no_analytics": true,
+          "no_fs_heavy": true,
+          "no_telemetry": true
+        }
       }
     }
   ],
-  "createdAt": "2025-10-20T00:19:48.697Z"
+  "createdAt": "deterministic-65b952edba8015c1"
 }

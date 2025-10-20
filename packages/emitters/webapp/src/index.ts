@@ -36,7 +36,7 @@ pnpm start
 `);
 
     // Next.js config
-    const nextConfig = isEdge 
+    const nextConfig = isEdge
       ? `export default {
   experimental: {
     runtime: 'edge'
