@@ -67,6 +67,8 @@ Or with errors:
 ### POST /generate
 Generates artifacts and manifest with embedded evidence from checks.
 
+**POSIX Path Normalization:** All artifact paths in the manifest are normalized to POSIX format (forward slashes `/`) regardless of the operating system where generation occurs. This ensures cross-platform consistency and manifest portability.
+
 **Request:**
 ```json
 {
@@ -80,7 +82,7 @@ Generates artifacts and manifest with embedded evidence from checks.
 {
   "artifacts": [
     {
-      "path": "out/web/README.md",
+      "path": "out/web/README.md",  // Always POSIX (/) format
       "kind": "file",
       "sha256": "a239777e...",
       "bytes": 43
@@ -88,7 +90,7 @@ Generates artifacts and manifest with embedded evidence from checks.
   ],
   "manifest": {
     "version": "1.0.0",
-    "buildId": "1760907728198",
+    "buildId": "deterministic-a239777e12345678",  // Deterministic hash-based ID
     "irHash": "7aa08c1f...",
     "profile": "default",
     "artifacts": [...],
@@ -100,37 +102,40 @@ Generates artifacts and manifest with embedded evidence from checks.
         "details": {
           "expression": "scan.artifacts.no_personal_data()",
           "evaluated": true,
-          "message": "Check passed"
-        }
-      },
-      {
-        "checkName": "p50",
-        "kind": "sla",
-        "passed": true,
-        "details": {
-          "expression": "latency_p50_ms <= 80",
-          "evaluated": true,
-          "message": "Check passed"
-        }
-      },
-      {
-        "checkName": "api-health",
-        "kind": "unit",
-        "passed": false,
-        "details": {
-          "expression": "http.healthy(\"http://localhost:4000/health\")",
-          "evaluated": false,
-          "message": "Check failed"
+          "message": "Check passed",
+          "measurements": {
+            "cold_start_ms": 100,
+            "frontend_bundle_kb": 342,
+            "max_dependencies": 15,
+            "no_analytics": true,
+            "no_telemetry": true,
+            "no_fs_heavy": true
+          }
         }
       }
     ],
-    "createdAt": "2025-10-19T21:02:08.198Z"
+    "createdAt": "deterministic-a239777e12345678"  // Deterministic timestamp
   }
 }
 ```
 
+**Determinism:** The generator produces identical manifests (same `buildId`, `createdAt`, artifact hashes) for identical IR + profile combinations, enabling reproducible builds.
+
 ### POST /check
 Re-evaluates checks on an existing manifest (optional if evidence already embedded).
+
+**Real Evaluator:** The check evaluator now computes **real measurements** from artifacts:
+- `cold_start_ms`: Deterministic value based on profile (edge=50, default=100, budget=120)
+- `frontend_bundle_kb`: Sum of bytes for web artifacts (web/, webapp/, health-endpoint/)
+- `max_dependencies`: Count of dependencies + devDependencies from package.json
+- `no_analytics`: Detects analytics packages (@vercel/analytics, analytics, ga-lite)
+- `no_telemetry`: Detects telemetry packages (@opentelemetry/api, pino, winston)
+- `no_fs_heavy`: Scans code for heavy file operations (fs.readFileSync, fs.writeFileSync)
+- `no_pii_in_artifacts`: Policy scanner for PII (CNP, email, phone, credit cards, secrets)
+- `size_under_5mb`: Validates frontend_bundle_kb <= 5120
+- `response_under_500ms`: Validates cold_start_ms <= 500
+
+**Semantics:** `/check.passed` is `true` **only if ALL** `evidence[*].passed` are `true`. Otherwise `passed: false` with detailed `report[]`.
 
 **Request:**
 ```json
@@ -144,16 +149,25 @@ Re-evaluates checks on an existing manifest (optional if evidence already embedd
 **Response:**
 ```json
 {
-  "passed": true,
+  "passed": false,
+  "evaluated": true,
   "report": [
     {
-      "checkName": "no-pii",
-      "kind": "policy",
-      "passed": true,
+      "checkName": "cold_start_check",
+      "kind": "sla",
+      "passed": false,
       "details": {
-        "expression": "scan.artifacts.no_personal_data()",
-        "evaluated": true,
-        "message": "Check passed"
+        "expression": "cold_start_ms <= 50",
+        "evaluated": false,
+        "message": "Check failed",
+        "measurements": {
+          "cold_start_ms": 100,
+          "frontend_bundle_kb": 1024,
+          "max_dependencies": 42,
+          "no_analytics": true,
+          "no_telemetry": true,
+          "no_fs_heavy": true
+        }
       }
     }
   ]
@@ -314,6 +328,17 @@ Generates minimal JSON-Patch representing changes between two IRs.
 ## POST /apply (Apply Changes)
 Applies manifest artifacts via filesystem or PR mode.
 
+**Default Repository:** If `repoPath` is not specified, defaults to `process.cwd()` (current working directory).
+
+**Output Directory:** Automatically creates `./out` under `repoPath` if it doesn't exist.
+
+**Path Security:** Validates all artifact paths to prevent path traversal attacks:
+- Rejects absolute paths (`/etc/passwd`)
+- Rejects path traversal (`../sensitive`)
+- Only allows writes under `repoPath/out/`
+
+**POSIX to OS Conversion:** Artifact paths in manifest are POSIX format. `apply` converts them to OS-specific paths when writing to disk.
+
 **Filesystem Mode Request:**
 ```json
 {
@@ -321,14 +346,14 @@ Applies manifest artifacts via filesystem or PR mode.
     "version": "1.0.0",
     "artifacts": [
       {
-        "path": "out/web/notes/README.md",
+        "path": "out/web/notes/README.md",  // POSIX format in manifest
         "kind": "file",
         "content": "# Notes Web App\n..."
       }
     ]
   },
-  "mode": "fs",
-  "repoPath": "e:\\projects\\myapp"
+  "mode": "fs"
+  // repoPath optional - defaults to process.cwd()
 }
 ```
 
@@ -338,9 +363,9 @@ Applies manifest artifacts via filesystem or PR mode.
   "success": true,
   "mode": "fs",
   "filesWritten": [
-    "out\\web\\notes\\README.md",
-    "out\\api\\notes\\src\\index.ts",
-    "manifest.json"
+    "out/web/notes/README.md",  // Relative to repoPath
+    "out/api/notes/src/index.ts",
+    "out/manifest.json"
   ]
 }
 ```

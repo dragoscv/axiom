@@ -27,7 +27,7 @@ export function parseAxiomSource(source: string): { ir?: TAxiomIR, diagnostics: 
   const intentMatch = source.match(/intent\s+"([^"]+)"/);
   const intent = intentMatch ? intentMatch[1] : "";
 
-  // constraints
+  // constraints - parseaz\u0103 fie din block, fie inline
   const constraintsBlock = between(source, "constraints {", "}")[0] ?? "";
   const constraints = constraintsBlock.split(/\n|;|,/).map(l => l.trim()).filter(Boolean).map(line => {
     const m = line.match(/^([a-zA-Z0-9_\.\-]+)\s*(==|!=|<=|>=|<|>)\s*(.+)$/);
@@ -40,9 +40,31 @@ export function parseAxiomSource(source: string): { ir?: TAxiomIR, diagnostics: 
     return { lhs: m[1], op: m[2] as any, rhs };
   }).filter(Boolean) as any[];
 
-  // capabilities
+  // capabilities - suportă atât format block cât și inline
+  const capabilities: any[] = [];
+
+  // Format INLINE: capability net("firebase","api") SAU din agent { capability ... }
+  // Extragem toate liniile care conțin 'capability'
+  const inlineCapLines = source.split(/\n/).filter(l => {
+    const trimmed = l.trim();
+    return trimmed.includes('capability ') && !trimmed.startsWith('//');
+  });
+  
+  for (const line of inlineCapLines) {
+    // Match global pentru a prinde multiple capabilities pe aceeași linie
+    const matches = Array.from(line.matchAll(/capability\s+([a-zA-Z_]+)\(([^)]*)\)(\?)?/g));
+    for (const match of matches) {
+      const kind = match[1];
+      const argsRaw = match[2].trim();
+      const args = argsRaw ? argsRaw.split(/\s*,\s*/).map(s => s.replace(/^["']|["']$/g, "")) : [];
+      const optional = !!match[3];
+      capabilities.push({ kind, args, optional });
+    }
+  }
+
+  // Format BLOCK: capabilities { ... }
   const capsBlock = between(source, "capabilities {", "}")[0] ?? "";
-  const capabilities = capsBlock.split(/\n|;|,/).map(l => l.trim()).filter(Boolean).map(line => {
+  const blockCaps = capsBlock.split(/\n|;|,/).map(l => l.trim()).filter(Boolean).map(line => {
     const m = line.match(/^([a-zA-Z_]+)\(([^)]*)\)\??$/);
     if (!m) return null;
     const kind = m[1];
@@ -52,17 +74,52 @@ export function parseAxiomSource(source: string): { ir?: TAxiomIR, diagnostics: 
     return { kind, args, optional };
   }).filter(Boolean) as any[];
 
-  // checks
+  capabilities.push(...blockCaps);
+
+  // checks - suportă atât format block cât și inline
+  const checks: any[] = [];
+
+  // Format INLINE: check policy "name" { expect "expr" }
+  const inlineCheckLines = source.split(/\n/).filter(l => l.trim().match(/^check\s+(unit|policy|sla)/));
+  for (const line of inlineCheckLines) {
+    const match = line.match(/check\s+(unit|policy|sla)\s+"([^"]+)"\s*\{\s*expect\s+"([^"]+)"\s*\}/);
+    if (match) {
+      checks.push({
+        kind: match[1],
+        name: match[2],
+        expect: match[3]
+      });
+    }
+  }
+
+  // Format BLOCK: checks { ... }
   const checksBlock = between(source, "checks {", "}")[0] ?? "";
-  const checks = checksBlock.split(/\n/).map(l => l.trim()).filter(Boolean).map(line => {
-    const m = line.match(/^(unit|policy|sla)\s+"([^"]+)"\s+expect\s+(.+)$/);
+  const blockChecks = checksBlock.split(/\n/).map(l => l.trim()).filter(Boolean).map(line => {
+    const m = line.match(/^(unit|policy|sla)\s+"([^"]+)"\s+expect\s+"?([^"]+)"?$/);
     if (!m) return null;
-    return { kind: m[1], name: m[2], expect: m[3] };
+    return { kind: m[1], name: m[2], expect: m[3].replace(/^"|"$/g, '') };
   }).filter(Boolean) as any[];
 
-  // emit
+  checks.push(...blockChecks);
+
+  // emit - suportă atât format block cât și inline
+  const emit: any[] = [];
+
+  // Format INLINE: emit service "target"
+  const inlineEmitLines = source.split(/\n/).filter(l => l.trim().match(/^emit\s+(service|tests|report|manifest)/));
+  for (const line of inlineEmitLines) {
+    const match = line.match(/emit\s+(service|tests|report|manifest)\s+"([^"]+)"/);
+    if (match) {
+      emit.push({
+        type: match[1],
+        target: match[2]
+      });
+    }
+  }
+
+  // Format BLOCK: emit { ... }
   const emitBlock = between(source, "emit {", "}")[0] ?? "";
-  const emit = emitBlock.split(/\n/).map(l => l.trim()).filter(Boolean).map(line => {
+  const blockEmit = emitBlock.split(/\n/).map(l => l.trim()).filter(Boolean).map(line => {
     const m = line.match(/^(service|tests|report|manifest)\s+(.*)$/);
     if (!m) return null;
     const type = m[1];
@@ -72,11 +129,13 @@ export function parseAxiomSource(source: string): { ir?: TAxiomIR, diagnostics: 
     const subtypeM = rest.match(/subtype\s*=\s*"([^"]+)"/);
     const typeM = rest.match(/type\s*=\s*"([^"]+)"/);
     subtype = subtypeM ? subtypeM[1] : (typeM ? typeM[1] : undefined);
-    const targetM = rest.match(/target\s*=\s*"([^"]+)"/);
-    const target = targetM ? targetM[1] : undefined;
+    const targetM = rest.match(/target\s*=\s*"([^"]+)"|"([^"]+)"/);
+    const target = targetM ? (targetM[1] || targetM[2]) : undefined;
     if (!target) return null;
     return { type, subtype, target };
   }).filter(Boolean) as any[];
+
+  emit.push(...blockEmit);
 
   const agent: TAgentIR = {
     name, intent, constraints, capabilities, checks, emit
