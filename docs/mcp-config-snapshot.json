@@ -1,0 +1,19 @@
+{
+  "command": "npx",
+  "args": [
+    "@codai/axiom-mcp"
+  ],
+  "env": {
+    "AXIOM_MCP_PORT": "3411"
+  },
+  "description": "AXIOM - AI-native intention language with deterministic manifest generation",
+  "endpoints": [
+    "/parse - Parse .axm source to IR",
+    "/validate - Validate IR semantics",
+    "/generate - Generate artifacts from IR",
+    "/check - Run policy checks",
+    "/reverse - Reverse engineer IR from repo",
+    "/diff - Generate IR diff patches",
+    "/apply - Apply patches to filesystem"
+  ]
+}
