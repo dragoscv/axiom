@@ -1,6 +1,6 @@
 {
-  "name": "@axiom/mcp",
-  "version": "0.1.0",
+  "name": "@codai/axiom-mcp",
+  "version": "1.0.2",
   "type": "module",
   "bin": {
     "axiom-mcp": "dist/server.js"
@@ -12,8 +12,13 @@
     "postinstall": "node dist/postinstall.js"
   },
   "dependencies": {
-    "@axiom/core": "workspace:*",
-    "@axiom/engine": "workspace:*"
+    "@codai/axiom-core": "^1.0.1",
+    "@codai/axiom-engine": "^1.0.1",
+    "@codai/axiom-policies": "^1.0.1",
+    "@codai/axiom-emitter-webapp": "^1.0.1",
+    "@codai/axiom-emitter-apiservice": "^1.0.1",
+    "@codai/axiom-emitter-batchjob": "^1.0.1",
+    "@codai/axiom-emitter-docker": "^1.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

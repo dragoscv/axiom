@@ -1,5 +1,5 @@
 
-import type { Emitter } from "@axiom/engine/dist/emitter.js";
+import type { Emitter } from "@codai/axiom-engine/dist/emitter.js";
 
 const emitter: Emitter = {
   subtype: "docker-image",

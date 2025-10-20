@@ -1,13 +1,13 @@
 
 import http from "node:http";
-import { parseAxiomSource } from "@axiom/core/dist/parser.js";
-import { validateIR } from "@axiom/core/dist/validator.js";
-import { AxiomIR } from "@axiom/core/dist/ir.js";
-import { generate } from "@axiom/engine/dist/generate.js";
-import { check } from "@axiom/engine/dist/check.js";
-import { reverseIR } from "@axiom/engine/dist/reverse-ir.js";
-import { diff, applyPatch } from "@axiom/engine/dist/axpatch.js";
-import { apply } from "@axiom/engine/dist/apply.js";
+import { parseAxiomSource } from "@codai/axiom-core/dist/parser.js";
+import { validateIR } from "@codai/axiom-core/dist/validator.js";
+import { AxiomIR } from "@codai/axiom-core/dist/ir.js";
+import { generate } from "@codai/axiom-engine/dist/generate.js";
+import { check } from "@codai/axiom-engine/dist/check.js";
+import { reverseIR } from "@codai/axiom-engine/dist/reverse-ir.js";
+import { diff, applyPatch } from "@codai/axiom-engine/dist/axpatch.js";
+import { apply } from "@codai/axiom-engine/dist/apply.js";
 
 const PORT = Number(process.env.AXIOM_MCP_PORT || 3411);
 

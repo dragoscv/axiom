@@ -3,10 +3,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const mcpDir = path.join(os.homedir(), ".axiom");
+const mcpDir = path.join(os.homedir(), ".mcp", "servers");
 fs.mkdirSync(mcpDir, { recursive: true });
-fs.writeFileSync(path.join(mcpDir, "server.json"), JSON.stringify({
-  hint: "AXIOM MCP installed. Start with: npx axiom-mcp (or via host client auto-discovery).",
-  portEnv: "AXIOM_MCP_PORT",
-  defaultPort: 3411
-}, null, 2));
+
+const mcpConfig = {
+  command: "npx",
+  args: ["@codai/axiom-mcp"],
+  env: {
+    AXIOM_MCP_PORT: "3411"
+  },
+  description: "AXIOM - AI-native intention language with deterministic manifest generation",
+  endpoints: [
+    "/parse - Parse .axm source to IR",
+    "/validate - Validate IR semantics",
+    "/generate - Generate artifacts from IR",
+    "/check - Run policy checks",
+    "/reverse - Reverse engineer IR from repo",
+    "/diff - Generate IR diff patches",
+    "/apply - Apply patches to filesystem"
+  ]
+};
+
+fs.writeFileSync(
+  path.join(mcpDir, "axiom.json"),
+  JSON.stringify(mcpConfig, null, 2)
+);
+
+console.log("✅ AXIOM MCP config installed at ~/.mcp/servers/axiom.json");
+console.log("   Start server: npx axiom-mcp");
+console.log("   Default port: 3411");

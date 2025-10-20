@@ -2,7 +2,7 @@
 import path from "node:path";
 import { sha256, writeFile } from "./util.js";
 import type { Manifest, Artifact } from "./manifest.js";
-import type { TAxiomIR } from "@axiom/core/dist/ir.js";
+import type { TAxiomIR } from "@codai/axiom-core/dist/ir.js";
 import type { Emitter } from "./emitter.js";
 
 // Import emitters statically to avoid dynamic import issues in workspace

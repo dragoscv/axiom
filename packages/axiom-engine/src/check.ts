@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Manifest, Evidence } from "./manifest.js";
-import type { TAxiomIR } from "@axiom/core/dist/ir.js";
-import { evalCheck, type PolicyContext } from "@axiom/policies";
+import type { TAxiomIR } from "@codai/axiom-core/dist/ir.js";
+import { evalCheck, type PolicyContext } from "@codai/axiom-policies";
 
 export async function check(
   manifest: Manifest,

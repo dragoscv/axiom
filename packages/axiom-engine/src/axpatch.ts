@@ -1,4 +1,4 @@
-import type { TAxiomIR, TAgentIR } from "@axiom/core/dist/ir.js";
+import type { TAxiomIR, TAgentIR } from "@codai/axiom-core/dist/ir.js";
 
 /**
  * JSON-Patch operations pentru IR

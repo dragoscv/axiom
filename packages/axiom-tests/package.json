@@ -10,12 +10,12 @@
     "test:golden:snapshot": "vitest run src/golden.test.ts --reporter=verbose"
   },
   "dependencies": {
-    "@axiom/core": "workspace:*",
-    "@axiom/engine": "workspace:*",
-    "@axiom/emitter-webapp": "workspace:*",
-    "@axiom/emitter-apiservice": "workspace:*",
-    "@axiom/emitter-batchjob": "workspace:*",
-    "@axiom/emitter-docker": "workspace:*"
+    "@codai/axiom-core": "workspace:*",
+    "@codai/axiom-engine": "workspace:*",
+    "@codai/axiom-emitter-webapp": "workspace:*",
+    "@codai/axiom-emitter-apiservice": "workspace:*",
+    "@codai/axiom-emitter-batchjob": "workspace:*",
+    "@codai/axiom-emitter-docker": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

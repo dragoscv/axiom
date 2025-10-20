@@ -1,5 +1,5 @@
 
-import type { TAxiomIR, TAgentIR } from "@axiom/core/dist/ir.js";
+import type { TAxiomIR, TAgentIR } from "@codai/axiom-core/dist/ir.js";
 
 export interface EmitterContext {
   ir: TAxiomIR;

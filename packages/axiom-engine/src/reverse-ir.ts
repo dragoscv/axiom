@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { TAxiomIR, TAgentIR } from "@axiom/core/dist/ir.js";
+import type { TAxiomIR, TAgentIR } from "@codai/axiom-core/dist/ir.js";
 
 export interface ReverseIROptions {
     repoPath: string;

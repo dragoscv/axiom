@@ -33,10 +33,10 @@ importers:
 
   packages/axiom-engine:
     dependencies:
-      '@axiom/core':
+      '@codai/axiom-core':
         specifier: workspace:*
         version: link:../axiom-core
-      '@axiom/policies':
+      '@codai/axiom-policies':
         specifier: workspace:*
         version: link:../policies
     devDependencies:
@@ -52,10 +52,10 @@ importers:
 
   packages/axiom-mcp:
     dependencies:
-      '@axiom/core':
+      '@codai/axiom-core':
         specifier: workspace:*
         version: link:../axiom-core
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../axiom-engine
     devDependencies:
@@ -71,22 +71,22 @@ importers:
 
   packages/axiom-tests:
     dependencies:
-      '@axiom/core':
+      '@codai/axiom-core':
         specifier: workspace:*
         version: link:../axiom-core
-      '@axiom/emitter-apiservice':
+      '@codai/axiom-emitter-apiservice':
         specifier: workspace:*
         version: link:../emitters/apiservice
-      '@axiom/emitter-batchjob':
+      '@codai/axiom-emitter-batchjob':
         specifier: workspace:*
         version: link:../emitters/batchjob
-      '@axiom/emitter-docker':
+      '@codai/axiom-emitter-docker':
         specifier: workspace:*
         version: link:../emitters/docker
-      '@axiom/emitter-webapp':
+      '@codai/axiom-emitter-webapp':
         specifier: workspace:*
         version: link:../emitters/webapp
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../axiom-engine
     devDependencies:
@@ -105,7 +105,7 @@ importers:
 
   packages/emitters/apiservice:
     dependencies:
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../../axiom-engine
     devDependencies:
@@ -115,7 +115,7 @@ importers:
 
   packages/emitters/batchjob:
     dependencies:
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../../axiom-engine
     devDependencies:
@@ -125,7 +125,7 @@ importers:
 
   packages/emitters/docker:
     dependencies:
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../../axiom-engine
     devDependencies:
@@ -135,7 +135,7 @@ importers:
 
   packages/emitters/webapp:
     dependencies:
-      '@axiom/engine':
+      '@codai/axiom-engine':
         specifier: workspace:*
         version: link:../../axiom-engine
     devDependencies:
