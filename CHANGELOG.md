@@ -1,5 +1,64 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.17] - 2025-01-XX
+
+### 🔧 Enhanced: Physical FS Apply + Manifest Content Fallback + Versioned Cache
+
+**Status:** ✅ All enhancements implemented, comprehensive test coverage
+
+#### Fixed & Enhanced
+
+1. **✅ Manifest Content Fallback (Store-less Operation)**
+   - **Enhancement**: Artifacts can embed content directly via `contentUtf8` or `contentBase64`
+   - **Fallback Chain**: `artifact.contentUtf8` → `artifact.contentBase64` → `artifactStore.get(sha256)`
+   - **Benefit**: Small artifacts (README, configs) don't require cache, faster apply for embedded content
+   - **Evidence**: `apply-physical-smoke.test.ts` validates embedded content write + SHA256 verification
+
+2. **✅ Versioned Artifact Cache**
+   - **Enhancement**: Cache path changed from `.axiom/cache/` to `.axiom/cache/v1/`
+   - **Benefit**: Future-proof cache structure for format evolution, clear migration path
+   - **Evidence**: `artifactStore.ts` updated with versioned path
+
+3. **✅ Physical Filesystem Writes (Comprehensive)**
+   - **Enhancement**: Fully implemented `applyFS()` with real `fs/promises` writes under `out/`
+   - **SHA256 Validation**: Every written file verified post-write with `ArtifactStore.verify()`
+   - **POSIX Guarantee**: All `filesWritten[]` paths normalized to forward slashes
+   - **Evidence**: `apply-physical-smoke.test.ts`, `path-normalization-deepcopy.test.ts`
+
+4. **✅ Security: Anti-Traversal & Path Validation**
+   - **Enhancement**: Comprehensive security guards in `validateSafePath()`
+   - **Rejects**: Absolute paths (`/etc/passwd`), traversal (`../../../`), mid-path traversal (`safe/../evil`)
+   - **Accepts**: Safe relative paths under `out/` only
+   - **Evidence**: `apply-security.test.ts` with 4 comprehensive security test cases
+
+5. **✅ Check Evaluator AND Aggregation**
+   - **Enhancement**: Proper AND logic for aggregate `passed` flag
+   - **Logic**: All checks must pass (`evaluated: true`) for aggregate pass
+   - **Evidence**: `check-aggregate-and.test.ts` validates all-pass, one-fail, empty-checks scenarios
+
+#### Test Suite (533 New Lines)
+
+- **New Tests**: 
+  - `apply-physical-smoke.test.ts` (133 lines) - End-to-end physical write validation
+  - `path-normalization-deepcopy.test.ts` (78 lines) - POSIX guarantee + no mutation
+  - `apply-security.test.ts` (145 lines) - 4 comprehensive security scenarios
+  - `check-aggregate-and.test.ts` (177 lines) - AND logic validation
+- **All Tests GREEN**: ✅ Full regression suite + new tests passing
+- **Coverage**: Smoke test, security, POSIX normalization, AND aggregation
+
+#### Packages Updated
+
+- `@codai/axiom-engine@1.0.17` - Enhanced apply + versioned cache + manifest fallback
+- `@codai/axiom-mcp@1.0.17` - MCP server with latest engine
+
+#### MCP API Updates
+
+- **Manifest Schema**: Added optional `contentUtf8` and `contentBase64` fields to `Artifact` interface
+- **Cache Structure**: Store now uses `.axiom/cache/v1/<sha256>` for artifacts
+- **Apply Behavior**: 3-tier content resolution with embedded content priority
+
+---
+
 ## [1.0.16] - 2025-01-XX
 
 ### 🔧 Critical Fixes: Artifact Store + Real FS Apply + Check Evaluator
