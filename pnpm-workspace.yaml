@@ -5,3 +5,4 @@ packages:
   - packages/axiom-tests
   - packages/policies
   - packages/vscode-bridge
+  - packages/emitters/*

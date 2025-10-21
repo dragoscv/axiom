@@ -34,23 +34,23 @@ importers:
   packages/axiom-engine:
     dependencies:
       '@codai/axiom-core':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../axiom-core
       '@codai/axiom-emitter-apiservice':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/apiservice
       '@codai/axiom-emitter-batchjob':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/batchjob
       '@codai/axiom-emitter-docker':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/docker
       '@codai/axiom-emitter-webapp':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/webapp
       '@codai/axiom-policies':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../policies
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -65,26 +65,26 @@ importers:
   packages/axiom-mcp:
     dependencies:
       '@codai/axiom-core':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../axiom-core
       '@codai/axiom-emitter-apiservice':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/apiservice
       '@codai/axiom-emitter-batchjob':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/batchjob
       '@codai/axiom-emitter-docker':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/docker
       '@codai/axiom-emitter-webapp':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/webapp
       '@codai/axiom-engine':
-        specifier: ^1.0.2
-        version: 1.0.2
+        specifier: workspace:*
+        version: link:../axiom-engine
       '@codai/axiom-policies':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../policies
       '@modelcontextprotocol/sdk':
         specifier: ^1.20.1
         version: 1.20.1
@@ -102,23 +102,23 @@ importers:
   packages/axiom-tests:
     dependencies:
       '@codai/axiom-core':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../axiom-core
       '@codai/axiom-emitter-apiservice':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/apiservice
       '@codai/axiom-emitter-batchjob':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/batchjob
       '@codai/axiom-emitter-docker':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/docker
       '@codai/axiom-emitter-webapp':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: workspace:*
+        version: link:../emitters/webapp
       '@codai/axiom-engine':
-        specifier: ^1.0.1
-        version: 1.0.2
+        specifier: workspace:*
+        version: link:../axiom-engine
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -132,6 +132,46 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.18.11)
+
+  packages/emitters/apiservice:
+    dependencies:
+      '@codai/axiom-engine':
+        specifier: ^1.0.1
+        version: 1.0.2
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/emitters/batchjob:
+    dependencies:
+      '@codai/axiom-engine':
+        specifier: ^1.0.1
+        version: 1.0.2
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/emitters/docker:
+    dependencies:
+      '@codai/axiom-engine':
+        specifier: ^1.0.1
+        version: 1.0.2
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/emitters/webapp:
+    dependencies:
+      '@codai/axiom-engine':
+        specifier: ^1.0.1
+        version: 1.0.2
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
 
   packages/policies:
     devDependencies:

@@ -4,17 +4,24 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./dist/*": "./dist/*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@codai/axiom-core": "^1.0.1",
-    "@codai/axiom-policies": "^1.0.1",
-    "@codai/axiom-emitter-webapp": "^1.0.1",
-    "@codai/axiom-emitter-apiservice": "^1.0.1",
-    "@codai/axiom-emitter-batchjob": "^1.0.1",
-    "@codai/axiom-emitter-docker": "^1.0.1"
+    "@codai/axiom-core": "workspace:*",
+    "@codai/axiom-policies": "workspace:*",
+    "@codai/axiom-emitter-webapp": "workspace:*",
+    "@codai/axiom-emitter-apiservice": "workspace:*",
+    "@codai/axiom-emitter-batchjob": "workspace:*",
+    "@codai/axiom-emitter-docker": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
