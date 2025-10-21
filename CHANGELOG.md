@@ -1,6 +1,27 @@
 # AXIOM Changelog - Production-Ready Release
 
-## [1.0.17] - 2025-01-XX
+## [1.0.18] - 2025-10-21
+
+### 🔧 CI/CD Enhancement: Cross-Platform Matrix Testing
+
+**Status:** ✅ Multi-platform validation implemented
+
+#### CI/CD Matrix
+- **Platforms**: Windows Server 2022 + Ubuntu 22.04
+- **Node Versions**: 20.x, 22.x, 24.x
+- **Test Coverage**: All existing tests validated across 6 environments
+
+#### Packages Updated
+- `@codai/axiom-engine@1.0.18` - No breaking changes, version alignment
+- `@codai/axiom-mcp@1.0.18` - Updated engine dependency to 1.0.18
+
+#### Documentation
+- Updated README with CI matrix information
+- Clarified cross-platform support guarantees
+
+---
+
+## [1.0.17] - 2025-10-21
 
 ### 🔧 Enhanced: Physical FS Apply + Manifest Content Fallback + Versioned Cache
 
