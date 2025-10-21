@@ -98,8 +98,9 @@ function applyFS(manifest: Manifest, repoPath: string): ApplyResult {
             }
 
             // artifact.path e POSIX - adăugăm la lista de fișiere scrise
-            // (generate() deja le-a scris, apply doar validează)
-            filesWritten.push(artifact.path);
+            // (generate() deja le-a scris sub out/, apply doar validează)
+            // Raportăm cu out/ prefix pentru a reflecta locația reală în repo
+            filesWritten.push(`out/${artifact.path}`);
         }
 
         return {
@@ -146,7 +147,8 @@ async function applyPR(
             // Nu adăugăm manifest.json din root (e meta)
             if (artifact.path === "manifest.json") continue;
 
-            const relativePath = artifact.path;
+            // Artifacts sunt sub out/ în repo
+            const relativePath = `out/${artifact.path}`;
             filesWritten.push(relativePath);
 
             await execGit(repoPath, ["add", relativePath]);

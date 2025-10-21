@@ -96,7 +96,7 @@ describe("Apply Security - Path Traversal Guard", () => {
         irHash: "valid123",
         artifacts: [
           {
-            path: "out/webapp/index.html", // Valid - sub out/
+            path: "webapp/index.html", // Artifact path FĂRĂ out/ prefix (generate() format)
             kind: "file",
             sha256: "valid",
             bytes: 200
@@ -117,7 +117,7 @@ describe("Apply Security - Path Traversal Guard", () => {
 
       // ASSERT: Trebuie să reușească
       expect(result.success).toBe(true);
-      expect(result.filesWritten).toContain("out/webapp/index.html");
+      expect(result.filesWritten).toContain("out/webapp/index.html"); // apply() adaugă out/ prefix
 
       console.log("[apply-sandbox.test] ✓ Write under out/ allowed");
     } finally {
