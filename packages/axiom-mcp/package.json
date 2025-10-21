@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-mcp",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "module",
   "bin": {
     "axiom-mcp": "dist/server.js",
