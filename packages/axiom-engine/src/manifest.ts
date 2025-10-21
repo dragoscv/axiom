@@ -4,6 +4,9 @@ export interface Artifact {
   kind: "file" | "report";
   sha256: string;
   bytes: number;
+  // Optional embedded content (fallback if store unavailable)
+  contentUtf8?: string;
+  contentBase64?: string;
 }
 
 export interface Evidence {

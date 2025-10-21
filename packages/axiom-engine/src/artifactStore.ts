@@ -16,7 +16,8 @@ export class ArtifactStore {
   private readonly cacheDir: string;
 
   constructor(repoRoot: string, config: ArtifactStoreConfig = {}) {
-    this.cacheDir = config.cacheDir || join(repoRoot, ".axiom", "cache");
+    // Use .axiom/cache/v1 as per spec
+    this.cacheDir = config.cacheDir || join(repoRoot, ".axiom", "cache", "v1");
   }
 
   /**
