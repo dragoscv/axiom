@@ -1,6 +1,6 @@
 {
   "servers": {
-    "axiom-mcp": {
+		    "axiom-mcp": {
       "command": "npx",
       "args": [
         "-y",

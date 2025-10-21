@@ -55,16 +55,16 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
     const normalizedRel = toPosixPath(rel);
     const result = writeFile(outRoot, normalizedRel, content);
     const contentBuf = Buffer.from(content, "utf-8");
-    
+
     // VERIFICARE CRITICĂ: Forțăm POSIX path direct din toPosixPath pentru artifacts
     // Ignorăm complet result.posixPath pentru a evita orice posibilă corupție
     const artifactPath = toPosixPath(normalizedRel);
-    
+
     artifacts.push({
       path: artifactPath,
       kind: "file",
       sha256: sha256(content),
-      bytes: contentBuf.byteLength 
+      bytes: contentBuf.byteLength
     });
   }
 
@@ -121,5 +121,22 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
   };
 
   writer("manifest.json", JSON.stringify(manifest, null, 2));
-  return { artifacts: posixArtifacts, manifest };
+
+  // CRITICAL FIX: Force POSIX normalization on return to eliminate any possibility of backslashes
+  // This is a defense-in-depth measure to ensure artifacts are ALWAYS POSIX, even if earlier
+  // normalization steps are bypassed or corrupted by external factors
+  const finalArtifacts = posixArtifacts.map(a => ({
+    ...a,
+    path: a.path.replace(/\\/g, '/')
+  }));
+
+  const finalManifest: Manifest = {
+    ...manifest,
+    artifacts: manifest.artifacts.map(a => ({
+      ...a,
+      path: a.path.replace(/\\/g, '/')
+    }))
+  };
+
+  return { artifacts: finalArtifacts, manifest: finalManifest };
 }
