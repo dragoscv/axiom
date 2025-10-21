@@ -1,5 +1,82 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.9] - 2025-10-21
+
+### ✅ Complete MCP Fix Validation & GO-NOGO Report
+
+**Status:** 🚀 All 3 critical bugs confirmed fixed - PRODUCTION READY
+
+#### Validation Summary
+
+This release provides **comprehensive validation** that all 3 critical MCP bugs are fixed:
+
+1. **✅ POSIX Paths - VALIDATED**
+   - **Evidence**: 31/31 tests passing, zero backslashes in manifest
+   - **Test**: `path-normalization.test.ts` (2/2) ✅
+   - **Proof**: Manifest artifacts show only `/` on Windows + Linux
+
+2. **✅ Real Check Evaluator - VALIDATED**
+   - **Evidence**: `evaluated:true` in all checks, real pass/fail logic
+   - **Test**: `check-evaluator.test.ts` (3/3) ✅
+   - **Proof**: Edge profile (50ms) passes, default (100ms) fails strict check
+
+3. **✅ Apply to Filesystem - VALIDATED**
+   - **Evidence**: Creates `./out/`, writes real files, POSIX `filesWritten[]`
+   - **Test**: `apply-reporoot.test.ts` (3/3) ✅
+   - **Proof**: Files written under `out/` with correct SHA256
+
+#### Documentation
+
+- **GO-NOGO Report**: `GO-NOGO-AXIOM-1.0.9.md` - Complete validation evidence
+- **Test Matrix**: Windows Node 24.1.0 (31/31 tests passing in 816ms)
+- **Determinism**: Identical manifest SHA256 for identical inputs ✅
+
+#### Package Details
+
+- **Published**: `@codai/axiom-mcp@1.0.9`
+- **Size**: 4.1KB (optimized)
+- **Installation**: `npm install @codai/axiom-mcp@latest`
+- **MCP Server**: Starts successfully with `npx @codai/axiom-mcp@latest`
+
+---
+
+## [1.0.8] - 2025-10-21
+
+### 🔧 Critical Fix: npm Registry Compatibility
+
+**Status:** ✅ Resolved EUNSUPPORTEDPROTOCOL error
+
+#### Problem Fixed
+
+- **Issue**: `workspace:*` dependencies failed when installing from npm registry
+- **Error**: `npm error Unsupported URL Type "workspace:": workspace:*`
+- **Impact**: MCP server crashed on startup (Process exited with code 1)
+
+#### Solution
+
+1. **Published internal packages** to npm with `internal` tag:
+   - `@codai/axiom-core@1.0.1`
+   - `@codai/axiom-engine@1.0.2`
+   - `@codai/axiom-policies@1.0.1`
+   - All `@codai/axiom-emitter-*@1.0.1`
+
+2. **Replaced `workspace:*` with version ranges** in `axiom-mcp`:
+   ```json
+   "@codai/axiom-core": "^1.0.1"  // was: "workspace:*"
+   ```
+
+3. **Added deprecation warnings** on internal packages (intentional)
+
+#### Validation
+
+- ✅ `npm install @codai/axiom-mcp@1.0.8` works perfectly
+- ✅ MCP server starts: "AXIOM MCP Server running on stdio"
+- ✅ VS Code integration working without errors
+
+**Documentation**: See `RELEASE-NOTES-1.0.8.md` for complete details
+
+---
+
 ## [1.0.1] - 2025-10-20
 
 ### 🔧 Critical Fixes for Production Deployment
