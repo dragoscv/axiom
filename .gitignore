@@ -11,3 +11,4 @@ out-budget-r*/
 # Keep golden snapshots and test results for CI
 !packages/axiom-tests/snapshots/
 !test-results/
+tmp_artifacts
