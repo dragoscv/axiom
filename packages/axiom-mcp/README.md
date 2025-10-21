@@ -189,6 +189,18 @@ Apply manifest to filesystem or create Pull Request.
   branchName?: string,
   commitMessage?: string
 }
+
+// Manifest artifact structure (enhanced v1.0.17):
+interface Artifact {
+  path: string;              // POSIX relative path
+  kind: "file" | "report";
+  sha256: string;            // Content hash for validation
+  bytes: number;
+  
+  // ✨ NEW in 1.0.17: Optional embedded content (store-less operation)
+  contentUtf8?: string;      // UTF-8 text content (for README, configs)
+  contentBase64?: string;    // Base64 binary content (for images, compiled assets)
+}
 ```
 
 **Output**:
@@ -200,18 +212,30 @@ Apply manifest to filesystem or create Pull Request.
 ```
 
 **Features**:
-- ✅ **Artifact Store**: Content-addressable cache at `.axiom/cache/<sha256>`
-- ✅ **Real Filesystem Writes**: Reads from cache, writes to `out/` directory
+- ✅ **Versioned Artifact Cache**: `.axiom/cache/v1/<sha256>` (future-proof structure)
+- ✅ **3-Tier Content Fallback** (NEW in 1.0.17):
+  1. `artifact.contentUtf8` → Buffer.from(utf-8) - **Fastest, no store lookup**
+  2. `artifact.contentBase64` → Buffer.from(base64) - **Embedded binary content**
+  3. `artifactStore.get(sha256)` → Cached content - **Fallback for large files**
+  4. Throws `ERR_ARTIFACT_CONTENT_MISSING` if all sources unavailable
+- ✅ **Real Filesystem Writes**: Physical `fs/promises.writeFile()` to `out/` directory
 - ✅ **SHA256 Validation**: Verifies file integrity after write (throws `ERR_SHA256_MISMATCH`)
 - ✅ **Auto-creates `./out/`**: No manual directory setup required
-- ✅ **POSIX paths**: `filesWritten[]` use `/` on all platforms (no backslash)
-- ✅ **Security**: Blocks path traversal (`..`) and absolute paths
-- ✅ **Error Handling**: Clear errors if artifact content missing from cache (`ERR_ARTIFACT_CONTENT_MISSING`)
+- ✅ **POSIX Paths**: `filesWritten[]` use `/` on all platforms (guaranteed no backslash)
+- ✅ **Security**: Comprehensive protection:
+  - Blocks absolute paths (`/etc/passwd`)
+  - Blocks path traversal (`../../../sensitive`)
+  - Blocks mid-path traversal (`safe/../evil/hack.txt`)
+  - Validates all paths stay within `out/` directory
+- ✅ **Error Handling**: Clear errors with diagnostic context
 
 **Workflow Integration**:
-1. **Generate**: Creates manifest + caches content by SHA256 in `.axiom/cache/`
-2. **Apply**: Reads cached content + writes real files to `out/` + validates SHA256
-3. **Deterministic**: Identical IR → identical SHA256 → identical files
+1. **Generate**: Creates manifest + optionally embeds small content OR caches by SHA256 in `.axiom/cache/v1/`
+2. **Apply**: 
+   - Tries embedded content first (fast path for README, configs)
+   - Falls back to cache lookup for large artifacts
+   - Writes real files to `out/` with SHA256 validation
+3. **Deterministic**: Identical IR → identical SHA256 → identical files (verified post-write)
 
 ---
 

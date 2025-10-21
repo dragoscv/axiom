@@ -16,7 +16,8 @@ export class ArtifactStore {
   private readonly cacheDir: string;
 
   constructor(repoRoot: string, config: ArtifactStoreConfig = {}) {
-    this.cacheDir = config.cacheDir || join(repoRoot, ".axiom", "cache");
+    // Use .axiom/cache/v1 as per spec
+    this.cacheDir = config.cacheDir || join(repoRoot, ".axiom", "cache", "v1");
   }
 
   /**
@@ -42,7 +43,7 @@ export class ArtifactStore {
    */
   async get(sha256: string): Promise<Buffer> {
     const cachePath = join(this.cacheDir, sha256);
-    
+
     try {
       return await readFile(cachePath);
     } catch (error: any) {

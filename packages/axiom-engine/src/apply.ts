@@ -99,38 +99,53 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
 
             // Normalizează path la POSIX
             const posixPath = toPosixPath(artifact.path);
-            
-            // Determină path-ul pe disc
-            // Dacă path începe cu out/, curăță prefix-ul
+
+            // Determină path-ul pe disc - IMPORTANT: formează întotdeauna out/...
             let diskRel = posixPath;
             if (posixPath.startsWith('out/')) {
                 diskRel = posixPath.substring(4); // Remove 'out/'
             } else if (posixPath.startsWith('./out/')) {
                 diskRel = posixPath.substring(6); // Remove './out/'
             }
-            
+
             // Construiește full path: repoRoot/out/diskRel
             const diskParts = diskRel.split('/');
             const fullPath = join(repoRoot, 'out', ...diskParts);
 
-            // Citește content din artifact store
+            // **CONTENT FALLBACK ORDERING** per spec:
+            // 1. contentUtf8 → Buffer
+            // 2. contentBase64 → decode
+            // 3. artifactStore.get(sha256)
+            // 4. ERR_ARTIFACT_CONTENT_MISSING
             let content: Buffer;
-            try {
-                content = await artifactStore.get(artifact.sha256);
-            } catch (error: any) {
-                throw new Error(
-                    `ERR_ARTIFACT_CONTENT_MISSING: ${artifact.path} (SHA256: ${artifact.sha256}). ` +
-                    `Run generate() first to populate artifact store.`
-                );
+
+            if (artifact.contentUtf8 !== undefined) {
+                // Fallback 1: UTF-8 embedded content
+                content = Buffer.from(artifact.contentUtf8, "utf-8");
+            } else if (artifact.contentBase64 !== undefined) {
+                // Fallback 2: Base64 embedded content
+                content = Buffer.from(artifact.contentBase64, "base64");
+            } else {
+                // Fallback 3: Try artifact store
+                try {
+                    content = await artifactStore.get(artifact.sha256);
+                } catch (error: any) {
+                    // Fallback 4: Error if all sources exhausted
+                    throw new Error(
+                        `ERR_ARTIFACT_CONTENT_MISSING: ${artifact.path} (SHA256: ${artifact.sha256}). ` +
+                        `Content not found in manifest (contentUtf8/contentBase64) or artifact store. ` +
+                        `Run generate() first to populate store or include content in manifest.`
+                    );
+                }
             }
 
             // Creează directorul părinte
             await mkdir(dirname(fullPath), { recursive: true });
 
-            // Scrie fișierul
-            await writeFile(fullPath, content, "utf-8");
+            // Scrie fișierul (strict fs/promises, no virtual FS)
+            await writeFile(fullPath, content);
 
-            // Verifică SHA256 după scriere
+            // Verifică SHA256 după scriere (strict validation)
             const writtenContent = await readFile(fullPath);
             try {
                 ArtifactStore.verify(writtenContent, artifact.sha256);
