@@ -1,0 +1,46 @@
+# Build artifacts (keep only dist/)
+src/
+tsconfig.json
+*.ts
+!*.d.ts
+
+# Development files
+.pnpm-cache/
+node_modules/
+test/
+tests/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Documentation (included in root package)
+docs/
+examples/
+*.md
+!README.md
+
+# Git and CI
+.git/
+.github/
+.gitignore
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
