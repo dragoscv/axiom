@@ -46,7 +46,10 @@ export async function check(
         checkName: check.name,
         kind: check.kind as "unit" | "policy" | "sla",
         passed: false,
-        details: {}
+        details: {
+          evaluated: false, // Will be set to true after evaluation
+          measurements: {}
+        }
       };
 
       try {
@@ -54,7 +57,7 @@ export async function check(
         evidence.passed = result;
         evidence.details = {
           expression: check.expect,
-          evaluated: result,
+          evaluated: true, // ✅ Set to true for evaluated checks
           message: result ? "Check passed" : "Check failed",
           measurements: realMetrics // Include metrici reale în evidence
         };
@@ -62,6 +65,7 @@ export async function check(
         evidence.passed = false;
         evidence.details = {
           expression: check.expect,
+          evaluated: true, // ✅ Set to true even for errors (evaluation attempted)
           error: err.message,
           message: `Evaluation error: ${err.message}`,
           measurements: realMetrics
@@ -72,7 +76,8 @@ export async function check(
     }
   }
 
-  const passed = report.every(e => e.passed);
+  // ✅ AND aggregation: passed only if ALL checks passed
+  const passed = report.length > 0 ? report.every(e => e.passed) : true;
   return { passed, report, evaluated };
 }
 

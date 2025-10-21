@@ -49,7 +49,7 @@ export function parseAxiomSource(source: string): { ir?: TAxiomIR, diagnostics: 
     const trimmed = l.trim();
     return trimmed.includes('capability ') && !trimmed.startsWith('//');
   });
-  
+
   for (const line of inlineCapLines) {
     // Match global pentru a prinde multiple capabilities pe aceeași linie
     const matches = Array.from(line.matchAll(/capability\s+([a-zA-Z_]+)\(([^)]*)\)(\?)?/g));

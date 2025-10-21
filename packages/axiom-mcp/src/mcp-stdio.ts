@@ -15,11 +15,29 @@ import { check } from "@codai/axiom-engine/dist/check.js";
 import { reverseIR } from "@codai/axiom-engine/dist/reverse-ir.js";
 import { diff } from "@codai/axiom-engine/dist/axpatch.js";
 import { apply } from "@codai/axiom-engine/dist/apply.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// Read version from package.json
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const packageJson = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8"));
+const MCP_VERSION = packageJson.version;
+
+// Helper to add version metadata to all responses
+function addVersionMetadata(result: any): any {
+  return {
+    ...result,
+    _axiom_mcp_version: MCP_VERSION,
+    _axiom_engine_version: packageJson.dependencies?.["@codai/axiom-engine"] || "unknown"
+  };
+}
 
 const server = new Server(
   {
     name: "axiom-mcp",
-    version: "1.0.2",
+    version: MCP_VERSION, // Use dynamic version from package.json
   },
   {
     capabilities: {
@@ -179,7 +197,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ ir, diagnostics }, null, 2),
+              text: JSON.stringify(addVersionMetadata({ ir, diagnostics }), null, 2),
             },
           ],
         };
@@ -194,7 +212,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 type: "text",
                 text: JSON.stringify(
-                  { ok: false, diagnostics: parse.error.issues },
+                  addVersionMetadata({ ok: false, diagnostics: parse.error.issues }),
                   null,
                   2
                 ),
@@ -207,7 +225,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(addVersionMetadata(result), null, 2),
             },
           ],
         };
@@ -232,11 +250,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           process.cwd(),
           profile
         );
+        // DEBUG: Log artifact paths to stderr for debugging
+        console.error("[MCP DEBUG] artifacts from generate():", JSON.stringify(artifacts.map(a => a.path)));
+        console.error("[MCP DEBUG] manifest.artifacts:", JSON.stringify(manifest.artifacts.map(a => a.path)));
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ artifacts, manifest }, null, 2),
+              text: JSON.stringify(addVersionMetadata({ artifacts, manifest }), null, 2),
             },
           ],
         };
@@ -254,7 +275,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(addVersionMetadata(result), null, 2),
             },
           ],
         };
@@ -273,7 +294,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ ir, diagnostics: [] }, null, 2),
+              text: JSON.stringify(addVersionMetadata({ ir, diagnostics: [] }), null, 2),
             },
           ],
         };
@@ -302,12 +323,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const patch = diff(oldParse.data, newParse.data);
+        const patch = await diff(oldParse.data, newParse.data);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ patch }, null, 2),
+              text: JSON.stringify(addVersionMetadata({ patch }), null, 2),
             },
           ],
         };
@@ -332,7 +353,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(addVersionMetadata(result), null, 2),
             },
           ],
         };
@@ -363,12 +384,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("AXIOM MCP Server running on stdio");
+  console.error("[AXIOM MCP] Starting server initialization...");
+  console.error(`[AXIOM MCP] Process: Node ${process.version}, PID ${process.pid}`);
+  console.error(`[AXIOM MCP] Working directory: ${process.cwd()}`);
+
+  // CRITICAL: Give VS Code time to attach stdio pipes
+  // Without this delay, VS Code may miss early stderr output
+  await new Promise(resolve => setTimeout(resolve, 100));
+  console.error("[AXIOM MCP] Stdio pipes ready, proceeding with initialization...");
+
+  try {
+    const transport = new StdioServerTransport();
+    console.error("[AXIOM MCP] Transport created, connecting...");
+
+    await server.connect(transport);
+    console.error("[AXIOM MCP] Server connected successfully");
+    console.error(`[AXIOM MCP] Version ${MCP_VERSION}, Engine ${packageJson.dependencies?.["@codai/axiom-engine"]}`);
+    console.error("[AXIOM MCP] Ready to receive requests via stdio");
+    console.error("[AXIOM MCP] Waiting for initialize request from client...");
+
+    // Keep process alive - MCP SDK handles stdin/stdout
+    // No explicit exit - let MCP SDK manage lifecycle
+  } catch (error: any) {
+    console.error("[AXIOM MCP] FATAL - Initialization failed:", error.message || String(error));
+    console.error("[AXIOM MCP] Stack trace:", error.stack);
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  console.error("[AXIOM MCP] FATAL - Uncaught error in main():", error);
   process.exit(1);
 });

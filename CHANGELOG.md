@@ -1,5 +1,46 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.16] - 2025-01-XX
+
+### 🔧 Critical Fixes: Artifact Store + Real FS Apply + Check Evaluator
+
+**Status:** ✅ Phantom write bug fixed, SHA256 validation, AND aggregation
+
+#### Fixed Issues
+
+1. **✅ Artifact Store (Content-Addressable Storage)**
+   - **Problem**: Artifacts not cached, apply couldn't validate content
+   - **Solution**: Implemented `.axiom/cache/<sha256>` storage
+   - **Evidence**: `artifactStore.ts` with `put()`, `get()`, `hash()`, `verify()`
+   - **Benefit**: Deterministic apply, content validation, faster regeneration
+
+2. **✅ Real Filesystem Apply**
+   - **Problem**: `apply.ts` only reported files, didn't actually write them (phantom write bug)
+   - **Solution**: Rewrote `applyFS()` to read from cache and write real files
+   - **Evidence**: `apply-phantom-smoke.test.ts` validates files exist with correct content
+   - **Security**: Path traversal protection, absolute path rejection, SHA256 verification
+   - **Benefit**: POSIX paths guaranteed (no backslash), real `out/` directory creation
+
+3. **✅ Check Evaluator AND Logic**
+   - **Problem**: `details.evaluated` not set per check, incorrect aggregation
+   - **Solution**: Set `evaluated: true` for each check, AND aggregation for `passed`
+   - **Evidence**: `check-evaluator-and-logic.test.ts` validates AND logic
+   - **Benefit**: Correct pass/fail logic, all checks must pass for aggregate pass
+
+#### Test Suite
+
+- **New Tests**: `apply-phantom-smoke.test.ts`, `check-evaluator-and-logic.test.ts`
+- **All Tests GREEN**: ✅ Full regression suite passing
+- **Smoke Test**: Validates end-to-end: generate → cache → apply → verify SHA256
+
+#### Packages Updated
+
+- `@codai/axiom-engine@1.0.16` - Core fixes
+- `@codai/axiom-mcp@1.0.16` - MCP server with latest engine
+- All emitter packages - Rebuilt with new dependencies
+
+---
+
 ## [1.0.9] - 2025-10-21
 
 ### ✅ Complete MCP Fix Validation & GO-NOGO Report

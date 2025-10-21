@@ -1,152 +1,38 @@
 {
   "version": "1.0.0",
-  "buildId": "65b952edba8015c1ce61bda1b4935a35a7d40e90b30ed5231c639df8b06a4883",
+  "buildId": "b313589029b2330bc3625d1ad3f90895ccc7824d0202def52a9f9275510de8eb",
   "irHash": "f09ad9422c1e66569409a6fbe9a9fd3251d7e7fbce2881153c71f61f88827903",
-  "profile": "budget",
+  "profile": "edge",
   "artifacts": [
     {
-      "path": "out\\web\\README.md",
+      "path": "sanity/README.md",
       "kind": "file",
-      "sha256": "2f2929000f2b5a48e3cada80e02fbfb9db4e17a82fe2625fe450274b2ae6046f",
-      "bytes": 311
-    },
-    {
-      "path": "out\\web\\next.config.ts",
-      "kind": "file",
-      "sha256": "a263ff6b73fdd058e579a041a89f441a89025ca44b0a36260d739f066a49145e",
-      "bytes": 47
-    },
-    {
-      "path": "out\\web\\app\\layout.tsx",
-      "kind": "file",
-      "sha256": "3b34c6c4f57fe0450061a3c0058d6dab1a73c1782540c694591efddfee6b4e65",
-      "bytes": 958
-    },
-    {
-      "path": "out\\web\\app\\page.tsx",
-      "kind": "file",
-      "sha256": "8d888d4e8ff458449dca9490b00e8be785162f7f18fa2d3f54cc7781a2fd856a",
-      "bytes": 494
-    },
-    {
-      "path": "out\\web\\app\\notes\\page.tsx",
-      "kind": "file",
-      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
-      "bytes": 2419
-    },
-    {
-      "path": "out\\web\\app\\notes\\new\\page.tsx",
-      "kind": "file",
-      "sha256": "b7ffa44589b5e4a5ea8689942fdb5fbe8676760ebef059e2514aecd858b95aa9",
-      "bytes": 2896
-    },
-    {
-      "path": "out\\web\\app\\notes\\[id]\\page.tsx",
-      "kind": "file",
-      "sha256": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
-      "bytes": 2192
-    },
-    {
-      "path": "out\\web\\package.json",
-      "kind": "file",
-      "sha256": "fb2d5f79b086c3d75c6efcf92ebebe91b689a493c9f27d4785af7ec59b88ba20",
-      "bytes": 332
-    },
-    {
-      "path": "out\\web\\tsconfig.json",
-      "kind": "file",
-      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
-      "bytes": 644
-    },
-    {
-      "path": "out\\web\\.gitignore",
-      "kind": "file",
-      "sha256": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
-      "bytes": 51
-    },
-    {
-      "path": "out\\api\\README.md",
-      "kind": "file",
-      "sha256": "1303244604239ab08a11bebe111bd11c3f422f7256b13ac3f744690741c1924a",
-      "bytes": 491
-    },
-    {
-      "path": "out\\api\\src\\index.ts",
-      "kind": "file",
-      "sha256": "6dcc5c4d8d0a856c1dff9b8c2fc62ea57c2ac5eeece0c3fbc1a168b83fc86735",
-      "bytes": 8624
-    },
-    {
-      "path": "out\\api\\package.json",
-      "kind": "file",
-      "sha256": "216dd231d4aba5da5fb05fe1337422ee6e3c22b68b285fbb0dd5f6d4d46c71f6",
-      "bytes": 249
-    },
-    {
-      "path": "out\\api\\tsconfig.json",
-      "kind": "file",
-      "sha256": "efc7abc7fab69f40ffa3486d1a26345503e30b2d62b6d8d0d2188e548c5972be",
-      "bytes": 401
-    },
-    {
-      "path": "out\\api\\.gitignore",
-      "kind": "file",
-      "sha256": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
-      "bytes": 46
-    },
-    {
-      "path": "out\\docker\\Dockerfile",
-      "kind": "file",
-      "sha256": "1ceef6cd55b6c1d32f942cf872b3381c46b8366398f1a0f95b930419d73187a0",
-      "bytes": 85
-    },
-    {
-      "path": "out\\docker\\.dockerignore",
-      "kind": "file",
-      "sha256": "7c12a77f46e042412273b579d497f70d7ba24c3892a295b393a06c84fc4921c3",
-      "bytes": 27
-    },
-    {
-      "path": "out\\docker\\index.js",
-      "kind": "file",
-      "sha256": "1eb968a0ea034b091af552a531f8cdb39f937495b31a41603b43058c2f4e4de1",
-      "bytes": 47
-    },
-    {
-      "path": "out\\docker\\README.md",
-      "kind": "file",
-      "sha256": "758f534cd85460059b2f92f0c4ab2c227bda455fca57dc3667402144ca322b43",
-      "bytes": 52
-    },
-    {
-      "path": "out\\tests\\README.md",
-      "kind": "file",
-      "sha256": "fe4aad6b27e42c28c084b8b261ac1c8adaed5cf11e2ff2f0b422d7be8068276b",
-      "bytes": 47
+      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
+      "bytes": 44
     }
   ],
   "evidence": [
     {
-      "checkName": "no-pii",
-      "kind": "policy",
+      "checkName": "test",
+      "kind": "sla",
       "passed": true,
       "details": {
-        "expression": "scan.artifacts.no_personal_data()",
+        "expression": "cold_start_ms<=50",
         "evaluated": true,
         "message": "Check passed",
         "measurements": {
-          "latency_p50_ms": 45,
-          "monthly_budget_usd": 2,
-          "pii_leak": false,
-          "cold_start_ms": 80,
-          "max_dependencies": 3,
+          "cold_start_ms": 50,
+          "max_dependencies": 0,
           "frontend_bundle_kb": 0,
           "no_analytics": true,
+          "no_telemetry": true,
           "no_fs_heavy": true,
-          "no_telemetry": true
+          "no_pii_in_artifacts": true,
+          "size_under_5mb": true,
+          "response_under_500ms": true
         }
       }
     }
   ],
-  "createdAt": "deterministic-65b952edba8015c1"
+  "createdAt": "deterministic-b313589029b2330b"
 }

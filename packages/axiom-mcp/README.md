@@ -200,10 +200,18 @@ Apply manifest to filesystem or create Pull Request.
 ```
 
 **Features**:
-- ✅ **Auto-creates `./out/`**: No manual directory setup
-- ✅ **POSIX paths**: `filesWritten[]` use `/` on all platforms
+- ✅ **Artifact Store**: Content-addressable cache at `.axiom/cache/<sha256>`
+- ✅ **Real Filesystem Writes**: Reads from cache, writes to `out/` directory
+- ✅ **SHA256 Validation**: Verifies file integrity after write (throws `ERR_SHA256_MISMATCH`)
+- ✅ **Auto-creates `./out/`**: No manual directory setup required
+- ✅ **POSIX paths**: `filesWritten[]` use `/` on all platforms (no backslash)
 - ✅ **Security**: Blocks path traversal (`..`) and absolute paths
-- ✅ **SHA256 validation**: Verifies file integrity after write
+- ✅ **Error Handling**: Clear errors if artifact content missing from cache (`ERR_ARTIFACT_CONTENT_MISSING`)
+
+**Workflow Integration**:
+1. **Generate**: Creates manifest + caches content by SHA256 in `.axiom/cache/`
+2. **Apply**: Reads cached content + writes real files to `out/` + validates SHA256
+3. **Deterministic**: Identical IR → identical SHA256 → identical files
 
 ---
 

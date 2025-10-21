@@ -41,7 +41,7 @@ describe("Path Normalization - POSIX only", () => {
       // DEBUG: Print first 5 artifact paths pentru diagnostic
       console.log("\n=== ARTIFACT PATHS DEBUG ===");
       manifest.artifacts.slice(0, 5).forEach((a, i) => {
-        console.log(`${i+1}. "${a.path}" - has backslash: ${a.path.includes('\\')}`);
+        console.log(`${i + 1}. "${a.path}" - has backslash: ${a.path.includes('\\')}`);
       });
       console.log("===========================\n");
 
