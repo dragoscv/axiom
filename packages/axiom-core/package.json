@@ -21,9 +21,5 @@
   "devDependencies": {
     "typescript": "^5.6.3",
     "tsx": "^4.19.0"
-  },
-  "publishConfig": {
-    "tag": "internal",
-    "access": "public"
   }
 }
