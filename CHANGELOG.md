@@ -1,5 +1,126 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.20] - 2025-10-21
+
+### 🔧 Fix: Real FS Writes + Post-Write Verification + Enhanced Validation
+
+**Status:** ✅ Production-ready filesystem operations with comprehensive verification
+
+#### Critical Fixes
+
+1. **✅ Post-Write SHA256 Verification**
+   - **Enhancement**: `apply()` now reads back written files and verifies SHA256 matches
+   - **Protection**: Detects disk corruption, filesystem issues, or write failures
+   - **Error**: `ERR_POST_WRITE_VERIFY` if disk SHA256 ≠ expected SHA256
+   - **Benefit**: Guarantees file integrity after write operation
+
+2. **✅ Pre-Write Content Validation**
+   - **Enhancement**: Validates content SHA256 and size BEFORE writing to disk
+   - **Errors**: 
+     - `ERR_SHA_MISMATCH`: Content SHA256 doesn't match manifest
+     - `ERR_SIZE_MISMATCH`: Content size doesn't match manifest bytes
+   - **Benefit**: Catches content corruption early in pipeline
+
+3. **✅ Strict POSIX Path Enforcement**
+   - **Enhancement**: Rejects artifact paths containing backslashes
+   - **Error**: `ERR_POSIX_ONLY` if artifact.path contains `\`
+   - **Benefit**: Ensures cross-platform manifest compatibility
+   - **Evidence**: `apply-reject-backslash-paths.test.ts` validates rejection
+
+4. **✅ Enhanced Apply Result Summary**
+   - **Enhancement**: `ApplyResult` now includes summary statistics
+   - **Fields**: 
+     - `summary.totalFiles`: Number of files written
+     - `summary.totalBytes`: Total bytes written across all files
+   - **Benefit**: Better observability and reporting
+
+5. **✅ Absolute Path Support (Windows + Linux)**
+   - **Enhancement**: `repoPath` accepts both relative and absolute paths
+   - **Windows**: Handles `E:\GitHub\test` and `E:/GitHub/test` formats
+   - **Unix**: Handles `/home/user/test` format
+   - **Evidence**: `apply-absolute-repoPath.test.ts` validates cross-platform paths
+
+#### Implementation Details
+
+**Modified Files:**
+- `packages/axiom-engine/src/apply.ts` - Enhanced validation and verification
+  - Pre-write content validation (SHA256 + size)
+  - Post-write read-back verification
+  - Strict POSIX path validation with backslash rejection
+  - Summary statistics tracking
+  - Enhanced error messages with context
+
+**New Tests:**
+- `apply-stateless-inline.test.ts` - Comprehensive stateless pipeline tests (264 lines)
+- `apply-absolute-repoPath.test.ts` - Cross-platform path handling (162 lines)
+- `apply-reject-backslash-paths.test.ts` - POSIX path enforcement (140 lines)
+
+#### Technical Specifications
+
+**Validation Flow:**
+```typescript
+// 1. Pre-write validation
+const bytesCalc = content.length;
+const sha256Calc = ArtifactStore.hash(content);
+
+if (sha256Calc !== artifact.sha256) throw ERR_SHA_MISMATCH;
+if (bytesCalc !== artifact.bytes) throw ERR_SIZE_MISMATCH;
+
+// 2. Write to disk
+await writeFile(fullPath, content);
+
+// 3. Post-write verification (read-back)
+const writtenContent = await readFile(fullPath);
+const sha256Disk = ArtifactStore.hash(writtenContent);
+
+if (sha256Disk !== artifact.sha256) throw ERR_POST_WRITE_VERIFY;
+if (writtenContent.length !== artifact.bytes) throw ERR_POST_WRITE_SIZE;
+```
+
+**Path Validation:**
+```typescript
+// Reject backslashes
+if (artifactPath.includes('\\')) throw ERR_POSIX_ONLY;
+
+// Reject absolute paths
+if (isAbsolute(posixPath)) throw Error;
+
+// Reject traversal
+if (posixPath.includes('..')) throw Error;
+
+// Verify within bounds
+if (!resolved.startsWith(expectedPrefix)) throw Error;
+```
+
+#### Error Codes
+
+- **ERR_POST_WRITE_VERIFY**: Disk SHA256 mismatch after write
+- **ERR_POST_WRITE_SIZE**: Disk size mismatch after write
+- **ERR_SHA_MISMATCH**: Content SHA256 doesn't match manifest (pre-write)
+- **ERR_SIZE_MISMATCH**: Content size doesn't match manifest (pre-write)
+- **ERR_POSIX_ONLY**: Artifact path contains backslash
+- **ERR_ARTIFACT_CONTENT_MISSING**: No content source available
+
+#### Packages Updated
+- `@codai/axiom-engine@1.0.20` - Enhanced validation, verification, and error handling
+
+#### Use Cases Protected
+
+1. **Disk Corruption Detection**: Post-write verification catches filesystem issues
+2. **Content Integrity**: Pre-write validation ensures manifest accuracy
+3. **Cross-Platform Compatibility**: Strict POSIX paths ensure portability
+4. **Windows + Linux Support**: Absolute and relative paths work everywhere
+5. **Observability**: Summary statistics enable monitoring and reporting
+
+#### Migration Notes
+
+- **Backward Compatible**: Existing code continues to work
+- **Enhanced Errors**: More specific error messages with context
+- **Summary Optional**: `result.summary` is optional field (backward compatible)
+- **POSIX Required**: Manifests with backslash paths will now fail (intentional fix)
+
+---
+
 ## [1.0.19] - 2025-10-21
 
 ### 🚀 Feature: Inline Artifact Content for Stateless Pipelines

@@ -139,6 +139,131 @@ if (bytes <= 256_KiB && validUTF8) {
 
 **SHA256 Validation:** All written files verified post-write regardless of content source.
 
+## 🔒 Filesystem Apply: Real Writes + Verification (v1.0.20+)
+
+### Production-Grade File Operations
+
+AXIOM `apply()` implements **defense-in-depth** validation for guaranteed file integrity:
+
+#### ✅ Pre-Write Validation
+Before writing any file, content is validated against manifest expectations:
+```typescript
+// Content must match manifest SHA256
+if (ArtifactStore.hash(content) !== artifact.sha256) {
+  throw ERR_SHA_MISMATCH;
+}
+
+// Size must match manifest bytes
+if (content.length !== artifact.bytes) {
+  throw ERR_SIZE_MISMATCH;
+}
+```
+
+#### ✅ Post-Write Verification
+After writing, files are read back and re-verified:
+```typescript
+// Write file
+await writeFile(fullPath, content);
+
+// Read back from disk
+const writtenContent = await readFile(fullPath);
+
+// Verify disk content matches expected SHA256
+if (ArtifactStore.hash(writtenContent) !== artifact.sha256) {
+  throw ERR_POST_WRITE_VERIFY; // Disk corruption detected
+}
+```
+
+### Path Security & Validation
+
+#### Strict POSIX Path Enforcement
+All artifact paths MUST use forward slashes only:
+```typescript
+// ✅ VALID
+artifact.path = "src/components/Button.tsx"
+
+// ❌ INVALID - Will throw ERR_POSIX_ONLY
+artifact.path = "src\\components\\Button.tsx"
+```
+
+#### Cross-Platform repoPath Support
+`apply()` accepts both Windows and Unix paths:
+```typescript
+// Windows absolute path
+await apply({ manifest, mode: "fs", repoPath: "E:\\GitHub\\project" });
+await apply({ manifest, mode: "fs", repoPath: "E:/GitHub/project" });
+
+// Unix absolute path  
+await apply({ manifest, mode: "fs", repoPath: "/home/user/project" });
+
+// Relative path (resolved automatically)
+await apply({ manifest, mode: "fs", repoPath: "./project" });
+```
+
+#### Security Protections
+```typescript
+// ❌ Rejected: Absolute paths in artifacts
+artifact.path = "/etc/passwd" // Error
+
+// ❌ Rejected: Path traversal
+artifact.path = "../../../etc/passwd" // Error
+
+// ❌ Rejected: Mid-path traversal  
+artifact.path = "safe/../../../etc/passwd" // Error
+
+// ✅ Accepted: Relative paths under out/
+artifact.path = "src/app/page.tsx" // OK
+```
+
+### Apply Result Summary
+
+Enhanced observability with statistics:
+```typescript
+const result = await apply({ manifest, mode: "fs", repoPath });
+
+console.log(result.summary);
+// {
+//   totalFiles: 42,
+//   totalBytes: 1048576
+// }
+```
+
+### Error Handling
+
+Comprehensive error codes for debugging:
+
+| Error Code | Cause | Solution |
+|------------|-------|----------|
+| `ERR_POST_WRITE_VERIFY` | Disk SHA256 mismatch after write | Check filesystem, disk space, permissions |
+| `ERR_POST_WRITE_SIZE` | File size mismatch after write | Check disk space, filesystem limits |
+| `ERR_SHA_MISMATCH` | Content doesn't match manifest (pre-write) | Regenerate manifest or verify content |
+| `ERR_SIZE_MISMATCH` | Content size doesn't match manifest | Regenerate manifest or verify content |
+| `ERR_POSIX_ONLY` | Artifact path contains backslash | Use forward slashes only |
+| `ERR_ARTIFACT_CONTENT_MISSING` | No content source available | Run generate() or include inline content |
+
+### Complete Example
+
+```typescript
+import { apply } from "@codai/axiom-engine";
+
+const result = await apply({
+  manifest: generatedManifest,
+  mode: "fs",
+  repoPath: "E:/GitHub/my-project"
+});
+
+if (!result.success) {
+  console.error("Apply failed:", result.error);
+  process.exit(1);
+}
+
+console.log(`✅ Success!`);
+console.log(`Files written: ${result.summary.totalFiles}`);
+console.log(`Total bytes: ${result.summary.totalBytes}`);
+console.log(`Paths:`, result.filesWritten);
+// ["out/src/app/page.tsx", "out/package.json", ...]
+```
+
 ## Arhitectură (pe scurt)
 - `@axiom/core` – IR (Zod), parser `.axm`, validator semantic (efecte gate‑uite prin capabilities).
 - `@axiom/engine` – generate + manifest + (stub) check; profile‑aware emitters.

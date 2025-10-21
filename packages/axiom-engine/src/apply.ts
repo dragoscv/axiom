@@ -21,6 +21,10 @@ export interface ApplyResult {
     commit?: string;
     prUrl?: string;
     filesWritten: string[];
+    summary?: {
+        totalFiles: number;
+        totalBytes: number;
+    };
     error?: string;
 }
 
@@ -52,8 +56,14 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
 
 /**
  * Validează că un path nu conține traversal și e în limitele repoPath/out
+ * Respinge strict backslash-uri în artifact paths pentru consistență POSIX
  */
 function validateSafePath(repoPath: string, artifactPath: string): void {
+    // Respinge backslash-uri în artifact path (strict POSIX only)
+    if (artifactPath.includes('\\')) {
+        throw new Error(`ERR_POSIX_ONLY: Artifact path contains backslash: ${artifactPath}`);
+    }
+
     // Normalizează artifact path la POSIX
     const posixPath = toPosixPath(artifactPath);
 
@@ -79,10 +89,12 @@ function validateSafePath(repoPath: string, artifactPath: string): void {
 
 /**
  * Mod direct: scrie fișierele pe disc folosind ArtifactStore
+ * Include post-write verification cu read-back SHA256 check
  */
 async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResult> {
     const filesWritten: string[] = [];
     const artifactStore = new ArtifactStore(repoRoot);
+    let totalBytes = 0;
 
     try {
         // Asigură că directorul out/ există
@@ -94,7 +106,7 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
             // Skip manifest.json (e meta)
             if (artifact.path === "manifest.json") continue;
 
-            // Validare securitate: respinge path traversal
+            // Validare securitate: respinge path traversal și backslash-uri
             validateSafePath(repoRoot, artifact.path);
 
             // Normalizează path la POSIX
@@ -139,31 +151,61 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
                 }
             }
 
+            // Pre-write validation: verify content matches manifest expectations
+            const bytesCalc = content.length;
+            const sha256Calc = ArtifactStore.hash(content);
+
+            // Verify SHA256 matches manifest
+            if (sha256Calc !== artifact.sha256) {
+                throw new Error(
+                    `ERR_SHA_MISMATCH: Content SHA256 ${sha256Calc} does not match manifest SHA256 ${artifact.sha256} for ${artifact.path}`
+                );
+            }
+
+            // Verify size matches manifest
+            if (bytesCalc !== artifact.bytes) {
+                throw new Error(
+                    `ERR_SIZE_MISMATCH: Content size ${bytesCalc} does not match manifest size ${artifact.bytes} for ${artifact.path}`
+                );
+            }
+
             // Creează directorul părinte
             await mkdir(dirname(fullPath), { recursive: true });
 
             // Scrie fișierul (strict fs/promises, no virtual FS)
             await writeFile(fullPath, content);
 
-            // Verifică SHA256 după scriere (strict validation)
+            // **POST-WRITE VERIFICATION**: Read back from disk and verify SHA256
             const writtenContent = await readFile(fullPath);
-            try {
-                ArtifactStore.verify(writtenContent, artifact.sha256);
-            } catch (error: any) {
+            const sha256Disk = ArtifactStore.hash(writtenContent);
+
+            if (sha256Disk !== artifact.sha256) {
                 throw new Error(
-                    `ERR_SHA256_MISMATCH for ${artifact.path}: ${error.message}`
+                    `ERR_POST_WRITE_VERIFY: Disk SHA256 ${sha256Disk} does not match expected ${artifact.sha256} for ${artifact.path}. File may be corrupted.`
+                );
+            }
+
+            // Verify read-back size
+            if (writtenContent.length !== artifact.bytes) {
+                throw new Error(
+                    `ERR_POST_WRITE_SIZE: Disk size ${writtenContent.length} does not match expected ${artifact.bytes} for ${artifact.path}`
                 );
             }
 
             // Raportează cu prefix out/ și strict POSIX (fără backslash)
             const reportPath = `out/${diskRel}`.replace(/\\/g, '/');
             filesWritten.push(reportPath);
+            totalBytes += bytesCalc;
         }
 
         return {
             success: true,
             mode: "fs",
-            filesWritten
+            filesWritten,
+            summary: {
+                totalFiles: filesWritten.length,
+                totalBytes
+            }
         };
     } catch (err: any) {
         return {
