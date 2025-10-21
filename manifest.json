@@ -7,8 +7,8 @@
     {
       "path": "out\\web\\README.md",
       "kind": "file",
-      "sha256": "e2ace12a3dddc4d1dcb52763c9a95a1a560623a815527672f456860458ebf7d9",
-      "bytes": 303
+      "sha256": "2f2929000f2b5a48e3cada80e02fbfb9db4e17a82fe2625fe450274b2ae6046f",
+      "bytes": 311
     },
     {
       "path": "out\\web\\next.config.ts",
@@ -19,14 +19,14 @@
     {
       "path": "out\\web\\app\\layout.tsx",
       "kind": "file",
-      "sha256": "ac710a71a20357b09e59edebbf294ab5b0eef4e1016344f427bc196bb9c6bc51",
-      "bytes": 950
+      "sha256": "3b34c6c4f57fe0450061a3c0058d6dab1a73c1782540c694591efddfee6b4e65",
+      "bytes": 958
     },
     {
       "path": "out\\web\\app\\page.tsx",
       "kind": "file",
-      "sha256": "a29721c458d1ed614fd6142f7abc1185c72a73197dbc133543ea706d0684c416",
-      "bytes": 486
+      "sha256": "8d888d4e8ff458449dca9490b00e8be785162f7f18fa2d3f54cc7781a2fd856a",
+      "bytes": 494
     },
     {
       "path": "out\\web\\app\\notes\\page.tsx",
@@ -49,8 +49,8 @@
     {
       "path": "out\\web\\package.json",
       "kind": "file",
-      "sha256": "debf329fc3fd521c05f21c10724e0d997fd3166cbb17c67370383a364205d5b0",
-      "bytes": 324
+      "sha256": "fb2d5f79b086c3d75c6efcf92ebebe91b689a493c9f27d4785af7ec59b88ba20",
+      "bytes": 332
     },
     {
       "path": "out\\web\\tsconfig.json",
@@ -67,20 +67,20 @@
     {
       "path": "out\\api\\README.md",
       "kind": "file",
-      "sha256": "d89e595539a487ecc00e85af241287554f1955accc0bb57f9b5ab012cbd51c5e",
-      "bytes": 483
+      "sha256": "1303244604239ab08a11bebe111bd11c3f422f7256b13ac3f744690741c1924a",
+      "bytes": 491
     },
     {
       "path": "out\\api\\src\\index.ts",
       "kind": "file",
-      "sha256": "4828dd4de2c30291a35ebf58ce0600833a3d068689584e692a0265414f9a9fe9",
-      "bytes": 8600
+      "sha256": "6dcc5c4d8d0a856c1dff9b8c2fc62ea57c2ac5eeece0c3fbc1a168b83fc86735",
+      "bytes": 8624
     },
     {
       "path": "out\\api\\package.json",
       "kind": "file",
-      "sha256": "215da3622460f52597b447ec91e9273b4578988a73a014cd443cb91863ff4ce2",
-      "bytes": 241
+      "sha256": "216dd231d4aba5da5fb05fe1337422ee6e3c22b68b285fbb0dd5f6d4d46c71f6",
+      "bytes": 249
     },
     {
       "path": "out\\api\\tsconfig.json",
@@ -95,10 +95,34 @@
       "bytes": 46
     },
     {
-      "path": "out\\axiom.json\\README.md",
+      "path": "out\\docker\\Dockerfile",
       "kind": "file",
-      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
-      "bytes": 44
+      "sha256": "1ceef6cd55b6c1d32f942cf872b3381c46b8366398f1a0f95b930419d73187a0",
+      "bytes": 85
+    },
+    {
+      "path": "out\\docker\\.dockerignore",
+      "kind": "file",
+      "sha256": "7c12a77f46e042412273b579d497f70d7ba24c3892a295b393a06c84fc4921c3",
+      "bytes": 27
+    },
+    {
+      "path": "out\\docker\\index.js",
+      "kind": "file",
+      "sha256": "1eb968a0ea034b091af552a531f8cdb39f937495b31a41603b43058c2f4e4de1",
+      "bytes": 47
+    },
+    {
+      "path": "out\\docker\\README.md",
+      "kind": "file",
+      "sha256": "758f534cd85460059b2f92f0c4ab2c227bda455fca57dc3667402144ca322b43",
+      "bytes": 52
+    },
+    {
+      "path": "out\\tests\\README.md",
+      "kind": "file",
+      "sha256": "fe4aad6b27e42c28c084b8b261ac1c8adaed5cf11e2ff2f0b422d7be8068276b",
+      "bytes": 47
     }
   ],
   "evidence": [
@@ -108,27 +132,6 @@
       "passed": true,
       "details": {
         "expression": "scan.artifacts.no_personal_data()",
-        "evaluated": true,
-        "message": "Check passed",
-        "measurements": {
-          "latency_p50_ms": 45,
-          "monthly_budget_usd": 2,
-          "pii_leak": false,
-          "cold_start_ms": 80,
-          "max_dependencies": 3,
-          "frontend_bundle_kb": 0,
-          "no_analytics": true,
-          "no_fs_heavy": true,
-          "no_telemetry": true
-        }
-      }
-    },
-    {
-      "checkName": "p50",
-      "kind": "sla",
-      "passed": true,
-      "details": {
-        "expression": "latency_p50_ms <= 80",
         "evaluated": true,
         "message": "Check passed",
         "measurements": {

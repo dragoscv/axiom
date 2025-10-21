@@ -92,6 +92,15 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
     }
   }
 
+  // CRITICAL FIX: Normalizăm TOATE path-urile din artifacts la POSIX înainte de manifest
+  // IMPORTANT: Creăm NOI obiecte (nu shallow copy) pentru a evita mutarea accidentală
+  const posixArtifacts = artifacts.map(a => ({
+    path: a.path.replace(/\\/g, '/'),
+    kind: a.kind,
+    sha256: a.sha256,
+    bytes: a.bytes
+  }));
+
   // Rulează checks și populează evidence
   const { check } = await import("./check.js");
   const manifestTemp: Manifest = {
@@ -99,7 +108,7 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
     buildId,
     irHash,
     profile,
-    artifacts,
+    artifacts: posixArtifacts,
     evidence: [],
     createdAt
   };
@@ -112,5 +121,5 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
   };
 
   writer("manifest.json", JSON.stringify(manifest, null, 2));
-  return { artifacts, manifest };
+  return { artifacts: posixArtifacts, manifest };
 }

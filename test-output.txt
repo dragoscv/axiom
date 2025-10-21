@@ -1,0 +1,51 @@
+
+> @axiom/tests@0.1.0 test:unit E:\gh\axiom\packages\axiom-tests
+> vitest run "path-normalization.test.ts"
+
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mE:/gh/axiom/packages/axiom-tests[39m
+
+[90mstdout[2m | src/path-normalization.test.ts[2m > [22m[2mPath Normalization - POSIX only[2m > [22m[2mshould produce only forward slashes in artifact paths
+[22m[39m
+=== ARTIFACT PATHS DEBUG ===
+1. "my-webapp\README.md" - has backslash: true
+2. "my-webapp\next.config.ts" - has backslash: true
+3. "my-webapp\app\layout.tsx" - has backslash: true
+4. "my-webapp\app\page.tsx" - has backslash: true
+5. "my-webapp\app\notes\page.tsx" - has backslash: true
+===========================
+
+
+[90mstdout[2m | src/path-normalization.test.ts[2m > [22m[2mPath Normalization - POSIX only[2m > [22m[2mshould write files correctly on disk despite POSIX paths in manifest
+[22m[39m[path-normalization.test] Γ£ô Files written correctly despite POSIX manifest paths
+
+ [31mΓ¥»[39m src/path-normalization.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 33[2mms[22m[39m
+[31m   [31m├ù[31m Path Normalization - POSIX only[2m > [22mshould produce only forward slashes in artifact paths[90m 18[2mms[22m[31m[39m
+[31m     ΓåÆ expected 'my-webapp\README.md' not to contain '\'[39m
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ» Failed Tests 1 ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»
+
+ FAIL  src/path-normalization.test.ts > Path Normalization - POSIX only > should produce only forward slashes in artifact paths
+AssertionError: expected 'my-webapp\README.md' not to contain '\'
+
+Expected: "\"
+Received: "my-webapp\README.md"
+
+ Γ¥» src/path-normalization.test.ts:50:35
+     48|       // ASSERT: NICIO bar─â invers─â ├«n artifact paths
+     49|       for (const artifact of manifest.artifacts) {
+     50|         expect(artifact.path).not.toContain("\\");
+       |                                   ^
+     51|         expect(artifact.path).toMatch(/^[a-zA-Z0-9\-_/.]+$/);
+     52| 
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[1/1]ΓÄ»
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m   Start at [22m 02:39:08
+[2m   Duration [22m 427ms[2m (transform 69ms, setup 0ms, collect 72ms, tests 33ms, environment 0ms, prepare 103ms)[22m
+
+E:\gh\axiom\packages\axiom-tests:
+ΓÇëERR_PNPM_RECURSIVE_RUN_FIRST_FAILΓÇë @axiom/tests@0.1.0 test:unit: `vitest run "path-normalization.test.ts"`
+Exit status 1

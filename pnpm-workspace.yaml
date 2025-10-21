@@ -1,3 +1,7 @@
 packages:
-  - packages/**
-  - packages/emitters/**
+  - packages/axiom-core
+  - packages/axiom-engine
+  - packages/axiom-mcp
+  - packages/axiom-tests
+  - packages/policies
+  - packages/vscode-bridge

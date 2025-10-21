@@ -48,7 +48,7 @@ describe("Path Normalization - POSIX only", () => {
       // ASSERT: NICIO bară inversă în artifact paths
       for (const artifact of manifest.artifacts) {
         expect(artifact.path).not.toContain("\\");
-        expect(artifact.path).toMatch(/^[a-zA-Z0-9\-_/.]+$/);
+        expect(artifact.path).toMatch(/^[a-zA-Z0-9\-_/.\[\]]+$/); // Include [] pentru dynamic routes
 
         // Path-urile trebuie să fie relative (nu absolute)
         expect(path.isAbsolute(artifact.path)).toBe(false);

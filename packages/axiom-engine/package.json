@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-engine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,7 +10,11 @@
   },
   "dependencies": {
     "@codai/axiom-core": "^1.0.1",
-    "@codai/axiom-policies": "^1.0.1"
+    "@codai/axiom-policies": "^1.0.1",
+    "@codai/axiom-emitter-webapp": "^1.0.1",
+    "@codai/axiom-emitter-apiservice": "^1.0.1",
+    "@codai/axiom-emitter-batchjob": "^1.0.1",
+    "@codai/axiom-emitter-docker": "^1.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

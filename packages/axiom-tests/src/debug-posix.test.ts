@@ -1,11 +1,12 @@
 import { describe, it } from "vitest";
-import { parse } from "@codai/axiom-core";
+import { parseAxiomSource } from "@codai/axiom-core";
 import { generate } from "@codai/axiom-engine";
 import fs from "node:fs";
 
 describe("Debug POSIX paths", () => {
   it("should show artifact paths in memory vs JSON", async () => {
-    const ir = parse('agent test { capability net("api") emit service "my-app" }');
+    const { ir } = parseAxiomSource('agent "test" { intent "x" capability net("api") emit service "my-app" }');
+    if (!ir) throw new Error("Parse failed");
     const result = await generate(ir, "./test-posix-debug", "edge");
     
     console.log("\n=== IN-MEMORY ARTIFACT PATHS ===");

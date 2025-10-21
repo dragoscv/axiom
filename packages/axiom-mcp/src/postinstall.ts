@@ -3,6 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// Skip postinstall if running via npx (to avoid mutex issues)
+if (process.env.npm_command === 'exec' || process.env.npm_execpath?.includes('npx')) {
+  console.log("⏭️  Skipping MCP config install (npx mode)");
+  process.exit(0);
+}
+
 const mcpDir = path.join(os.homedir(), ".mcp", "servers");
 fs.mkdirSync(mcpDir, { recursive: true });
 
