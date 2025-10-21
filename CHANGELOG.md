@@ -1,5 +1,87 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.19] - 2025-10-21
+
+### 🚀 Feature: Inline Artifact Content for Stateless Pipelines
+
+**Status:** ✅ Stateless pipeline support implemented
+
+#### Features Added
+
+1. **✅ Inline Content Generation**
+   - **Enhancement**: `generate()` now embeds content directly in manifest for files ≤ 256 KiB
+   - **Encoding**: UTF-8 for text files (`contentUtf8`), Base64 for binary (`contentBase64`)
+   - **Configuration**: 
+     - `AXIOM_INLINE_CONTENT` - Enable/disable inline content (default: enabled)
+     - `AXIOM_INLINE_THRESHOLD_BYTES` - Size threshold (default: 262144 = 256 KiB)
+   - **Benefit**: Manifests are self-contained, enabling stateless `apply()` without artifact store
+
+2. **✅ Stateless Pipeline Support**
+   - **Enhancement**: `apply()` works without artifact store by using embedded content
+   - **Use Case**: MCP tool invocations where store is lost between `generate()` and `apply()` calls
+   - **Fallback Chain**: `contentUtf8` → `contentBase64` → `artifactStore` → error
+   - **Evidence**: `generate-then-apply-stateless.test.ts` validates full stateless pipeline
+
+3. **✅ UTF-8 Detection & Validation**
+   - **Enhancement**: Smart content encoding detection in `writer()` function
+   - **Validation**: Re-encodes UTF-8 to verify integrity before embedding
+   - **Fallback**: Automatically uses Base64 for binary content or invalid UTF-8
+   - **Benefit**: Optimal encoding for each artifact type
+
+#### Implementation Details
+
+**Modified Files:**
+- `packages/axiom-engine/src/generate.ts` - Added inline content generation logic
+  - Configuration constants for threshold and enable flag
+  - UTF-8 detection and validation in `writer()` function
+  - Conditional `contentUtf8`/`contentBase64` field attachment
+
+**New Tests:**
+- `apply-inline-content.test.ts` - Validates UTF-8 and Base64 artifact writes (171 lines)
+- `generate-then-apply-stateless.test.ts` - Simulates MCP stateless pipeline (165 lines)
+
+#### Technical Specifications
+
+**Inline Content Decision Matrix:**
+```typescript
+if (bytes <= INLINE_CONTENT_THRESHOLD && INLINE_CONTENT_ENABLED) {
+  if (isValidUTF8(content)) {
+    artifact.contentUtf8 = content.toString('utf-8');
+  } else {
+    artifact.contentBase64 = content.toString('base64');
+  }
+}
+```
+
+**Apply Fallback Logic:**
+```typescript
+// Priority order for content retrieval:
+1. artifact.contentUtf8 → Buffer.from(text, 'utf-8')
+2. artifact.contentBase64 → Buffer.from(base64, 'base64')
+3. artifactStore.get(sha256) → cached content
+4. ERR_ARTIFACT_CONTENT_MISSING → clear error
+```
+
+#### Packages Updated
+- `@codai/axiom-engine@1.0.19` - Inline content generation + stateless pipeline support
+- `@codai/axiom-mcp@1.0.19` - Updated engine dependency to 1.0.19
+
+#### Use Cases Enabled
+
+1. **MCP Integration**: Claude Desktop MCP where tool invocations are stateless
+2. **Network Transfer**: Manifests can be transferred without separate artifact store
+3. **Quick Apply**: Fast deployment without cache dependency for small projects
+4. **Reproducibility**: Complete artifacts embedded in manifest for archival
+
+#### Migration Notes
+
+- **Backward Compatible**: Existing manifests without inline content continue to work
+- **Automatic**: No code changes required - inline content automatically used if present
+- **Configurable**: Can disable via `AXIOM_INLINE_CONTENT=0` if needed
+- **Threshold Tunable**: Adjust size limit with `AXIOM_INLINE_THRESHOLD_BYTES`
+
+---
+
 ## [1.0.18] - 2025-10-21
 
 ### 🔧 CI/CD Enhancement: Cross-Platform Matrix Testing

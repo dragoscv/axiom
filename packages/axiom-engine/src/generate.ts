@@ -12,6 +12,11 @@ import apiserviceEmitterImpl from "@codai/axiom-emitter-apiservice/dist/index.js
 import batchjobEmitterImpl from "@codai/axiom-emitter-batchjob/dist/index.js";
 import dockerEmitterImpl from "@codai/axiom-emitter-docker/dist/index.js";
 
+// **INLINE CONTENT CONFIGURATION**
+// Default: include inline content for files ≤ 256 KiB
+const INLINE_CONTENT_ENABLED = process.env.AXIOM_INLINE_CONTENT !== "0";
+const INLINE_CONTENT_THRESHOLD = parseInt(process.env.AXIOM_INLINE_THRESHOLD_BYTES || "262144", 10);
+
 async function getEmitter(subtype: string, profileName?: string): Promise<Emitter | undefined> {
   // Use static imports for workspace emitters
   if (subtype === "web-app") return webappEmitterImpl;
@@ -68,12 +73,35 @@ export async function generate(ir: TAxiomIR, outRoot = process.cwd(), profile?: 
     // Ignorăm complet result.posixPath pentru a evita orice posibilă corupție
     const artifactPath = toPosixPath(normalizedRel);
 
-    artifacts.push({
+    // **INLINE CONTENT SUPPORT** (v1.0.19)
+    // For files ≤ threshold, embed content directly in manifest
+    const artifact: Artifact = {
       path: artifactPath,
       kind: "file",
       sha256: contentSha256,
       bytes: contentBuf.byteLength
-    });
+    };
+
+    if (INLINE_CONTENT_ENABLED && contentBuf.byteLength <= INLINE_CONTENT_THRESHOLD) {
+      // Try to detect if content is valid UTF-8 text
+      try {
+        const decoded = contentBuf.toString("utf-8");
+        // Re-encode to verify it's valid UTF-8
+        const reencoded = Buffer.from(decoded, "utf-8");
+        if (Buffer.compare(contentBuf, reencoded) === 0) {
+          // Valid UTF-8 text - use contentUtf8
+          artifact.contentUtf8 = decoded;
+        } else {
+          // Binary content - use contentBase64
+          artifact.contentBase64 = contentBuf.toString("base64");
+        }
+      } catch {
+        // Not valid UTF-8 - use contentBase64
+        artifact.contentBase64 = contentBuf.toString("base64");
+      }
+    }
+
+    artifacts.push(artifact);
   }
 
   for (const agent of ir.agents) {

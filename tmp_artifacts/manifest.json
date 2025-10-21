@@ -29,16 +29,16 @@
       "bytes": 950
     },
     {
-      "path": "./out/web/app/notes/page.tsx",
-      "kind": "file",
-      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
-      "bytes": 2419
-    },
-    {
       "path": "./out/web/app/notes/[id]/page.tsx",
       "kind": "file",
       "sha256": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
       "bytes": 2192
+    },
+    {
+      "path": "./out/web/app/notes/page.tsx",
+      "kind": "file",
+      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
+      "bytes": 2419
     },
     {
       "path": "./out/web/app/notes/new/page.tsx",
@@ -47,22 +47,16 @@
       "bytes": 2896
     },
     {
-      "path": "./out/web/package.json",
-      "kind": "file",
-      "sha256": "512779d852efa2756c033e8e37e48d5f569ecd3c20a57ae49eb9d8832308060f",
-      "bytes": 359
-    },
-    {
-      "path": "./out/web/tsconfig.json",
-      "kind": "file",
-      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
-      "bytes": 644
-    },
-    {
       "path": "./out/web/.gitignore",
       "kind": "file",
       "sha256": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
       "bytes": 51
+    },
+    {
+      "path": "./out/web/package.json",
+      "kind": "file",
+      "sha256": "512779d852efa2756c033e8e37e48d5f569ecd3c20a57ae49eb9d8832308060f",
+      "bytes": 359
     },
     {
       "path": "./out/api/README.md",
@@ -77,16 +71,22 @@
       "bytes": 8600
     },
     {
-      "path": "./out/api/.gitignore",
+      "path": "./out/web/tsconfig.json",
       "kind": "file",
-      "sha256": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
-      "bytes": 46
+      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
+      "bytes": 644
     },
     {
       "path": "./out/api/package.json",
       "kind": "file",
       "sha256": "30f61b0f892d7bec2047fca38c1d1143c218d3ef641855ac121828719bf73c6e",
       "bytes": 266
+    },
+    {
+      "path": "./out/api/.gitignore",
+      "kind": "file",
+      "sha256": "c5df52102fb93b40bdb5fb01f3e0bed9c47af4977315f707fa288be076afa155",
+      "bytes": 46
     },
     {
       "path": "./out/api/tsconfig.json",
