@@ -43,7 +43,7 @@ export class ArtifactStore {
    */
   async get(sha256: string): Promise<Buffer> {
     const cachePath = join(this.cacheDir, sha256);
-    
+
     try {
       return await readFile(cachePath);
     } catch (error: any) {

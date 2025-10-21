@@ -43,7 +43,7 @@ describe("path normalization deep-copy test", () => {
         artifacts.forEach(artifact => {
             expect(artifact.path, `Artifact path should not contain backslash: ${artifact.path}`)
                 .not.toContain("\\");
-            
+
             // Verify all paths use forward slash
             if (artifact.path.includes("/") || artifact.path.includes("\\")) {
                 expect(artifact.path.includes("/"), "Path should use forward slash").toBe(true);
@@ -72,10 +72,10 @@ describe("path normalization deep-copy test", () => {
         // Simulate path normalization (unit test for toPosixPath utility)
         const windowsPath = "out\\webapp\\index.html";
         const posixPath = windowsPath.replace(/\\/g, "/");
-        
+
         expect(posixPath).toBe("out/webapp/index.html");
         expect(posixPath).not.toContain("\\");
-        
+
         // Original should remain unchanged
         expect(windowsPath).toBe("out\\webapp\\index.html");
     });

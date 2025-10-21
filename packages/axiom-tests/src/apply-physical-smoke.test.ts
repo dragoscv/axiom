@@ -38,7 +38,7 @@ describe("apply physical smoke test (repro phantom write)", () => {
         // Step 1: Create minimal manifest with embedded content
         const exactContent = "AXIOM_SMOKE_OK\n";
         const contentBuffer = Buffer.from(exactContent, "utf-8");
-        
+
         // Calculate SHA256 for the content
         const crypto = await import("node:crypto");
         const sha256 = crypto.createHash("sha256").update(contentBuffer).digest("hex");

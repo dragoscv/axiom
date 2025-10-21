@@ -99,7 +99,7 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
 
             // Normalizează path la POSIX
             const posixPath = toPosixPath(artifact.path);
-            
+
             // Determină path-ul pe disc - IMPORTANT: formează întotdeauna out/...
             let diskRel = posixPath;
             if (posixPath.startsWith('out/')) {
@@ -107,7 +107,7 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
             } else if (posixPath.startsWith('./out/')) {
                 diskRel = posixPath.substring(6); // Remove './out/'
             }
-            
+
             // Construiește full path: repoRoot/out/diskRel
             const diskParts = diskRel.split('/');
             const fullPath = join(repoRoot, 'out', ...diskParts);
@@ -118,7 +118,7 @@ async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResul
             // 3. artifactStore.get(sha256)
             // 4. ERR_ARTIFACT_CONTENT_MISSING
             let content: Buffer;
-            
+
             if (artifact.contentUtf8 !== undefined) {
                 // Fallback 1: UTF-8 embedded content
                 content = Buffer.from(artifact.contentUtf8, "utf-8");
