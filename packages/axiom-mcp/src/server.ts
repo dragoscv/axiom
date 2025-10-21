@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
         const result = await apply({
           manifest: input.manifest,
           mode: mode as "fs" | "pr",
-          repoPath: input.repoPath || process.cwd(),
+          repoPath: input.repoPath, // Optional - va folosi process.cwd() dacă lipsește
           branchName: input.branchName,
           commitMessage: input.commitMessage,
         });

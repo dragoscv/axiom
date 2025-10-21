@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "test": "tsx src/run.ts",
+    "test:unit": "vitest run",
+    "test:watch": "vitest watch",
     "test:golden": "vitest run src/golden.test.ts",
     "test:golden:watch": "vitest watch src/golden.test.ts",
     "test:golden:snapshot": "vitest run src/golden.test.ts --reporter=verbose"

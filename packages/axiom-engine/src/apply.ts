@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Manifest } from "./manifest.js";
+import { toPosixPath } from "./util.js";
 
 export interface ApplyOptions {
     manifest: Manifest;
     mode: "fs" | "pr";
-    repoPath: string;
+    repoPath?: string; // Optional - default process.cwd()
     branchName?: string;
     commitMessage?: string;
 }
@@ -25,12 +26,58 @@ export interface ApplyResult {
  * Aplică un manifest: scrie fișierele fie direct (fs), fie prin PR (git)
  */
 export async function apply(options: ApplyOptions): Promise<ApplyResult> {
-    const { manifest, mode, repoPath, branchName, commitMessage } = options;
+    const { manifest, mode, branchName, commitMessage } = options;
+
+    // Default repoPath = process.cwd()
+    const repoPath = options.repoPath || process.cwd();
+
+    // Validare: repoPath trebuie să fie director valid
+    if (!fs.existsSync(repoPath) || !fs.statSync(repoPath).isDirectory()) {
+        return {
+            success: false,
+            mode,
+            filesWritten: [],
+            error: `Invalid repoPath: ${repoPath} is not a directory`
+        };
+    }
+
+    // Creează ./out dacă nu există
+    const outDir = path.join(repoPath, "out");
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+    }
 
     if (mode === "fs") {
         return applyFS(manifest, repoPath);
     } else {
         return applyPR(manifest, repoPath, branchName, commitMessage);
+    }
+}
+
+/**
+ * Validează că un path nu conține traversal și e în limitele repoPath/out
+ */
+function validateSafePath(repoPath: string, artifactPath: string): void {
+    // Normalizeaz\u0103 artifact path la POSIX
+    const posixPath = toPosixPath(artifactPath);
+
+    // Respinge path-uri absolute
+    if (path.isAbsolute(posixPath)) {
+        throw new Error(`Absolute paths not allowed: ${posixPath}`);
+    }
+
+    // Respinge traversal prin ..
+    if (posixPath.includes('..')) {
+        throw new Error(`Path traversal not allowed: ${posixPath}`);
+    }
+
+    // Calculează path-ul final \u0219i verific\u0103 c\u0103 e sub repoPath/out
+    const safeParts = posixPath.split('/').filter(p => p && p !== '.');
+    const resolved = path.resolve(repoPath, 'out', ...safeParts);
+    const expectedPrefix = path.resolve(repoPath, 'out');
+
+    if (!resolved.startsWith(expectedPrefix)) {
+        throw new Error(`Path outside allowed directory: ${posixPath}`);
     }
 }
 
@@ -41,13 +88,19 @@ function applyFS(manifest: Manifest, repoPath: string): ApplyResult {
     const filesWritten: string[] = [];
 
     try {
-        // Manifestul conține artifacts care au fost deja scrise de generate()
-        // Aici doar validăm că există
+        // Manifestul conține artifacts - verificăm și raportăm paths
         for (const artifact of manifest.artifacts) {
-            const fullPath = path.join(repoPath, artifact.path);
-            if (fs.existsSync(fullPath)) {
-                filesWritten.push(artifact.path);
+            // Validare securitate: respinge path traversal (throw-uri sunt prinse în catch)
+            try {
+                validateSafePath(repoPath, artifact.path);
+            } catch (securityError: any) {
+                throw new Error(`Security validation failed for ${artifact.path}: ${securityError.message}`);
             }
+
+            // artifact.path e POSIX - adăugăm la lista de fișiere scrise
+            // (generate() deja le-a scris sub out/, apply doar validează)
+            // Raportăm cu out/ prefix pentru a reflecta locația reală în repo
+            filesWritten.push(`out/${artifact.path}`);
         }
 
         return {
@@ -94,7 +147,8 @@ async function applyPR(
             // Nu adăugăm manifest.json din root (e meta)
             if (artifact.path === "manifest.json") continue;
 
-            const relativePath = artifact.path;
+            // Artifacts sunt sub out/ în repo
+            const relativePath = `out/${artifact.path}`;
             filesWritten.push(relativePath);
 
             await execGit(repoPath, ["add", relativePath]);

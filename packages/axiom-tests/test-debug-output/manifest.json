@@ -1,0 +1,70 @@
+{
+  "version": "1.0.0",
+  "buildId": "b313589029b2330bc3625d1ad3f90895ccc7824d0202def52a9f9275510de8eb",
+  "irHash": "f09ad9422c1e66569409a6fbe9a9fd3251d7e7fbce2881153c71f61f88827903",
+  "profile": "edge",
+  "artifacts": [
+    {
+      "path": "my-webapp/README.md",
+      "kind": "file",
+      "sha256": "1e5315d5571e60838af69b1c49b19e3b467a4c8039bbe2c780e76629e86ceacc",
+      "bytes": 305
+    },
+    {
+      "path": "my-webapp/next.config.ts",
+      "kind": "file",
+      "sha256": "ed1ac227ecada92150f7863c29371bff2bbafee8c30a68ea363a9d30b211530d",
+      "bytes": 90
+    },
+    {
+      "path": "my-webapp/app/layout.tsx",
+      "kind": "file",
+      "sha256": "af48c61cdcc03ddf6d02e1e9683f6d4bfc45602554e05f61fcb05eaca18baa49",
+      "bytes": 952
+    },
+    {
+      "path": "my-webapp/app/page.tsx",
+      "kind": "file",
+      "sha256": "8a789a8b53fc5033ec0ca69fb9b792d3606585c930edccbf62b0aa458cff6d06",
+      "bytes": 488
+    },
+    {
+      "path": "my-webapp/app/notes/page.tsx",
+      "kind": "file",
+      "sha256": "d7e1eef7dccae9a59eb923e757ecb636f1ce1c5240a3af1a768fe34931ad0996",
+      "bytes": 2419
+    },
+    {
+      "path": "my-webapp/app/notes/new/page.tsx",
+      "kind": "file",
+      "sha256": "b7ffa44589b5e4a5ea8689942fdb5fbe8676760ebef059e2514aecd858b95aa9",
+      "bytes": 2896
+    },
+    {
+      "path": "my-webapp/app/notes/[id]/page.tsx",
+      "kind": "file",
+      "sha256": "ede650cd23d4d0ff2cc31684f131305f7b24ae5d1e50e11514f4b57de9dd7278",
+      "bytes": 2192
+    },
+    {
+      "path": "my-webapp/package.json",
+      "kind": "file",
+      "sha256": "91a7cb96d2329dd395eb9c84e50bb910f4fdba916a79b7e96eb09e5003974105",
+      "bytes": 361
+    },
+    {
+      "path": "my-webapp/tsconfig.json",
+      "kind": "file",
+      "sha256": "1a4599b92916dfb662525ce964362f18ab59c2578b99ead783e0a6a9568aaf37",
+      "bytes": 644
+    },
+    {
+      "path": "my-webapp/.gitignore",
+      "kind": "file",
+      "sha256": "c85a8ac004e6f221c2ac3089e6c90d1eb11c48f1ca431f3d1e2f6bf551c6cd2c",
+      "bytes": 51
+    }
+  ],
+  "evidence": [],
+  "createdAt": "deterministic-b313589029b2330b"
+}

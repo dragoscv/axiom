@@ -1,5 +1,85 @@
 # AXIOM Changelog - Production-Ready Release
 
+## [1.0.1] - 2025-10-20
+
+### 🔧 Critical Fixes for Production Deployment
+
+**Status:** ✅ Core MCP functionality fixed and tested
+
+#### Major Fixes
+
+1. **✅ POSIX Path Normalization**
+   - All artifact paths in manifest are now POSIX format (forward slashes `/`) regardless of OS
+   - `util.toPosixPath()`: Normalizes all paths before serialization
+   - `apply.ts`: Converts POSIX paths to OS-specific paths when writing to disk
+   - **Security:** Path traversal guard in `apply` - rejects `..` and absolute paths
+   - **Tests:** `path-normalization.test.ts`, `apply-sandbox.test.ts`
+
+2. **✅ Real Evaluator for /check**
+   - Implemented deterministic measurement calculator:
+     - `cold_start_ms`: Profile-based (edge=50, default=100, budget=120)
+     - `frontend_bundle_kb`: Sum of bytes for web artifacts
+     - `max_dependencies`: Count from package.json
+     - `no_analytics`, `no_telemetry`, `no_fs_heavy`: Denylist scanning
+   - **Semantics:** `/check.passed` is `true` ONLY if ALL `evidence[*].passed === true`
+   - **Response:** Added `evaluated: boolean` field to indicate real evaluation occurred
+   - **Tests:** `check-evaluator.test.ts` with positive/negative cases
+
+3. **✅ Complete .axm Parser**
+   - Extended parser to support inline and block syntax:
+     - `capability net("firebase","api")` - inline syntax
+     - `check policy "name" { expect "expr" }` - inline syntax with block
+     - `emit service "target"` - inline syntax
+     - Block variants: `capabilities { ... }`, `checks { ... }`, `emit { ... }`
+   - **Tests:** `parser-roundtrip.test.ts` validates IR completeness
+
+4. **✅ /apply Default Repository**
+   - `repoPath` is now **optional** - defaults to `process.cwd()`
+   - Automatically creates `./out` directory if missing
+   - Validates `repoPath` is a valid directory
+   - **Tests:** `apply-reporoot.test.ts` with cwd manipulation
+
+5. **✅ Determinism Enhancement**
+   - Already implemented in 1.0.0, now with comprehensive tests
+   - `buildId = sha256(IR_sorted + profile)`
+   - `createdAt = "deterministic-" + buildId.slice(0,16)`
+   - **Tests:** `determinism-edge.test.ts` validates identical manifests across runs
+
+#### API Changes
+
+**Breaking Changes:**
+- `/check` response now includes `evaluated: boolean` field
+- All artifact paths in manifest are POSIX format (may break Windows-specific path assumptions)
+
+**New Behavior:**
+- `/apply` without `repoPath` uses current working directory
+- Path traversal attempts in `/apply` now return error instead of silently failing
+
+#### Documentation Updates
+
+- `docs/mcp_api.md`:
+  - Added POSIX path normalization section
+  - Added real evaluator measurement details
+  - Added default repository behavior for `/apply`
+  - Added path security documentation
+
+#### Test Coverage
+
+**New Tests:**
+- `path-normalization.test.ts`: Validates POSIX paths in all artifacts
+- `apply-sandbox.test.ts`: Validates path traversal security
+- `check-evaluator.test.ts`: Validates real measurement calculation
+- `parser-roundtrip.test.ts`: Validates complete .axm parsing
+- `apply-reporoot.test.ts`: Validates default cwd behavior
+- `determinism-edge.test.ts`: Validates reproducible builds
+
+**Test Strategy:**
+- All tests use temporary directories for isolation
+- Cross-platform compatibility verified (Windows paths tested)
+- Security tests for malicious input patterns
+
+---
+
 ## [1.0.0-production] - 2025-10-20
 
 ### 🎯 Production-Ready Validation Complete

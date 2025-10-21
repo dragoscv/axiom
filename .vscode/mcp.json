@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "axiom-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "--package=@codai/axiom-mcp@latest",
+        "axiom-mcp-stdio"
+      ]
+    }
+  }
+}

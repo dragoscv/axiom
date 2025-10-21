@@ -1,7 +1,7 @@
 export default function HomePage() {
   return (
     <div>
-      <h1>BLOG</h1>
+      <h1>PROFILE-TEST</h1>
       <p>Welcome to your AXIOM-generated application.</p>
       <div style={{ marginTop: '2rem' }}>
         <a href="/notes" style={{ 
