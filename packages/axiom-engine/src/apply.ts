@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
+import { join, dirname, resolve, isAbsolute, sep } from "node:path";
 import type { Manifest } from "./manifest.js";
 import { toPosixPath } from "./util.js";
+import { ArtifactStore } from "./artifactStore.js";
 
 export interface ApplyOptions {
     manifest: Manifest;
@@ -29,28 +31,22 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     const { manifest, mode, branchName, commitMessage } = options;
 
     // Default repoPath = process.cwd()
-    const repoPath = options.repoPath || process.cwd();
+    const repoRoot = options.repoPath || process.cwd();
 
     // Validare: repoPath trebuie să fie director valid
-    if (!fs.existsSync(repoPath) || !fs.statSync(repoPath).isDirectory()) {
+    if (!existsSync(repoRoot) || !statSync(repoRoot).isDirectory()) {
         return {
             success: false,
             mode,
             filesWritten: [],
-            error: `Invalid repoPath: ${repoPath} is not a directory`
+            error: `Invalid repoPath: ${repoRoot} is not a directory`
         };
     }
 
-    // Creează ./out dacă nu există
-    const outDir = path.join(repoPath, "out");
-    if (!fs.existsSync(outDir)) {
-        fs.mkdirSync(outDir, { recursive: true });
-    }
-
     if (mode === "fs") {
-        return applyFS(manifest, repoPath);
+        return applyFS(manifest, repoRoot);
     } else {
-        return applyPR(manifest, repoPath, branchName, commitMessage);
+        return applyPR(manifest, repoRoot, branchName, commitMessage);
     }
 }
 
@@ -58,11 +54,11 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
  * Validează că un path nu conține traversal și e în limitele repoPath/out
  */
 function validateSafePath(repoPath: string, artifactPath: string): void {
-    // Normalizeaz\u0103 artifact path la POSIX
+    // Normalizează artifact path la POSIX
     const posixPath = toPosixPath(artifactPath);
 
     // Respinge path-uri absolute
-    if (path.isAbsolute(posixPath)) {
+    if (isAbsolute(posixPath)) {
         throw new Error(`Absolute paths not allowed: ${posixPath}`);
     }
 
@@ -71,36 +67,82 @@ function validateSafePath(repoPath: string, artifactPath: string): void {
         throw new Error(`Path traversal not allowed: ${posixPath}`);
     }
 
-    // Calculează path-ul final \u0219i verific\u0103 c\u0103 e sub repoPath/out
+    // Calculează path-ul final și verifică că e sub repoPath/out
     const safeParts = posixPath.split('/').filter(p => p && p !== '.');
-    const resolved = path.resolve(repoPath, 'out', ...safeParts);
-    const expectedPrefix = path.resolve(repoPath, 'out');
+    const resolved = resolve(repoPath, 'out', ...safeParts);
+    const expectedPrefix = resolve(repoPath, 'out');
 
-    if (!resolved.startsWith(expectedPrefix)) {
+    if (!resolved.startsWith(expectedPrefix + sep)) {
         throw new Error(`Path outside allowed directory: ${posixPath}`);
     }
 }
 
 /**
- * Mod direct: scrie fișierele pe disc
+ * Mod direct: scrie fișierele pe disc folosind ArtifactStore
  */
-function applyFS(manifest: Manifest, repoPath: string): ApplyResult {
+async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResult> {
     const filesWritten: string[] = [];
+    const artifactStore = new ArtifactStore(repoRoot);
 
     try {
-        // Manifestul conține artifacts - verificăm și raportăm paths
+        // Asigură că directorul out/ există
+        const outDir = join(repoRoot, "out");
+        await mkdir(outDir, { recursive: true });
+
+        // Procesează fiecare artifact
         for (const artifact of manifest.artifacts) {
-            // Validare securitate: respinge path traversal (throw-uri sunt prinse în catch)
+            // Skip manifest.json (e meta)
+            if (artifact.path === "manifest.json") continue;
+
+            // Validare securitate: respinge path traversal
+            validateSafePath(repoRoot, artifact.path);
+
+            // Normalizează path la POSIX
+            const posixPath = toPosixPath(artifact.path);
+            
+            // Determină path-ul pe disc
+            // Dacă path începe cu out/, curăță prefix-ul
+            let diskRel = posixPath;
+            if (posixPath.startsWith('out/')) {
+                diskRel = posixPath.substring(4); // Remove 'out/'
+            } else if (posixPath.startsWith('./out/')) {
+                diskRel = posixPath.substring(6); // Remove './out/'
+            }
+            
+            // Construiește full path: repoRoot/out/diskRel
+            const diskParts = diskRel.split('/');
+            const fullPath = join(repoRoot, 'out', ...diskParts);
+
+            // Citește content din artifact store
+            let content: Buffer;
             try {
-                validateSafePath(repoPath, artifact.path);
-            } catch (securityError: any) {
-                throw new Error(`Security validation failed for ${artifact.path}: ${securityError.message}`);
+                content = await artifactStore.get(artifact.sha256);
+            } catch (error: any) {
+                throw new Error(
+                    `ERR_ARTIFACT_CONTENT_MISSING: ${artifact.path} (SHA256: ${artifact.sha256}). ` +
+                    `Run generate() first to populate artifact store.`
+                );
             }
 
-            // artifact.path e POSIX - adăugăm la lista de fișiere scrise
-            // (generate() deja le-a scris sub out/, apply doar validează)
-            // Raportăm cu out/ prefix pentru a reflecta locația reală în repo
-            filesWritten.push(`out/${artifact.path}`);
+            // Creează directorul părinte
+            await mkdir(dirname(fullPath), { recursive: true });
+
+            // Scrie fișierul
+            await writeFile(fullPath, content, "utf-8");
+
+            // Verifică SHA256 după scriere
+            const writtenContent = await readFile(fullPath);
+            try {
+                ArtifactStore.verify(writtenContent, artifact.sha256);
+            } catch (error: any) {
+                throw new Error(
+                    `ERR_SHA256_MISMATCH for ${artifact.path}: ${error.message}`
+                );
+            }
+
+            // Raportează cu prefix out/ și strict POSIX (fără backslash)
+            const reportPath = `out/${diskRel}`.replace(/\\/g, '/');
+            filesWritten.push(reportPath);
         }
 
         return {
@@ -133,7 +175,7 @@ async function applyPR(
 
     try {
         // Verifică dacă suntem într-un git repo
-        const isGitRepo = fs.existsSync(path.join(repoPath, ".git"));
+        const isGitRepo = existsSync(join(repoPath, ".git"));
         if (!isGitRepo) {
             throw new Error("Not a git repository");
         }
