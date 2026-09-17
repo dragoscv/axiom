@@ -1,17 +1,38 @@
 {
   "name": "axiom-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "2.0.0",
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=22.14",
+    "pnpm": ">=10"
+  },
   "scripts": {
-    "build": "pnpm -r run build",
-    "dev": "pnpm -r run dev",
-    "test": "pnpm -r --filter @axiom/tests run test",
-    "lint": "pnpm -r run lint || echo 'no lints yet'"
+    "build": "pnpm -r --filter './packages/**' run build",
+    "dev": "pnpm -r --parallel --filter './packages/**' run dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:mutation": "stryker run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "pnpm -r --filter './packages/**' run typecheck",
+    "guards": "node scripts/run-guards.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && pnpm guards && changeset publish"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "zod": "^3.23.8",
-    "tsx": "^4.19.0"
+    "@biomejs/biome": "catalog:",
+    "@changesets/cli": "catalog:",
+    "@stryker-mutator/core": "catalog:",
+    "@stryker-mutator/vitest-runner": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

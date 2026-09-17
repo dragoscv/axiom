@@ -1,0 +1,41 @@
+{
+  "name": "@codai/axiom-plan",
+  "version": "2.0.0",
+  "description": "Plan → ManifestBundle compiler for AXIOM v2: content-addressed artifacts, JCS manifest digest, inline/CAS blob transport, in-toto attestation, bundle verification and manifest diff",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codai/axiom-canon": "workspace:*",
+    "@codai/axiom-schema": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

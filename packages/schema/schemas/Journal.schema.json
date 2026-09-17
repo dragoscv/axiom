@@ -1,0 +1,75 @@
+{
+  "$id": "https://axiom.dev/schemas/v2/Journal.schema.json",
+  "title": "Journal",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "manifestDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "sha256:<64 lowercase hex>"
+    },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "staged",
+        "committing",
+        "committed",
+        "rolling-back",
+        "rolled-back"
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Relative POSIX path, NFC, no reserved names"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "create",
+              "overwrite",
+              "delete"
+            ]
+          },
+          "backup": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "op",
+          "done"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+    },
+    "pid": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "manifestDigest",
+    "phase",
+    "steps",
+    "startedAt",
+    "pid"
+  ],
+  "additionalProperties": false
+}

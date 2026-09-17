@@ -1,0 +1,42 @@
+{
+  "name": "@codai/axiom-apply",
+  "version": "2.0.0",
+  "description": "Transactional two-phase-commit apply engine for AXIOM v2 manifest bundles: containment, staging, journal, scoped rollback",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codai/axiom-canon": "workspace:*",
+    "@codai/axiom-schema": "workspace:*",
+    "diff": "catalog:"
+  },
+  "devDependencies": {
+    "fast-check": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

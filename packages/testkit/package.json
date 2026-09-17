@@ -1,0 +1,36 @@
+{
+  "name": "@codai/axiom-testkit",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Golden fixtures, fast-check arbitraries and tmp-repo helpers shared by AXIOM v2 test suites",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "update-golden": "node --import tsx/esm scripts/update-golden.ts"
+  },
+  "dependencies": {
+    "@codai/axiom-canon": "workspace:*",
+    "@codai/axiom-plan": "workspace:*",
+    "@codai/axiom-schema": "workspace:*",
+    "fast-check": "catalog:"
+  },
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

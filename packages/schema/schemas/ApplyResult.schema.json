@@ -1,0 +1,191 @@
+{
+  "$id": "https://axiom.dev/schemas/v2/ApplyResult.schema.json",
+  "title": "ApplyResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "axiom.dev/v2"
+    },
+    "kind": {
+      "type": "string",
+      "const": "ApplyResult"
+    },
+    "manifestDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "sha256:<64 lowercase hex>"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "dry-run",
+        "fs",
+        "pr"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "applied",
+        "noop",
+        "rolled-back",
+        "failed"
+      ]
+    },
+    "root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Relative POSIX path, NFC, no reserved names"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "create",
+              "overwrite",
+              "delete"
+            ]
+          },
+          "digest": {
+            "type": "object",
+            "properties": {
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "Lowercase hex-encoded sha256"
+              }
+            },
+            "required": [
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "written",
+              "deleted",
+              "unchanged",
+              "skipped"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "op",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "diff": {
+      "type": "string"
+    },
+    "journal": {
+      "type": "string"
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "compareUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "ERR_PATH_NOT_RELATIVE_POSIX",
+            "ERR_PATH_SEGMENT",
+            "ERR_PATH_NOT_NFC",
+            "ERR_PATH_RESERVED_NAME",
+            "ERR_PATH_INVALID_CHAR",
+            "ERR_PATH_CASE_COLLISION",
+            "ERR_SYMLINK_IN_PATH",
+            "ERR_CONTAINMENT",
+            "ERR_TARGET_TYPE",
+            "ERR_EXISTS",
+            "ERR_NOT_FOUND",
+            "ERR_BLOB_MISSING",
+            "ERR_DIGEST_MISMATCH",
+            "ERR_SIZE_MISMATCH",
+            "ERR_BLOB_TOO_LARGE",
+            "ERR_BUNDLE_TOO_LARGE",
+            "ERR_LOCKED",
+            "ERR_ROOT_NOT_ALLOWED",
+            "ERR_ROOT_REQUIRED",
+            "ERR_ROOT_NOT_DIR",
+            "ERR_CONFIRM_DIGEST_MISMATCH",
+            "ERR_CHECKS_FAILED",
+            "ERR_PREIMAGE_CHANGED",
+            "ERR_JOURNAL_CORRUPT",
+            "ERR_EBUSY",
+            "ERR_INVALID_PLAN",
+            "ERR_INVALID_MANIFEST",
+            "ERR_INVALID_PROFILE",
+            "ERR_PREDICATE_UNKNOWN",
+            "ERR_PREDICATE_PARAMS",
+            "ERR_PROVIDER_FAILED",
+            "ERR_GUARD_TIMEOUT",
+            "ERR_GUARD_OUTPUT",
+            "ERR_REF_OFFLINE",
+            "ERR_NOT_CANONICAL",
+            "ERR_UNSUPPORTED_OP",
+            "ERR_INTERNAL"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Relative POSIX path, NFC, no reserved names"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "manifestDigest",
+    "mode",
+    "status",
+    "root",
+    "files"
+  ],
+  "additionalProperties": false
+}

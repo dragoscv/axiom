@@ -1,0 +1,18 @@
+{
+  "manifestDigest": "sha256:dc486d57187df44cd3bcaa93a43422da84e8808bbb6bc28cd9d24f3ecbf585e0",
+  "planDigest": "sha256:b525c9d80fae852ddbeb9378a7670a31d7445ce9db1efb5545e4ebcbfc1c73b3",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "6c9f0d6392ae0944ff392d4006c0c832cd5b7d7865aa24e90a86fd900dc0f2dd"
+    },
+    {
+      "path": "bin/run.sh",
+      "sha256": "fdc8f47e771d824fda2ec67efea4eada9d0777465d8960af2390ecbc088971b0"
+    },
+    {
+      "path": "src/index.ts",
+      "sha256": "a2098bd92b10bf8b816d24b7556b1ce8c49a879d130489065ef1051c17e042f6"
+    }
+  ]
+}

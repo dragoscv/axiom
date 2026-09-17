@@ -1,14 +1,25 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "allowJs": false,
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
     "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "esModuleInterop": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "isolatedDeclarations": true,
+    "declaration": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "outDir": "dist"
+    "erasableSyntaxOnly": true,
+    "outDir": "dist",
+    "rootDir": "src"
   }
 }

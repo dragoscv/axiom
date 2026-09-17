@@ -1,0 +1,43 @@
+{
+  "name": "@codai/axiom-schema",
+  "version": "2.0.0",
+  "description": "Zod v4 schemas, closed error codes and JSON Schema for AXIOM v2 Plan, Manifest, CheckReport, ApplyResult, Profile and Journal",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "dist",
+    "schemas",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "build:jsonschema": "node --import tsx/esm scripts/emit-json-schema.ts",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

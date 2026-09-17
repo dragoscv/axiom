@@ -1,0 +1,44 @@
+import { readdir, readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { compilePlan } from "@codai/axiom-plan";
+
+/** `packages/testkit/golden` resolved from either `src/` or `dist/`. */
+export const GOLDEN_DIR: string = join(dirname(fileURLToPath(import.meta.url)), "..", "golden");
+
+export interface GoldenExpected {
+  manifestDigest: string;
+  planDigest: string;
+  artifacts: Array<{ path: string; sha256: string | null }>;
+}
+
+export interface GoldenCase {
+  name: string;
+  planPath: string;
+  expectedPath: string;
+}
+
+export async function listGoldenCases(dir: string = GOLDEN_DIR): Promise<GoldenCase[]> {
+  const entries = await readdir(dir);
+  return entries
+    .filter((f) => f.endsWith(".plan.json"))
+    .sort()
+    .map((f) => {
+      const name = basename(f, ".plan.json");
+      return { name, planPath: join(dir, f), expectedPath: join(dir, `${name}.expected.json`) };
+    });
+}
+
+/** Compile a golden plan with a fixed toolchain; no clock, so the output is fully deterministic. */
+export async function compileGolden(planPath: string): Promise<GoldenExpected> {
+  const plan: unknown = JSON.parse(await readFile(planPath, "utf8"));
+  const { bundle } = await compilePlan(plan, { toolchain: { axiom: "2.0.0" } });
+  return {
+    manifestDigest: bundle.manifestDigest,
+    planDigest: bundle.manifest.planDigest,
+    artifacts: bundle.manifest.artifacts.map((a) => ({
+      path: a.path,
+      sha256: a.digest?.sha256 ?? null,
+    })),
+  };
+}
