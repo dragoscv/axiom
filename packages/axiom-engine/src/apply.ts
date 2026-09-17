@@ -5,6 +5,7 @@ import { join, dirname, resolve, isAbsolute, sep } from "node:path";
 import type { Manifest } from "./manifest.js";
 import { toPosixPath } from "./util.js";
 import { ArtifactStore } from "./artifactStore.js";
+import { resolveRepoRoot, resolveOutRoot, resolveArtifactAbs, bufferFromArtifact, writeAndVerify } from "./lib/fs-axiom.js";
 
 export interface ApplyOptions {
     manifest: Manifest;
@@ -21,6 +22,15 @@ export interface ApplyResult {
     commit?: string;
     prUrl?: string;
     filesWritten: string[];
+    filesWrittenAbs?: string[]; // Absolute paths for transparency
+    outRootAbs?: string;         // NEW v1.0.23: Output root used for writes
+    failures?: Array<{
+        path: string;
+        reason: string;
+        expected?: { sha256?: string; bytes?: number };
+        actual?: { sha256?: string; bytes?: number };
+        attemptPath?: string;    // NEW v1.0.23: Actual path attempted for debugging
+    }>;
     summary?: {
         totalFiles: number;
         totalBytes: number;
@@ -35,183 +45,174 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     const { manifest, mode, branchName, commitMessage } = options;
 
     // Default repoPath = process.cwd()
-    const repoRoot = options.repoPath || process.cwd();
+    const repoPathArg = options.repoPath || process.cwd();
 
-    // Validare: repoPath trebuie să fie director valid
-    if (!existsSync(repoRoot) || !statSync(repoRoot).isDirectory()) {
+    try {
+        // FAIL-CLOSED: Resolve repository root with safety checks
+        const repoRoot = resolveRepoRoot(repoPathArg);
+
+        // Validare: repoPath trebuie să fie director valid
+        if (!existsSync(repoRoot) || !statSync(repoRoot).isDirectory()) {
+            return {
+                success: false,
+                mode,
+                filesWritten: [],
+                error: `Invalid repoPath: ${repoRoot} is not a directory`
+            };
+        }
+
+        if (mode === "fs") {
+            return applyFS(manifest, repoRoot);
+        } else {
+            return applyPR(manifest, repoRoot, branchName, commitMessage);
+        }
+    } catch (err: any) {
+        // Catch ERR_REPOPATH_RELATIVE_UNSAFE and other resolution errors
+        console.error(`[apply] ERROR during repoPath resolution: ${err.message}`);
         return {
             success: false,
             mode,
             filesWritten: [],
-            error: `Invalid repoPath: ${repoRoot} is not a directory`
+            failures: [{
+                path: "(repoPath resolution)",
+                reason: err.message
+            }],
+            error: err.message
         };
     }
-
-    if (mode === "fs") {
-        return applyFS(manifest, repoRoot);
-    } else {
-        return applyPR(manifest, repoRoot, branchName, commitMessage);
-    }
 }
 
 /**
- * Validează că un path nu conține traversal și e în limitele repoPath/out
- * Respinge strict backslash-uri în artifact paths pentru consistență POSIX
- */
-function validateSafePath(repoPath: string, artifactPath: string): void {
-    // Respinge backslash-uri în artifact path (strict POSIX only)
-    if (artifactPath.includes('\\')) {
-        throw new Error(`ERR_POSIX_ONLY: Artifact path contains backslash: ${artifactPath}`);
-    }
-
-    // Normalizează artifact path la POSIX
-    const posixPath = toPosixPath(artifactPath);
-
-    // Respinge path-uri absolute
-    if (isAbsolute(posixPath)) {
-        throw new Error(`Absolute paths not allowed: ${posixPath}`);
-    }
-
-    // Respinge traversal prin ..
-    if (posixPath.includes('..')) {
-        throw new Error(`Path traversal not allowed: ${posixPath}`);
-    }
-
-    // Calculează path-ul final și verifică că e sub repoPath/out
-    const safeParts = posixPath.split('/').filter(p => p && p !== '.');
-    const resolved = resolve(repoPath, 'out', ...safeParts);
-    const expectedPrefix = resolve(repoPath, 'out');
-
-    if (!resolved.startsWith(expectedPrefix + sep)) {
-        throw new Error(`Path outside allowed directory: ${posixPath}`);
-    }
-}
-
-/**
- * Mod direct: scrie fișierele pe disc folosind ArtifactStore
- * Include post-write verification cu read-back SHA256 check
+ * Mod direct: scrie fișierele pe disc folosind fs-axiom utilities
+ * 
+ * v1.0.23 CHANGES:
+ * - Uses resolveArtifactAbs() for deterministic absolute path calculation
+ * - Zero dependency on process.cwd() for write operations
+ * - Atomic write with tmp+fsync+rename via writeAndVerify()
+ * - Strict post-write verification: NO success without physical file + hash match
+ * - Returns outRootAbs for transparency
  */
 async function applyFS(manifest: Manifest, repoRoot: string): Promise<ApplyResult> {
     const filesWritten: string[] = [];
-    const artifactStore = new ArtifactStore(repoRoot);
+    const filesWrittenAbs: string[] = [];
+    const failures: ApplyResult['failures'] = [];
     let totalBytes = 0;
 
-    try {
-        // Asigură că directorul out/ există
-        const outDir = join(repoRoot, "out");
-        await mkdir(outDir, { recursive: true });
+    console.error(`[apply] Starting filesystem apply (v1.0.23)`);
+    console.error(`[apply]   repoRoot: ${repoRoot}`);
 
-        // Procesează fiecare artifact
+    try {
+        // Step 1: Resolve output root with AXIOM_OUT_ROOT support
+        const outRootAbs = resolveOutRoot(repoRoot, process.env.AXIOM_OUT_ROOT);
+        console.error(`[apply]   outRootAbs: ${outRootAbs}`);
+
+        // Step 2: Normalize repoRoot to absolute path for artifact cache lookup
+        const repoRootAbs = isAbsolute(repoRoot)
+            ? resolve(repoRoot)
+            : resolve(process.cwd(), repoRoot);
+        console.error(`[apply]   repoRootAbs: ${repoRootAbs}`);
+
+        // Step 3: Process each artifact
         for (const artifact of manifest.artifacts) {
-            // Skip manifest.json (e meta)
+            // Skip manifest.json (meta file)
             if (artifact.path === "manifest.json") continue;
 
-            // Validare securitate: respinge path traversal și backslash-uri
-            validateSafePath(repoRoot, artifact.path);
+            console.error(`[apply] Processing artifact: ${artifact.path}`);
 
-            // Normalizează path la POSIX
-            const posixPath = toPosixPath(artifact.path);
+            try {
+                // Step 3a: Resolve absolute paths using resolveArtifactAbs()
+                // This handles POSIX validation, path traversal checks, and deterministic path construction
+                const { absFile, absDir } = resolveArtifactAbs(
+                    repoRootAbs,
+                    outRootAbs,
+                    artifact.path
+                );
 
-            // Determină path-ul pe disc - IMPORTANT: formează întotdeauna out/...
-            let diskRel = posixPath;
-            if (posixPath.startsWith('out/')) {
-                diskRel = posixPath.substring(4); // Remove 'out/'
-            } else if (posixPath.startsWith('./out/')) {
-                diskRel = posixPath.substring(6); // Remove './out/'
-            }
+                console.error(`[apply]   → absFile: ${absFile}`);
+                console.error(`[apply]   → absDir: ${absDir}`);
 
-            // Construiește full path: repoRoot/out/diskRel
-            const diskParts = diskRel.split('/');
-            const fullPath = join(repoRoot, 'out', ...diskParts);
+                // Step 3b: Extract content using fs-axiom fallback chain
+                const content = bufferFromArtifact(artifact, repoRootAbs);
+                console.error(`[apply]   → Content extracted: ${content.length} bytes`);
 
-            // **CONTENT FALLBACK ORDERING** per spec:
-            // 1. contentUtf8 → Buffer
-            // 2. contentBase64 → decode
-            // 3. artifactStore.get(sha256)
-            // 4. ERR_ARTIFACT_CONTENT_MISSING
-            let content: Buffer;
+                // Step 3c: Write and verify using atomic write + strict verification
+                const result = await writeAndVerify(
+                    absFile,
+                    content,
+                    artifact.sha256,
+                    artifact.bytes
+                );
 
-            if (artifact.contentUtf8 !== undefined) {
-                // Fallback 1: UTF-8 embedded content
-                content = Buffer.from(artifact.contentUtf8, "utf-8");
-            } else if (artifact.contentBase64 !== undefined) {
-                // Fallback 2: Base64 embedded content
-                content = Buffer.from(artifact.contentBase64, "base64");
-            } else {
-                // Fallback 3: Try artifact store
-                try {
-                    content = await artifactStore.get(artifact.sha256);
-                } catch (error: any) {
-                    // Fallback 4: Error if all sources exhausted
-                    throw new Error(
-                        `ERR_ARTIFACT_CONTENT_MISSING: ${artifact.path} (SHA256: ${artifact.sha256}). ` +
-                        `Content not found in manifest (contentUtf8/contentBase64) or artifact store. ` +
-                        `Run generate() first to populate store or include content in manifest.`
-                    );
+                // Step 3d: Check verification results - FAIL if hash/size mismatch
+                if (!result.sizeOk || !result.hashOk) {
+                    const failureReason = !result.hashOk
+                        ? "ERR_POST_WRITE_HASH_MISMATCH"
+                        : "ERR_POST_WRITE_SIZE_MISMATCH";
+
+                    failures.push({
+                        path: artifact.path,
+                        reason: failureReason,
+                        expected: {
+                            sha256: artifact.sha256,
+                            bytes: artifact.bytes
+                        },
+                        actual: {
+                            sha256: result.hash,
+                            bytes: result.size
+                        },
+                        attemptPath: result.attemptPath
+                    });
+
+                    console.error(`[apply]   ✗ VERIFICATION FAILED: ${failureReason}`);
+                    continue; // Skip adding to filesWritten - NO silent success
                 }
+
+                // Step 3e: Success - add to results
+                filesWritten.push(artifact.path);
+                filesWrittenAbs.push(result.absFile);
+                totalBytes += content.length;
+
+                console.error(`[apply]   ✓ SUCCESS: ${artifact.path} (${content.length} bytes)`);
+
+            } catch (artifactError: any) {
+                // Track individual artifact failures with detailed context
+                failures.push({
+                    path: artifact.path,
+                    reason: artifactError.message,
+                    attemptPath: artifactError.attemptPath || "(unknown)"
+                });
+                console.error(`[apply]   ✗ ERROR: ${artifact.path} - ${artifactError.message}`);
             }
-
-            // Pre-write validation: verify content matches manifest expectations
-            const bytesCalc = content.length;
-            const sha256Calc = ArtifactStore.hash(content);
-
-            // Verify SHA256 matches manifest
-            if (sha256Calc !== artifact.sha256) {
-                throw new Error(
-                    `ERR_SHA_MISMATCH: Content SHA256 ${sha256Calc} does not match manifest SHA256 ${artifact.sha256} for ${artifact.path}`
-                );
-            }
-
-            // Verify size matches manifest
-            if (bytesCalc !== artifact.bytes) {
-                throw new Error(
-                    `ERR_SIZE_MISMATCH: Content size ${bytesCalc} does not match manifest size ${artifact.bytes} for ${artifact.path}`
-                );
-            }
-
-            // Creează directorul părinte
-            await mkdir(dirname(fullPath), { recursive: true });
-
-            // Scrie fișierul (strict fs/promises, no virtual FS)
-            await writeFile(fullPath, content);
-
-            // **POST-WRITE VERIFICATION**: Read back from disk and verify SHA256
-            const writtenContent = await readFile(fullPath);
-            const sha256Disk = ArtifactStore.hash(writtenContent);
-
-            if (sha256Disk !== artifact.sha256) {
-                throw new Error(
-                    `ERR_POST_WRITE_VERIFY: Disk SHA256 ${sha256Disk} does not match expected ${artifact.sha256} for ${artifact.path}. File may be corrupted.`
-                );
-            }
-
-            // Verify read-back size
-            if (writtenContent.length !== artifact.bytes) {
-                throw new Error(
-                    `ERR_POST_WRITE_SIZE: Disk size ${writtenContent.length} does not match expected ${artifact.bytes} for ${artifact.path}`
-                );
-            }
-
-            // Raportează cu prefix out/ și strict POSIX (fără backslash)
-            const reportPath = `out/${diskRel}`.replace(/\\/g, '/');
-            filesWritten.push(reportPath);
-            totalBytes += bytesCalc;
         }
 
+        // Step 4: Determine overall success - TRUE only if NO failures
+        const success = failures.length === 0;
+
+        console.error(`[apply] Complete: success=${success}, files=${filesWritten.length}, failures=${failures.length}`);
+
         return {
-            success: true,
+            success,
             mode: "fs",
             filesWritten,
+            filesWrittenAbs,
+            outRootAbs,
+            failures: failures.length > 0 ? failures : undefined,
             summary: {
                 totalFiles: filesWritten.length,
                 totalBytes
-            }
+            },
+            error: !success
+                ? `${failures.length} artifact(s) failed verification or processing`
+                : undefined
         };
     } catch (err: any) {
+        console.error(`[apply] FATAL ERROR: ${err.message}`);
         return {
             success: false,
             mode: "fs",
             filesWritten,
+            filesWrittenAbs,
+            failures,
             error: err.message
         };
     }

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://axiom.codai.dev/schemas/manifest.schema.json",
+  "title": "AXIOM Manifest",
+  "description": "Generated manifest containing artifacts and build metadata",
+  "type": "object",
+  "required": ["version", "buildId", "irHash", "artifacts", "createdAt"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Manifest schema version"
+    },
+    "buildId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique build identifier"
+    },
+    "irHash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hash of the IR used to generate this manifest"
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence of operations performed",
+      "items": {
+        "type": "object",
+        "required": ["stage", "result"],
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": ["pass", "fail", "skip"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of manifest creation"
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "List of artifacts to be written",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path", "sha256", "bytes"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["file", "directory"],
+            "description": "Type of artifact"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\\\]+$",
+            "description": "Relative POSIX path (no backslashes, no .., no absolute paths)"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA256 hash of artifact content"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Size in bytes"
+          },
+          "contentBase64": {
+            "type": "string",
+            "description": "Inline content (base64 encoded)"
+          },
+          "contentUtf8": {
+            "type": "string",
+            "description": "Inline content (UTF-8 text)"
+          }
+        },
+        "oneOf": [
+          { "required": ["contentBase64"] },
+          { "required": ["contentUtf8"] },
+          { 
+            "not": { 
+              "anyOf": [
+                { "required": ["contentBase64"] },
+                { "required": ["contentUtf8"] }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

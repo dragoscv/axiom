@@ -64,12 +64,43 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST" && req.url === "/apply") {
         if (!input.manifest) return send(res, 400, { error: "Missing manifest" });
         const mode = input.mode || "fs";
-        const result = await apply({
-          manifest: input.manifest,
-          mode: mode as "fs" | "pr",
-          repoPath: input.repoPath, // Optional - va folosi process.cwd() dacă lipsește
-          branchName: input.branchName,
-          commitMessage: input.commitMessage,
+
+        try {
+          const result = await apply({
+            manifest: input.manifest,
+            mode: mode as "fs" | "pr",
+            repoPath: input.repoPath, // Optional - va folosi process.cwd() dacă lipsește
+            branchName: input.branchName,
+            commitMessage: input.commitMessage,
+          });
+
+          // Check for ERR_REPOPATH_RELATIVE_UNSAFE and provide friendly guidance
+          if (!result.success && result.error?.includes("ERR_REPOPATH_RELATIVE_UNSAFE")) {
+            return send(res, 200, {
+              ...result,
+              errorCode: "ERR_REPOPATH_RELATIVE_UNSAFE",
+              hint: "Furnizează repoPath absolut sau setează AXIOM_REPO_ROOT la rădăcina repo-ului."
+            });
+          }
+
+          return send(res, 200, result);
+        } catch (err: any) {
+          // Catch any other apply errors
+          return send(res, 500, {
+            success: false,
+            mode,
+            filesWritten: [],
+            error: err.message
+          });
+        }
+      }
+      if (req.method === "POST" && req.url === "/fs-probe-write") {
+        // Independent cross-drive write testing
+        const { fs_probe_write } = await import("./tools/fs-probe-write.js");
+        const result = await fs_probe_write({
+          destAbs: input.destAbs,
+          contentUtf8: input.contentUtf8,
+          contentBase64: input.contentBase64
         });
         return send(res, 200, result);
       }

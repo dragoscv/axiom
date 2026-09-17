@@ -34,23 +34,23 @@ importers:
   packages/axiom-engine:
     dependencies:
       '@codai/axiom-core':
-        specifier: workspace:*
-        version: link:../axiom-core
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-apiservice':
-        specifier: workspace:*
-        version: link:../emitters/apiservice
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-batchjob':
-        specifier: workspace:*
-        version: link:../emitters/batchjob
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-docker':
-        specifier: workspace:*
-        version: link:../emitters/docker
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-webapp':
-        specifier: workspace:*
-        version: link:../emitters/webapp
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-policies':
-        specifier: workspace:*
-        version: link:../policies
+        specifier: ^1.0.1
+        version: 1.0.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -65,26 +65,26 @@ importers:
   packages/axiom-mcp:
     dependencies:
       '@codai/axiom-core':
-        specifier: workspace:*
-        version: link:../axiom-core
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-apiservice':
-        specifier: workspace:*
-        version: link:../emitters/apiservice
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-batchjob':
-        specifier: workspace:*
-        version: link:../emitters/batchjob
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-docker':
-        specifier: workspace:*
-        version: link:../emitters/docker
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-emitter-webapp':
-        specifier: workspace:*
-        version: link:../emitters/webapp
+        specifier: ^1.0.1
+        version: 1.0.1
       '@codai/axiom-engine':
-        specifier: workspace:*
-        version: link:../axiom-engine
+        specifier: ^1.0.24
+        version: 1.0.24
       '@codai/axiom-policies':
-        specifier: workspace:*
-        version: link:../policies
+        specifier: ^1.0.1
+        version: 1.0.1
       '@modelcontextprotocol/sdk':
         specifier: ^1.20.1
         version: 1.20.1
@@ -212,6 +212,9 @@ packages:
 
   '@codai/axiom-engine@1.0.2':
     resolution: {integrity: sha512-ymrfqATzgGuWxx02TE6l74xSiVFz7BM++Sz5KQwI14q4IEDVGuOtr1tvsViiPlA9h8Mu9yxwXUQ4TqtaD6sdmw==}
+
+  '@codai/axiom-engine@1.0.24':
+    resolution: {integrity: sha512-YiFIbrMxZNTGUGg1FlTAv38vwQR85OK4eYmXftu2r3+2mxls++XLlZfajKdhPUzHWxnFUbFncmY1wP4zbv9h6Q==}
 
   '@codai/axiom-policies@1.0.1':
     resolution: {integrity: sha512-D22vE6a4/m4cPWCTUY8WJCz+f3E4kNz4GmF/qCryHJGpbCh+DKoQ/IdEAy9eTikIOawamhTsZNSniFYnVd+RuQ==}
@@ -1219,6 +1222,15 @@ snapshots:
       '@codai/axiom-engine': 1.0.2
 
   '@codai/axiom-engine@1.0.2':
+    dependencies:
+      '@codai/axiom-core': 1.0.1
+      '@codai/axiom-emitter-apiservice': 1.0.1
+      '@codai/axiom-emitter-batchjob': 1.0.1
+      '@codai/axiom-emitter-docker': 1.0.1
+      '@codai/axiom-emitter-webapp': 1.0.1
+      '@codai/axiom-policies': 1.0.1
+
+  '@codai/axiom-engine@1.0.24':
     dependencies:
       '@codai/axiom-core': 1.0.1
       '@codai/axiom-emitter-apiservice': 1.0.1

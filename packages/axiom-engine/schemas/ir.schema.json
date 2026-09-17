@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://axiom.codai.dev/schemas/ir.schema.json",
+  "title": "AXIOM Intermediate Representation",
+  "description": "IR defining application structure, components, and configuration",
+  "type": "object",
+  "required": ["version", "product", "components"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1",
+      "description": "IR schema version"
+    },
+    "product": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": ["webapp", "apiservice", "batchjob", "docker", "custom"]
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "description": "List of application components",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": ["service", "database", "api", "ui", "worker", "queue"]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "policies": {
+      "type": "array",
+      "description": "Policy constraints and validations",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": ["security", "compliance", "performance", "cost"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["error", "warning", "info"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata",
+      "additionalProperties": true
+    }
+  }
+}

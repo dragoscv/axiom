@@ -6,3 +6,5 @@ packages:
   - packages/policies
   - packages/vscode-bridge
   - packages/emitters/*
+allowBuilds:
+  esbuild: set this to true or false
