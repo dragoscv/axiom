@@ -2,13 +2,26 @@ node_modules
 .pnpm-cache
 dist
 *.log
+*.tsbuildinfo
+coverage
+.stryker-tmp
+reports/mutation
 
-# Test outputs (keep test-results/ for evidence)
-out-edge-r*/
-out-budget-r*/
+# scratch (globally gitignored too)
+.copilot-tmp
+
+# generated outputs from engine / tests
+out/
+out-*/
+test-results/
+tmp_artifacts/
+.axiom/
+**/test-app/
+**/clean-app/
+**/heavy-app/
+**/simple-app/
+**/smoke-app/
+**/test-debug-output/
+packages/axiom-tests/manifest.json
 *.manifest.json
-
-# Keep golden snapshots and test results for CI
 !packages/axiom-tests/snapshots/
-!test-results/
-tmp_artifacts
