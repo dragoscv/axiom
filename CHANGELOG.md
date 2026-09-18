@@ -268,7 +268,7 @@ Reported abs path: E:\temp-axiom-test\test2-same-drive-repo-1761024936157\out\ma
 4. **✅ Fail-Closed Protection**
    - **Error Code**: `ERR_REPOPATH_RELATIVE_UNSAFE`
    - **Trigger**: Relative `repoPath` resolves to HOME directory
-   - **Behavior**: 
+   - **Behavior**:
      - Throws error immediately (no files written)
      - Returns `success: false` with detailed `failures[]` array
      - Provides guidance: "Use absolute repoPath or set AXIOM_REPO_ROOT"
@@ -298,8 +298,8 @@ Reported abs path: E:\temp-axiom-test\test2-same-drive-repo-1761024936157\out\ma
 | **T3** | Absolute `repoPath` | SUCCESS: Files written, SHA256 verified | ✅ PASS |
 | **T4** | Cross-drive write (Windows D:) | SUCCESS: Files on D:, SHA256 verified | ✅ PASS |
 
-**Test Execution:** 4/4 tests passing (100% success rate)  
-**Test Duration:** 31ms  
+**Test Execution:** 4/4 tests passing (100% success rate)
+**Test Duration:** 31ms
 **Physical Verification:** All files verified byte-by-byte with SHA256
 
 #### Error Codes Reference
@@ -388,7 +388,7 @@ await apply({ manifest, mode: "fs", repoPath: "." });
 
 1. **✅ AXIOM_OUT_ROOT Environment Variable**
    - **Enhancement**: Configure custom output directory via `AXIOM_OUT_ROOT` environment variable
-   - **Use Cases**: 
+   - **Use Cases**:
      - Enterprise deployments requiring specific output locations
      - Network drives, temporary directories, or different physical disks
      - CI/CD pipelines with custom artifact directories
@@ -567,7 +567,7 @@ await apply({ manifest, mode: "fs", repoPath: "." });
 
 2. **✅ Pre-Write Content Validation**
    - **Enhancement**: Validates content SHA256 and size BEFORE writing to disk
-   - **Errors**: 
+   - **Errors**:
      - `ERR_SHA_MISMATCH`: Content SHA256 doesn't match manifest
      - `ERR_SIZE_MISMATCH`: Content size doesn't match manifest bytes
    - **Benefit**: Catches content corruption early in pipeline
@@ -580,7 +580,7 @@ await apply({ manifest, mode: "fs", repoPath: "." });
 
 4. **✅ Enhanced Apply Result Summary**
    - **Enhancement**: `ApplyResult` now includes summary statistics
-   - **Fields**: 
+   - **Fields**:
      - `summary.totalFiles`: Number of files written
      - `summary.totalBytes`: Total bytes written across all files
    - **Benefit**: Better observability and reporting
@@ -683,7 +683,7 @@ if (!resolved.startsWith(expectedPrefix)) throw Error;
 1. **✅ Inline Content Generation**
    - **Enhancement**: `generate()` now embeds content directly in manifest for files ≤ 256 KiB
    - **Encoding**: UTF-8 for text files (`contentUtf8`), Base64 for binary (`contentBase64`)
-   - **Configuration**: 
+   - **Configuration**:
      - `AXIOM_INLINE_CONTENT` - Enable/disable inline content (default: enabled)
      - `AXIOM_INLINE_THRESHOLD_BYTES` - Size threshold (default: 262144 = 256 KiB)
    - **Benefit**: Manifests are self-contained, enabling stateless `apply()` without artifact store
@@ -813,7 +813,7 @@ if (bytes <= INLINE_CONTENT_THRESHOLD && INLINE_CONTENT_ENABLED) {
 
 #### Test Suite (533 New Lines)
 
-- **New Tests**: 
+- **New Tests**:
   - `apply-physical-smoke.test.ts` (133 lines) - End-to-end physical write validation
   - `path-normalization-deepcopy.test.ts` (78 lines) - POSIX guarantee + no mutation
   - `apply-security.test.ts` (145 lines) - 4 comprehensive security scenarios
@@ -1276,7 +1276,7 @@ Test Pozitiv (cu capabilities):
 
 ---
 
-**Validation Timestamp:** 2025-10-20  
-**Validation Method:** Automated MCP Testing + PowerShell/POSIX Scripts  
-**Test Duration:** ~15 seconds (fully automated)  
+**Validation Timestamp:** 2025-10-20
+**Validation Method:** Automated MCP Testing + PowerShell/POSIX Scripts
+**Test Duration:** ~15 seconds (fully automated)
 **Confidence Level:** 100% (5/5 tests pass with evidence)
