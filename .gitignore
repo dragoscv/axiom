@@ -25,3 +25,7 @@ tmp_artifacts/
 packages/axiom-tests/manifest.json
 *.manifest.json
 !packages/axiom-tests/snapshots/
+
+# Test fixtures are always tracked, even where names collide with v1 output patterns above
+!packages/*/fixtures/**
+

@@ -1,0 +1,52 @@
+{
+  "version": "1.0.0",
+  "buildId": "1760910338696",
+  "irHash": "803e306f3e841a266ce40703ebdaed514be1416380d7ea0dc018dc5b4b2b813c",
+  "profile": "edge",
+  "artifacts": [
+    {
+      "path": "out/edge/notes/README.md",
+      "kind": "file",
+      "sha256": "49f95085565f4a55cc974cae0c1a328456be00087fd1debaa8197c4298543878",
+      "bytes": 49
+    },
+    {
+      "path": "out/edge/notes/src/index.ts",
+      "kind": "file",
+      "sha256": "73fd85bf4eceabead815b6c90b3dab03be50598e0620562ade38dda608187c09",
+      "bytes": 52
+    },
+    {
+      "path": "out/edge/notes/wrangler.toml",
+      "kind": "file",
+      "sha256": "c342354626e4403070839c71a090cd324b803f313572e635ef8976fe5a0304d3",
+      "bytes": 49
+    }
+  ],
+  "evidence": [
+    {
+      "checkName": "cold-start",
+      "kind": "sla",
+      "passed": true,
+      "details": {
+        "expression": "cold_start_ms<=100",
+        "evaluated": true,
+        "message": "Check passed",
+        "measurements": {
+          "cold_start_ms": 50
+        }
+      }
+    },
+    {
+      "checkName": "no-pii",
+      "kind": "policy",
+      "passed": true,
+      "details": {
+        "expression": "scan.artifacts.no_personal_data()",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    }
+  ],
+  "createdAt": "2025-10-19T21:45:38.696Z"
+}

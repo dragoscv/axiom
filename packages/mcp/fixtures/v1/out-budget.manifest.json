@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "buildId": "b313589029b2330bc3625d1ad3f90895ccc7824d0202def52a9f9275510de8eb",
+  "irHash": "f09ad9422c1e66569409a6fbe9a9fd3251d7e7fbce2881153c71f61f88827903",
+  "profile": "budget",
+  "artifacts": [
+    {
+      "path": "out/smoke/README.md",
+      "kind": "file",
+      "sha256": "31ad306129234ffc8a24c880a058be7876552ab54adfc4c00e39ca25c21d0525",
+      "bytes": 15,
+      "contentUtf8": "AXIOM_SMOKE_OK\n"
+    },
+    {
+      "path": "out/smoke/package.json",
+      "kind": "file",
+      "sha256": "d4064ac3f1ea60fb63c8b00773a6740c4679670ffd423a52e224524c0bc8c99a",
+      "bytes": 87,
+      "contentUtf8": "{\n  \"name\": \"smoke\",\n  \"private\": true,\n  \"dependencies\": {\n    \"hono\": \"^4.0.0\"\n  }\n}\n"
+    },
+    {
+      "path": "out/smoke/logo.bin",
+      "kind": "file",
+      "sha256": "4a97bff8f635f8ed285aa79bff460de99cb3b37770381e5f475e580520bbb6cc",
+      "bytes": 11,
+      "contentBase64": "iVBORw0KGgqqu8w="
+    },
+    {
+      "path": "out/smoke/assets",
+      "kind": "dir",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "evidence": [
+    {
+      "checkName": "budget",
+      "kind": "policy",
+      "passed": true,
+      "details": {
+        "expression": "max_dependencies<=5",
+        "evaluated": true,
+        "message": "Check passed"
+      }
+    }
+  ],
+  "createdAt": "deterministic-b313589029b2330b"
+}
