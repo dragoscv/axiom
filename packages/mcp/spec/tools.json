@@ -1,0 +1,1445 @@
+[
+  {
+    "name": "axiom_plan_validate",
+    "description": "Validate a Plan against PlanSchema and, when all sources are inline, compute its planDigest. Read-only; touches no files.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "Plan document (apiVersion axiom.dev/v2, kind Plan)"
+        }
+      },
+      "required": [
+        "plan"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "planDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "message"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "errors"
+      ]
+    }
+  },
+  {
+    "name": "axiom_plan_compile",
+    "description": "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "Plan document"
+        },
+        "store": {
+          "description": "Blob transport; default inline",
+          "type": "string",
+          "enum": [
+            "inline",
+            "cas"
+          ]
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "apiVersion": {
+              "type": "string",
+              "const": "axiom.dev/v2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "Manifest"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+            },
+            "profile": {
+              "type": "string",
+              "minLength": 1
+            },
+            "planDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "artifacts": {
+              "minItems": 1,
+              "maxItems": 2000,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "create",
+                      "overwrite",
+                      "delete"
+                    ]
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "0644",
+                      "0755"
+                    ]
+                  },
+                  "digest": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      }
+                    },
+                    "required": [
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "template",
+                      "cas",
+                      "ref"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "op",
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "predicate": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*$"
+                  },
+                  "params": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "severity": {
+                    "default": "error",
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warn",
+                      "info"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "predicate",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "toolchain": {
+              "type": "object",
+              "properties": {
+                "axiom": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "emitters": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "axiom",
+                "emitters"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "apiVersion",
+            "kind",
+            "name",
+            "profile",
+            "planDigest",
+            "artifacts",
+            "checks",
+            "toolchain"
+          ],
+          "additionalProperties": false
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "attestation": {
+          "type": "object",
+          "properties": {
+            "_type": {
+              "type": "string",
+              "const": "https://in-toto.io/Statement/v1"
+            },
+            "subject": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "digest": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      }
+                    },
+                    "required": [
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "digest"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "predicateType": {
+              "type": "string",
+              "format": "uri"
+            },
+            "predicate": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "_type",
+            "subject",
+            "predicateType",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        "envelope": {
+          "type": "object",
+          "properties": {
+            "payloadType": {
+              "type": "string",
+              "const": "application/vnd.in-toto+json"
+            },
+            "payload": {
+              "type": "string",
+              "format": "base64",
+              "contentEncoding": "base64",
+              "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+            },
+            "signatures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "keyid": {
+                    "type": "string"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "format": "base64",
+                    "contentEncoding": "base64",
+                    "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                  }
+                },
+                "required": [
+                  "sig"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "payloadType",
+            "payload",
+            "signatures"
+          ],
+          "additionalProperties": false
+        },
+        "blobs": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "sha256:<64 lowercase hex>"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "encoding": {
+                "type": "string",
+                "enum": [
+                  "utf8",
+                  "base64"
+                ]
+              },
+              "data": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "encoding",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "manifest",
+        "manifestDigest"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "axiom_manifest_verify",
+    "description": "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. Never writes.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "ManifestBundle"
+        }
+      },
+      "required": [
+        "bundle"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "canonical": {
+          "type": "boolean"
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "ERR_PATH_NOT_RELATIVE_POSIX",
+                  "ERR_PATH_SEGMENT",
+                  "ERR_PATH_NOT_NFC",
+                  "ERR_PATH_RESERVED_NAME",
+                  "ERR_PATH_INVALID_CHAR",
+                  "ERR_PATH_CASE_COLLISION",
+                  "ERR_SYMLINK_IN_PATH",
+                  "ERR_CONTAINMENT",
+                  "ERR_TARGET_TYPE",
+                  "ERR_EXISTS",
+                  "ERR_NOT_FOUND",
+                  "ERR_BLOB_MISSING",
+                  "ERR_DIGEST_FORMAT",
+                  "ERR_DIGEST_MISMATCH",
+                  "ERR_SIZE_MISMATCH",
+                  "ERR_BLOB_TOO_LARGE",
+                  "ERR_BUNDLE_TOO_LARGE",
+                  "ERR_LOCKED",
+                  "ERR_ROOT_NOT_ALLOWED",
+                  "ERR_ROOT_REQUIRED",
+                  "ERR_ROOT_NOT_DIR",
+                  "ERR_CONFIRM_DIGEST_MISMATCH",
+                  "ERR_CHECKS_FAILED",
+                  "ERR_PREIMAGE_CHANGED",
+                  "ERR_JOURNAL_CORRUPT",
+                  "ERR_EBUSY",
+                  "ERR_INVALID_PLAN",
+                  "ERR_INVALID_MANIFEST",
+                  "ERR_INVALID_PROFILE",
+                  "ERR_PREDICATE_UNKNOWN",
+                  "ERR_PREDICATE_PARAMS",
+                  "ERR_PROVIDER_FAILED",
+                  "ERR_GUARD_TIMEOUT",
+                  "ERR_GUARD_OUTPUT",
+                  "ERR_REF_OFFLINE",
+                  "ERR_NOT_CANONICAL",
+                  "ERR_UNSUPPORTED_OP",
+                  "ERR_INTERNAL"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "canonical",
+        "signed",
+        "missing",
+        "errors"
+      ]
+    }
+  },
+  {
+    "name": "axiom_check",
+    "description": "Evaluate the profile's predicates (plus the manifest's own checks) against the bundle. Repo facts are read from the root when one is available and the profile allows it. Verdict `error` means a provider could not run — never a silent pass.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "ManifestBundle"
+        },
+        "profile": {
+          "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+          "type": "string"
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "const": "axiom.dev/v2"
+        },
+        "kind": {
+          "type": "string",
+          "const": "CheckReport"
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "error"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warn",
+                  "info"
+                ]
+              },
+              "predicate": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Relative POSIX path, NFC, no reserved names"
+              },
+              "facts": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "severity",
+              "predicate",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "factsDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "skipped",
+                  "error"
+                ]
+              },
+              "ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "name",
+              "status",
+              "ms"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "manifestDigest",
+        "profile",
+        "verdict",
+        "findings",
+        "factsDigest",
+        "durationMs",
+        "providers"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "axiom_apply_dry_run",
+    "description": "Stage the bundle under <root>/.axiom/staging, run pre-apply checks and produce a unified diff against the current tree. Nothing outside .axiom/ is touched. Echo the returned manifestDigest as `confirmDigest` to axiom_apply.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "ManifestBundle"
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        },
+        "profile": {
+          "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "const": "axiom.dev/v2"
+        },
+        "kind": {
+          "type": "string",
+          "const": "ApplyResult"
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "dry-run",
+            "fs",
+            "pr"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "applied",
+            "noop",
+            "rolled-back",
+            "failed"
+          ]
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Relative POSIX path, NFC, no reserved names"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "create",
+                  "overwrite",
+                  "delete"
+                ]
+              },
+              "digest": {
+                "type": "object",
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "Lowercase hex-encoded sha256"
+                  }
+                },
+                "required": [
+                  "sha256"
+                ],
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "written",
+                  "deleted",
+                  "unchanged",
+                  "skipped"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "op",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "diff": {
+          "type": "string"
+        },
+        "journal": {
+          "type": "string"
+        },
+        "git": {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "compareUrl": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "ERR_PATH_NOT_RELATIVE_POSIX",
+                "ERR_PATH_SEGMENT",
+                "ERR_PATH_NOT_NFC",
+                "ERR_PATH_RESERVED_NAME",
+                "ERR_PATH_INVALID_CHAR",
+                "ERR_PATH_CASE_COLLISION",
+                "ERR_SYMLINK_IN_PATH",
+                "ERR_CONTAINMENT",
+                "ERR_TARGET_TYPE",
+                "ERR_EXISTS",
+                "ERR_NOT_FOUND",
+                "ERR_BLOB_MISSING",
+                "ERR_DIGEST_FORMAT",
+                "ERR_DIGEST_MISMATCH",
+                "ERR_SIZE_MISMATCH",
+                "ERR_BLOB_TOO_LARGE",
+                "ERR_BUNDLE_TOO_LARGE",
+                "ERR_LOCKED",
+                "ERR_ROOT_NOT_ALLOWED",
+                "ERR_ROOT_REQUIRED",
+                "ERR_ROOT_NOT_DIR",
+                "ERR_CONFIRM_DIGEST_MISMATCH",
+                "ERR_CHECKS_FAILED",
+                "ERR_PREIMAGE_CHANGED",
+                "ERR_JOURNAL_CORRUPT",
+                "ERR_EBUSY",
+                "ERR_INVALID_PLAN",
+                "ERR_INVALID_MANIFEST",
+                "ERR_INVALID_PROFILE",
+                "ERR_PREDICATE_UNKNOWN",
+                "ERR_PREDICATE_PARAMS",
+                "ERR_PROVIDER_FAILED",
+                "ERR_GUARD_TIMEOUT",
+                "ERR_GUARD_OUTPUT",
+                "ERR_REF_OFFLINE",
+                "ERR_NOT_CANONICAL",
+                "ERR_UNSUPPORTED_OP",
+                "ERR_INTERNAL"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "description": "Relative POSIX path, NFC, no reserved names"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "manifestDigest",
+        "mode",
+        "status",
+        "root",
+        "files"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "axiom_apply",
+    "description": "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run). Idempotent: re-applying an applied digest is a no-op.",
+    "riskClass": "SENSITIVE",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "ManifestBundle"
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        },
+        "profile": {
+          "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+          "type": "string"
+        },
+        "confirmDigest": {
+          "description": "Must equal bundle.manifestDigest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "const": "axiom.dev/v2"
+        },
+        "kind": {
+          "type": "string",
+          "const": "ApplyResult"
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "dry-run",
+            "fs",
+            "pr"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "applied",
+            "noop",
+            "rolled-back",
+            "failed"
+          ]
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Relative POSIX path, NFC, no reserved names"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "create",
+                  "overwrite",
+                  "delete"
+                ]
+              },
+              "digest": {
+                "type": "object",
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "Lowercase hex-encoded sha256"
+                  }
+                },
+                "required": [
+                  "sha256"
+                ],
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "written",
+                  "deleted",
+                  "unchanged",
+                  "skipped"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "op",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "diff": {
+          "type": "string"
+        },
+        "journal": {
+          "type": "string"
+        },
+        "git": {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "compareUrl": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "ERR_PATH_NOT_RELATIVE_POSIX",
+                "ERR_PATH_SEGMENT",
+                "ERR_PATH_NOT_NFC",
+                "ERR_PATH_RESERVED_NAME",
+                "ERR_PATH_INVALID_CHAR",
+                "ERR_PATH_CASE_COLLISION",
+                "ERR_SYMLINK_IN_PATH",
+                "ERR_CONTAINMENT",
+                "ERR_TARGET_TYPE",
+                "ERR_EXISTS",
+                "ERR_NOT_FOUND",
+                "ERR_BLOB_MISSING",
+                "ERR_DIGEST_FORMAT",
+                "ERR_DIGEST_MISMATCH",
+                "ERR_SIZE_MISMATCH",
+                "ERR_BLOB_TOO_LARGE",
+                "ERR_BUNDLE_TOO_LARGE",
+                "ERR_LOCKED",
+                "ERR_ROOT_NOT_ALLOWED",
+                "ERR_ROOT_REQUIRED",
+                "ERR_ROOT_NOT_DIR",
+                "ERR_CONFIRM_DIGEST_MISMATCH",
+                "ERR_CHECKS_FAILED",
+                "ERR_PREIMAGE_CHANGED",
+                "ERR_JOURNAL_CORRUPT",
+                "ERR_EBUSY",
+                "ERR_INVALID_PLAN",
+                "ERR_INVALID_MANIFEST",
+                "ERR_INVALID_PROFILE",
+                "ERR_PREDICATE_UNKNOWN",
+                "ERR_PREDICATE_PARAMS",
+                "ERR_PROVIDER_FAILED",
+                "ERR_GUARD_TIMEOUT",
+                "ERR_GUARD_OUTPUT",
+                "ERR_REF_OFFLINE",
+                "ERR_NOT_CANONICAL",
+                "ERR_UNSUPPORTED_OP",
+                "ERR_INTERNAL"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "description": "Relative POSIX path, NFC, no reserved names"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "manifestDigest",
+        "mode",
+        "status",
+        "root",
+        "files"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "axiom_rollback",
+    "description": "Replay the journal of a committed/committing manifest in reverse: restore backups, remove created files, drop the applied marker.",
+    "riskClass": "SENSITIVE",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        },
+        "manifestDigest": {
+          "type": "string",
+          "description": "`sha256:<hex>` (or bare hex) of the manifest to roll back"
+        }
+      },
+      "required": [
+        "manifestDigest"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "status": {
+          "type": "string",
+          "const": "rolled-back"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "staged",
+            "committing",
+            "committed",
+            "rolling-back",
+            "rolled-back"
+          ]
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifestDigest",
+        "status",
+        "phase",
+        "steps",
+        "root"
+      ]
+    }
+  },
+  {
+    "name": "axiom_manifest_diff",
+    "description": "Compare two manifests by artifact path and digest. Each side is a ManifestBundle or a `sha256:<hex>` reference to a bundle stored under an allowlisted root.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "a": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          ],
+          "description": "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests"
+        },
+        "b": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          ],
+          "description": "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "from": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "from",
+              "to"
+            ]
+          }
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "changed"
+      ]
+    }
+  },
+  {
+    "name": "axiom_roots_list",
+    "description": "The frozen set of roots this server may read and write, as given by --root at startup.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "writable": {
+                "type": "boolean"
+              },
+              "hasGit": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "writable",
+              "hasGit"
+            ]
+          }
+        }
+      },
+      "required": [
+        "roots"
+      ]
+    }
+  }
+]

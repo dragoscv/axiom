@@ -1,0 +1,73 @@
+name: Release
+
+# Publishes every @codai/axiom-* package via Changesets with npm trusted
+# publishing (OIDC). No NPM_TOKEN secret: npm ≥ 11.5.1 exchanges the GitHub
+# id-token for a short-lived credential and attaches provenance automatically.
+# Prerequisite (one-time, per package on npmjs.com): Settings → Trusted
+# publishing → GitHub Actions → repo dragoscv/axiom, workflow release.yml.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # changeset publish creates git tags
+  id-token: write # npm trusted publishing (OIDC)
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  COREPACK_ENABLE_STRICT: "0"
+
+jobs:
+  publish:
+    name: build → guards → changeset publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: npm ≥ 11.5 (trusted publishing)
+        run: |
+          npm i -g npm@latest
+          npm --version
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm exec vitest run
+
+      - name: Guards (strict — dist must exist)
+        run: node scripts/run-guards.mjs --strict
+
+      - name: Publish
+        run: pnpm exec changeset publish
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Push tags created by changeset
+        run: git push origin --tags

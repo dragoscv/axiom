@@ -43,7 +43,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/mcp/src/cli.ts", "scripts/**"],
+      "includes": ["packages/mcp/src/cli.ts", "packages/mcp/src/cli-main.ts", "scripts/**"],
       "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
     },
     {

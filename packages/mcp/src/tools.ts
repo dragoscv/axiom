@@ -1,0 +1,573 @@
+import { access, constants, stat } from "node:fs/promises";
+import * as path from "node:path";
+import { apply, rollback } from "@codai/axiom-apply";
+import { loadProfile, runChecks } from "@codai/axiom-checks";
+import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
+import {
+  ApplyResultSchema,
+  AxiomError,
+  type CheckReport,
+  CheckReportSchema,
+  type DigestRef,
+  DigestRefSchema,
+  ErrorCodeSchema,
+  JournalPhaseSchema,
+  type ManifestBundle,
+  ManifestBundleSchema,
+  PlanSchema,
+} from "@codai/axiom-schema";
+import { z } from "zod";
+import type { Logger } from "./log.js";
+import { type RootsPolicy, resolveRoot } from "./roots.js";
+import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
+
+/** Hard cap on any single `bundle`/`plan` argument, measured as UTF-8 JSON bytes (§(f) payload size). */
+export const BUNDLE_BYTES_MAX = 4 * 1024 * 1024;
+/** Findings/errors echoed in the text summary. */
+export const SUMMARY_LIST_MAX = 20;
+
+export type RiskClass = "READ" | "ACT" | "SENSITIVE";
+
+export interface ToolAnnotations {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
+}
+
+export interface ToolContext {
+  policy: RootsPolicy;
+  log: Logger;
+  /** Roots that received a stored manifest/report during this process (for DigestRef lookups). */
+  seenRoots: Set<string>;
+}
+
+export interface ToolDef<I extends z.ZodRawShape = z.ZodRawShape, O extends z.ZodType = z.ZodType> {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: I;
+  outputSchema: O;
+  annotations: ToolAnnotations;
+  riskClass: RiskClass;
+  handler: (ctx: ToolContext, input: z.output<z.ZodObject<I>>) => Promise<z.output<O>>;
+  /** Small text projection of the output for `content[0].text`. Never the whole bundle. */
+  summarize: (output: z.output<O>) => unknown;
+}
+
+export type AnyToolDef = ToolDef<z.ZodRawShape, z.ZodType>;
+
+const READ: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const WRITE: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+export function riskClassOf(a: ToolAnnotations): RiskClass {
+  if (a.readOnlyHint) return "READ";
+  return a.destructiveHint ? "SENSITIVE" : "ACT";
+}
+
+function defineTool<I extends z.ZodRawShape, O extends z.ZodType>(
+  def: Omit<ToolDef<I, O>, "riskClass">,
+): AnyToolDef {
+  return { ...def, riskClass: riskClassOf(def.annotations) } as unknown as AnyToolDef;
+}
+
+// --- shared input pieces ------------------------------------------------------
+
+const LooseObject = z.record(z.string(), z.unknown());
+const RootArg = z
+  .string()
+  .optional()
+  .describe("Absolute repository root; must equal or lie inside an allowlisted --root");
+const ProfileArg = z
+  .string()
+  .optional()
+  .describe(
+    "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+  );
+
+/** Reject oversized payloads before any deeper parsing. */
+export function guardPayloadSize(label: string, value: unknown): void {
+  const bytes = Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  if (bytes > BUNDLE_BYTES_MAX) {
+    throw new AxiomError(
+      "ERR_BUNDLE_TOO_LARGE",
+      `${label} is ${bytes} bytes; max ${BUNDLE_BYTES_MAX}`,
+      {
+        details: { bytes, max: BUNDLE_BYTES_MAX },
+      },
+    );
+  }
+}
+
+function parseBundle(raw: unknown): ManifestBundle {
+  guardPayloadSize("bundle", raw);
+  const parsed = ManifestBundleSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AxiomError("ERR_INVALID_MANIFEST", "bundle does not match ManifestBundleSchema", {
+      details: {
+        issues: parsed.error.issues
+          .slice(0, SUMMARY_LIST_MAX)
+          .map((i) => ({ path: i.path.map(String).join("."), message: i.message })),
+      },
+    });
+  }
+  return parsed.data;
+}
+
+async function profileFor(
+  ctx: ToolContext,
+  bundle: ManifestBundle,
+  name: string | undefined,
+  rootReal: string | undefined,
+) {
+  const searchDirs = rootReal === undefined ? [] : [path.join(rootReal, ".axiom", "profiles")];
+  const profileName = name ?? bundle.manifest.profile;
+  ctx.log.debug("profile", { name: profileName, searchDirs });
+  return loadProfile(profileName, { searchDirs });
+}
+
+async function checkBundle(
+  ctx: ToolContext,
+  bundle: ManifestBundle,
+  profileName: string | undefined,
+  rootReal: string | undefined,
+): Promise<CheckReport> {
+  const profile = await profileFor(ctx, bundle, profileName, rootReal);
+  const opts: Parameters<typeof runChecks>[0] = {
+    bundle,
+    profile,
+    checks: bundle.manifest.checks,
+  };
+  if (rootReal !== undefined) {
+    opts.root = rootReal;
+    opts.casDir = path.join(rootReal, ".axiom", "cas");
+  }
+  const report = await runChecks(opts);
+  if (rootReal !== undefined) {
+    await saveReport(rootReal, report);
+    ctx.seenRoots.add(rootReal);
+  }
+  return report;
+}
+
+/** Optional root: explicit → allowlist check; absent → the single root if there is one, else none. */
+async function optionalRoot(ctx: ToolContext, requested?: string): Promise<string | undefined> {
+  if (requested !== undefined && requested !== "")
+    return (await resolveRoot(ctx.policy, requested)).rootReal;
+  if (ctx.policy.roots.size === 1) return (await resolveRoot(ctx.policy)).rootReal;
+  return undefined;
+}
+
+function countBy<T>(items: readonly T[], key: (t: T) => string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const it of items) out[key(it)] = (out[key(it)] ?? 0) + 1;
+  return out;
+}
+
+// --- output schemas -------------------------------------------------------------
+
+const IssueSchema = z.object({
+  path: z.string(),
+  message: z.string(),
+  code: z.string().optional(),
+});
+
+export const PlanValidateOutput = z.object({
+  ok: z.boolean(),
+  planDigest: DigestRefSchema.optional(),
+  errors: z.array(IssueSchema),
+});
+
+export const ManifestVerifyOutput = z.object({
+  ok: z.boolean(),
+  manifestDigest: DigestRefSchema.optional(),
+  canonical: z.boolean(),
+  signed: z.boolean(),
+  missing: z.array(z.string()),
+  errors: z.array(
+    z.object({ code: ErrorCodeSchema, message: z.string(), path: z.string().optional() }),
+  ),
+});
+
+export const RollbackOutput = z.object({
+  manifestDigest: DigestRefSchema,
+  status: z.literal("rolled-back"),
+  phase: JournalPhaseSchema,
+  steps: z.int().nonnegative(),
+  root: z.string(),
+});
+
+export const ManifestDiffOutput = z.object({
+  added: z.array(z.string()),
+  removed: z.array(z.string()),
+  changed: z.array(
+    z.object({ path: z.string(), from: z.string().nullable(), to: z.string().nullable() }),
+  ),
+});
+
+export const RootsListOutput = z.object({
+  roots: z.array(z.object({ path: z.string(), writable: z.boolean(), hasGit: z.boolean() })),
+});
+
+const BundleOrRef = z
+  .union([DigestRefSchema, LooseObject])
+  .describe(
+    "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests",
+  );
+
+// --- tool definitions -----------------------------------------------------------
+
+export const TOOL_DEFS: readonly AnyToolDef[] = [
+  defineTool({
+    name: "axiom_plan_validate",
+    title: "Validate a Plan",
+    description:
+      "Validate a Plan against PlanSchema and, when all sources are inline, compute its planDigest. Read-only; touches no files.",
+    inputSchema: {
+      plan: LooseObject.describe("Plan document (apiVersion axiom.dev/v2, kind Plan)"),
+    },
+    outputSchema: PlanValidateOutput,
+    annotations: READ,
+    async handler(_ctx, { plan }) {
+      guardPayloadSize("plan", plan);
+      const parsed = PlanSchema.safeParse(plan);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          errors: parsed.error.issues.map((i) => {
+            const code = (i as { params?: { code?: unknown } }).params?.code;
+            const out: z.output<typeof IssueSchema> = {
+              path: i.path.map(String).join("."),
+              message: i.message,
+            };
+            if (typeof code === "string") out.code = code;
+            return out;
+          }),
+        };
+      }
+      try {
+        const { bundle } = await compilePlan(parsed.data, { store: "inline" });
+        return { ok: true, planDigest: bundle.manifest.planDigest, errors: [] };
+      } catch (err) {
+        if (err instanceof AxiomError && err.code === "ERR_BLOB_MISSING")
+          return { ok: true, errors: [] };
+        throw err;
+      }
+    },
+    summarize: (o) => ({
+      ok: o.ok,
+      planDigest: o.planDigest,
+      errors: o.errors.slice(0, SUMMARY_LIST_MAX),
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_plan_compile",
+    title: "Compile a Plan into a ManifestBundle",
+    description:
+      "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest.",
+    inputSchema: {
+      plan: LooseObject.describe("Plan document"),
+      store: z.enum(["inline", "cas"]).optional().describe("Blob transport; default inline"),
+      root: RootArg,
+    },
+    outputSchema: ManifestBundleSchema,
+    annotations: READ,
+    async handler(ctx, { plan, store, root }) {
+      guardPayloadSize("plan", plan);
+      const wantsRoot = root !== undefined || store === "cas";
+      const rootReal = wantsRoot ? (await resolveRoot(ctx.policy, root)).rootReal : undefined;
+      const opts: Parameters<typeof compilePlan>[1] = { store: store ?? "inline" };
+      if (rootReal !== undefined) opts.root = rootReal;
+      const { bundle } = await compilePlan(plan, opts);
+      if (rootReal !== undefined) {
+        await saveManifest(rootReal, bundle);
+        ctx.seenRoots.add(rootReal);
+      }
+      ctx.log.info("compiled", {
+        manifestDigest: bundle.manifestDigest,
+        artifacts: bundle.manifest.artifacts.length,
+      });
+      return bundle;
+    },
+    summarize: (b) => ({
+      manifestDigest: b.manifestDigest,
+      planDigest: b.manifest.planDigest,
+      name: b.manifest.name,
+      profile: b.manifest.profile,
+      artifacts: b.manifest.artifacts.length,
+      blobs: Object.keys(b.blobs).length,
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_manifest_verify",
+    title: "Verify a ManifestBundle",
+    description:
+      "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. Never writes.",
+    inputSchema: { bundle: LooseObject.describe("ManifestBundle") },
+    outputSchema: ManifestVerifyOutput,
+    annotations: READ,
+    async handler(_ctx, { bundle }) {
+      guardPayloadSize("bundle", bundle);
+      const r = verifyBundle(bundle);
+      const out: z.output<typeof ManifestVerifyOutput> = {
+        ok: r.ok,
+        canonical: r.canonical,
+        signed: r.signed,
+        missing: r.missing,
+        errors: r.errors,
+      };
+      if (r.manifestDigest !== undefined) out.manifestDigest = r.manifestDigest;
+      return out;
+    },
+    summarize: (o) => ({
+      ok: o.ok,
+      manifestDigest: o.manifestDigest,
+      canonical: o.canonical,
+      missing: o.missing.length,
+      errors: o.errors.slice(0, SUMMARY_LIST_MAX),
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_check",
+    title: "Run policy checks on a bundle",
+    description:
+      "Evaluate the profile's predicates (plus the manifest's own checks) against the bundle. Repo facts are read from the root when one is available and the profile allows it. Verdict `error` means a provider could not run — never a silent pass.",
+    inputSchema: {
+      bundle: LooseObject.describe("ManifestBundle"),
+      profile: ProfileArg,
+      root: RootArg,
+    },
+    outputSchema: CheckReportSchema,
+    annotations: READ,
+    async handler(ctx, { bundle, profile, root }) {
+      const parsed = parseBundle(bundle);
+      const rootReal = await optionalRoot(ctx, root);
+      return checkBundle(ctx, parsed, profile, rootReal);
+    },
+    summarize: summarizeReport,
+  }),
+
+  defineTool({
+    name: "axiom_apply_dry_run",
+    title: "Dry-run apply (stage + diff, no writes to the tree)",
+    description:
+      "Stage the bundle under <root>/.axiom/staging, run pre-apply checks and produce a unified diff against the current tree. Nothing outside .axiom/ is touched. Echo the returned manifestDigest as `confirmDigest` to axiom_apply.",
+    inputSchema: {
+      bundle: LooseObject.describe("ManifestBundle"),
+      root: RootArg,
+      profile: ProfileArg,
+    },
+    outputSchema: ApplyResultSchema,
+    annotations: READ,
+    async handler(ctx, { bundle, root, profile }) {
+      const parsed = parseBundle(bundle);
+      const { rootReal } = await resolveRoot(ctx.policy, root);
+      const result = await apply({
+        bundle: parsed,
+        root: rootReal,
+        mode: "dry-run",
+        preChecks: () => checkBundle(ctx, parsed, profile, rootReal),
+      });
+      return result;
+    },
+    summarize: summarizeApply,
+  }),
+
+  defineTool({
+    name: "axiom_apply",
+    title: "Apply a bundle to the filesystem (two-phase commit)",
+    description:
+      "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run). Idempotent: re-applying an applied digest is a no-op.",
+    inputSchema: {
+      bundle: LooseObject.describe("ManifestBundle"),
+      root: RootArg,
+      profile: ProfileArg,
+      confirmDigest: z.string().optional().describe("Must equal bundle.manifestDigest"),
+    },
+    outputSchema: ApplyResultSchema,
+    annotations: WRITE,
+    async handler(ctx, { bundle, root, profile, confirmDigest }) {
+      const parsed = parseBundle(bundle);
+      if (confirmDigest !== parsed.manifestDigest) {
+        throw new AxiomError(
+          "ERR_CONFIRM_DIGEST_MISMATCH",
+          "confirmDigest must equal bundle.manifestDigest",
+          {
+            details: {
+              confirmDigest: confirmDigest ?? null,
+              manifestDigest: parsed.manifestDigest,
+            },
+          },
+        );
+      }
+      const { rootReal } = await resolveRoot(ctx.policy, root);
+      const result = await apply({
+        bundle: parsed,
+        root: rootReal,
+        mode: "fs",
+        confirmDigest,
+        preChecks: () => checkBundle(ctx, parsed, profile, rootReal),
+      });
+      if (result.status === "applied" || result.status === "noop") {
+        await saveManifest(rootReal, parsed);
+        ctx.seenRoots.add(rootReal);
+      }
+      ctx.log.info("apply", {
+        manifestDigest: parsed.manifestDigest,
+        status: result.status,
+        root: rootReal,
+      });
+      return result;
+    },
+    summarize: summarizeApply,
+  }),
+
+  defineTool({
+    name: "axiom_rollback",
+    title: "Roll back an applied manifest",
+    description:
+      "Replay the journal of a committed/committing manifest in reverse: restore backups, remove created files, drop the applied marker.",
+    inputSchema: {
+      root: RootArg,
+      manifestDigest: z
+        .string()
+        .describe("`sha256:<hex>` (or bare hex) of the manifest to roll back"),
+    },
+    outputSchema: RollbackOutput,
+    annotations: WRITE,
+    async handler(ctx, { root, manifestDigest }) {
+      const ref = toDigestRef(manifestDigest);
+      const { rootReal } = await resolveRoot(ctx.policy, root);
+      const journal = await rollback(rootReal, ref);
+      ctx.log.info("rollback", { manifestDigest: ref, root: rootReal, phase: journal.phase });
+      return {
+        manifestDigest: ref,
+        status: "rolled-back" as const,
+        phase: journal.phase,
+        steps: journal.steps.length,
+        root: rootReal,
+      };
+    },
+    summarize: (o) => o,
+  }),
+
+  defineTool({
+    name: "axiom_manifest_diff",
+    title: "Diff two manifests",
+    description:
+      "Compare two manifests by artifact path and digest. Each side is a ManifestBundle or a `sha256:<hex>` reference to a bundle stored under an allowlisted root.",
+    inputSchema: { a: BundleOrRef, b: BundleOrRef },
+    outputSchema: ManifestDiffOutput,
+    annotations: READ,
+    async handler(ctx, { a, b }) {
+      const [ba, bb] = await Promise.all([
+        resolveBundleOrRef(ctx, a, "a"),
+        resolveBundleOrRef(ctx, b, "b"),
+      ]);
+      return diffManifests(ba.manifest, bb.manifest);
+    },
+    summarize: (d) => ({
+      added: d.added.length,
+      removed: d.removed.length,
+      changed: d.changed.length,
+      sample: {
+        added: d.added.slice(0, SUMMARY_LIST_MAX),
+        removed: d.removed.slice(0, SUMMARY_LIST_MAX),
+        changed: d.changed.slice(0, SUMMARY_LIST_MAX),
+      },
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_roots_list",
+    title: "List allowlisted roots",
+    description:
+      "The frozen set of roots this server may read and write, as given by --root at startup.",
+    inputSchema: {},
+    outputSchema: RootsListOutput,
+    annotations: READ,
+    async handler(ctx) {
+      const roots = [];
+      for (const p of ctx.policy.roots) {
+        const [writable, hasGit] = await Promise.all([
+          access(p, constants.W_OK).then(
+            () => true,
+            () => false,
+          ),
+          stat(path.join(p, ".git")).then(
+            () => true,
+            () => false,
+          ),
+        ]);
+        roots.push({ path: p, writable, hasGit });
+      }
+      return { roots };
+    },
+    summarize: (o) => o,
+  }),
+];
+
+async function resolveBundleOrRef(
+  ctx: ToolContext,
+  v: unknown,
+  label: string,
+): Promise<ManifestBundle> {
+  if (typeof v === "string") {
+    const ref: DigestRef = toDigestRef(v);
+    const found = await loadManifest(new Set([...ctx.policy.roots, ...ctx.seenRoots]), ref);
+    if (found === undefined) {
+      throw new AxiomError("ERR_NOT_FOUND", `${label}: no stored manifest for ${ref}`, {
+        details: { ref },
+      });
+    }
+    return found;
+  }
+  return parseBundle(v);
+}
+
+function summarizeReport(r: CheckReport): unknown {
+  return {
+    manifestDigest: r.manifestDigest,
+    profile: r.profile,
+    verdict: r.verdict,
+    counts: countBy(r.findings, (f) => f.severity),
+    findings: r.findings
+      .slice(0, SUMMARY_LIST_MAX)
+      .map((f) => ({ id: f.id, severity: f.severity, message: f.message, path: f.path })),
+    providers: r.providers,
+    durationMs: r.durationMs,
+  };
+}
+
+function summarizeApply(r: z.output<typeof ApplyResultSchema>): unknown {
+  return {
+    manifestDigest: r.manifestDigest,
+    mode: r.mode,
+    status: r.status,
+    root: r.root,
+    files: countBy(r.files, (f) => f.status),
+    diffBytes: r.diff === undefined ? undefined : Buffer.byteLength(r.diff, "utf8"),
+    journal: r.journal,
+    error: r.error,
+    sample: r.files
+      .slice(0, SUMMARY_LIST_MAX)
+      .map((f) => ({ path: f.path, op: f.op, status: f.status })),
+  };
+}
+
+export function toolByName(name: string): AnyToolDef | undefined {
+  return TOOL_DEFS.find((t) => t.name === name);
+}

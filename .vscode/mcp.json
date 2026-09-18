@@ -1,12 +1,9 @@
 {
   "servers": {
-		    "axiom-mcp": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "--package=@codai/axiom-mcp@latest",
-        "axiom-mcp-stdio"
-      ]
+    "axiom": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/packages/mcp/dist/cli.js", "mcp", "--root", "${workspaceFolder}"]
     }
   }
 }

@@ -1,0 +1,22 @@
+{
+  "_why": "AXIOM's public surface is the MCP tool registry and the closed error-code enum. A tool added in packages/mcp/src/tools.ts that never reaches docs/mcp_api.md, the package README or spec/tools.json is invisible to every integrator; an error code added in schema/src/errors.ts without re-emitting packages/schema/schemas/*.json ships a stale JSON Schema. scripts/check-tool-parity.mjs and scripts/check-schema-json-fresh.mjs are the hard gates; this file is the early reminder while editing.",
+
+  "publicApi": "packages/mcp/src/tools\\.ts|packages/mcp/src/tools/|packages/schema/src/errors\\.ts",
+
+  "expect": {
+    "packages/mcp/src/tools\\.ts|packages/mcp/src/tools/": [
+      "docs/mcp_api.md",
+      "packages/mcp/README.md",
+      "packages/mcp/spec/tools.json"
+    ],
+    "packages/schema/src/errors\\.ts": ["packages/schema/schemas/"]
+  },
+
+  "ignorePaths": [
+    "^packages/_v1/",
+    "^\\.copilot-tmp/",
+    "^docs/archive/",
+    "^\\.stryker-tmp/",
+    "^reports/"
+  ]
+}

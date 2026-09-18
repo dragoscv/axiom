@@ -134,6 +134,7 @@
             "ERR_EXISTS",
             "ERR_NOT_FOUND",
             "ERR_BLOB_MISSING",
+            "ERR_DIGEST_FORMAT",
             "ERR_DIGEST_MISMATCH",
             "ERR_SIZE_MISMATCH",
             "ERR_BLOB_TOO_LARGE",

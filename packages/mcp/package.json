@@ -1,0 +1,53 @@
+{
+  "name": "@codai/axiom-mcp",
+  "version": "2.0.0",
+  "description": "AXIOM v2 MCP server (stdio) and CLI: validate, compile, check and transactionally apply content-addressed manifest bundles inside an allowlisted set of roots",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "bin": {
+    "axiom": "./dist/cli.js",
+    "axiom-mcp": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "spec",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown && pnpm run build:spec",
+    "build:spec": "node --import tsx/esm scripts/gen-tools-json.ts",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codai/axiom-apply": "workspace:*",
+    "@codai/axiom-canon": "workspace:*",
+    "@codai/axiom-checks": "workspace:*",
+    "@codai/axiom-plan": "workspace:*",
+    "@codai/axiom-schema": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
