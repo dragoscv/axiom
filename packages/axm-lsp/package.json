@@ -1,0 +1,64 @@
+{
+  "name": "@codai/axiom-axm-lsp",
+  "version": "2.0.0",
+  "description": "Language server for AXIOM `.axm` plans: diagnostics, completion, hover, document symbols, formatting and semantic tokens over LSP, reusing the @codai/axiom-axm Chevrotain parser (one grammar, zero drift)",
+  "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/axm-lsp"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "lsp",
+    "language-server",
+    "axm"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "bin": {
+    "axiom-axm-lsp": "./dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./main": "./dist/main.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codai/axiom-axm": "workspace:*",
+    "@codai/axiom-schema": "workspace:*",
+    "vscode-languageserver": "catalog:",
+    "vscode-languageserver-textdocument": "catalog:"
+  },
+  "devDependencies": {
+    "@codai/axiom-checks": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

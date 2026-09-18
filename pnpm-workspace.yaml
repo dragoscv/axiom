@@ -21,7 +21,13 @@ catalog:
   "@types/node": 26.6.1
   tsx: 4.23.13
   chevrotain: 13.2.0
+  vscode-languageserver: 10.1.1
+  vscode-languageserver-textdocument: 1.0.14
+  vscode-languageclient: 10.1.1
+  "@types/vscode": 1.138.0
+  "@vscode/vsce": 4.0.0
 
 allowBuilds:
   esbuild: true
   "@biomejs/biome": true
+  "@vscode/vsce-sign": true

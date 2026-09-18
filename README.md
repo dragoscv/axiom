@@ -115,11 +115,14 @@ Inputs, outputs, resources and the error contract: [docs/mcp_api.md](docs/mcp_ap
 | `@codai/axiom-checks` | Predicate registry, fact providers, profiles `default` / `strict` / `permissive` — [docs/checks.md](docs/checks.md) |
 | `@codai/axiom-apply` | Containment, staging, two-phase commit, journal, rollback, lock, dry-run diff — [docs/apply.md](docs/apply.md) |
 | `@codai/axiom-axm` | `.axm` DSL → `Plan` parser (Chevrotain 13) with `{line, column}` diagnostics, plus `formatAxm` — [docs/syntax_spec.md](docs/syntax_spec.md) |
+| `@codai/axiom-axm-lsp` | Language server for `.axm` (bin `axiom-axm-lsp --stdio`): diagnostics, completion, hover, symbols, formatting, semantic tokens — reuses the `axm` parser, one grammar |
 | `@codai/axiom-mcp` | The published bin: MCP stdio server + CLI |
 | `@codai/axiom-testkit` | Private: golden fixtures, fast-check arbitraries, tmp-repo helpers |
+| `axiom-axm` (`packages/vscode-axm`) | Private VS Code extension: TextMate grammar + `LanguageClient` for the LSP; packaged to a .vsix, not on the Marketplace |
 
 Dependency direction is enforced: `schema`, `canon` are leaves; `plan`, `checks`,
-`apply` depend only on those two; `axm` only on `schema`; `mcp` depends on everything except `testkit`.
+`apply` depend only on those two; `axm` only on `schema`; `axm-lsp` on `schema` + `axm`;
+`vscode-axm` on `axm-lsp`; `mcp` depends on everything except `testkit`.
 
 ## Invariants
 

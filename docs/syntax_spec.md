@@ -111,3 +111,27 @@ TS
 
 The full fixture and its compiled `Plan` live in `packages/axm/examples/notes.axm` /
 `notes.plan.json` and are pinned by the golden test.
+
+## Editor support
+
+`@codai/axiom-axm-lsp` is a Language Server Protocol 3.18 implementation for `.axm` that reuses
+`parseAxm` / `formatAxm` — the editor and the gate share one grammar (PLAN.md D-14; rationale in
+`packages/axm-lsp/README.md`).
+
+```
+npx @codai/axiom-axm-lsp --stdio      # any LSP client (neovim, helix, zed, emacs, …)
+```
+
+| Capability | What you get |
+|---|---|
+| diagnostics | the same `ERR_*`-coded errors `axiom compile` reports, at 0-based LSP ranges, `source: axm` |
+| completion | predicate ids after `using`, capability names inside `capabilities [ ]`, `mode`/`op`/`profile` values, keyword snippets valid at the current nesting level |
+| hover | keyword docs; predicate docs on `using group.name` |
+| document symbols | plan → artifacts + checks (outline / breadcrumbs) |
+| formatting | canonical form (`formatAxm`) — applied only when the file parses without diagnostics |
+| semantic tokens | `keyword`, `string`, `number`, `comment`, `property` |
+
+**VS Code**: the private extension `packages/vscode-axm` (`codai.axiom-axm`) bundles the client, a
+TextMate grammar (heredocs, digests, embedded JSON) and `language-configuration.json`. Run it with
+*Run Extension* (F5), or build a .vsix with `pnpm --filter axiom-axm run package` →
+`.copilot-tmp/axiom-axm-<version>.vsix`, then `code --install-extension <file>.vsix`.

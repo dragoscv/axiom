@@ -1,0 +1,86 @@
+{
+  "name": "axiom-axm",
+  "displayName": "AXIOM .axm",
+  "description": "Language support for AXIOM `.axm` plans: diagnostics, completion, hover, symbols, formatting and semantic highlighting via @codai/axiom-axm-lsp",
+  "version": "2.0.0",
+  "private": true,
+  "publisher": "codai",
+  "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/vscode-axm"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "axiom",
+    "axm",
+    "plan",
+    "lsp"
+  ],
+  "engines": {
+    "vscode": "^1.138.0",
+    "node": ">=22.14"
+  },
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onLanguage:axm"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "axm",
+        "aliases": [
+          "AXIOM plan",
+          "axm"
+        ],
+        "extensions": [
+          ".axm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "axm",
+        "scopeName": "source.axm",
+        "path": "./syntaxes/axm.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.json": "json"
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[axm]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "tsdown && node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@codai/axiom-axm-lsp": "workspace:*",
+    "vscode-languageclient": "catalog:"
+  },
+  "devDependencies": {
+    "@types/vscode": "catalog:",
+    "@vscode/vsce": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  }
+}

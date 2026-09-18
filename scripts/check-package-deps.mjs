@@ -6,6 +6,8 @@
  *   schema, canon      → no @codai/* deps
  *   plan, checks, apply → only schema + canon
  *   axm                → only schema (+ plan as a devDependency for the compile-through test)
+ *   axm-lsp            → schema + axm (+ checks as a devDependency for the predicate-id parity test)
+ *   vscode-axm         → axm-lsp only (private extension; spawns the LSP bin)
  *   testkit            → schema + canon + plan
  *   mcp                → anything EXCEPT testkit
  *   conformance        → mcp as a devDependency ONLY (private harness that spawns the built CLI)
@@ -27,6 +29,8 @@ const ALLOWED = {
   checks: ["schema", "canon"],
   apply: ["schema", "canon"],
   axm: ["schema"],
+  "axm-lsp": ["schema", "axm"],
+  "vscode-axm": ["axm-lsp"],
   testkit: ["schema", "canon", "plan"],
   mcp: ["schema", "canon", "plan", "checks", "apply", "axm"],
   conformance: [],
@@ -35,6 +39,7 @@ const ALLOWED = {
 /** devDependencies-only exceptions (test tooling that must not leak into runtime deps). */
 const DEV_ALLOWED = {
   axm: ["plan"],
+  "axm-lsp": ["checks"],
   conformance: ["mcp"],
 };
 

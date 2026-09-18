@@ -1,0 +1,146 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "AXIOM plan",
+  "scopeName": "source.axm",
+  "fileTypes": ["axm"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#heredoc" },
+    { "include": "#header" },
+    { "include": "#check" },
+    { "include": "#meta" },
+    { "include": "#plan" },
+    { "include": "#artifact" },
+    { "include": "#field-keywords" },
+    { "include": "#digest" },
+    { "include": "#string" },
+    { "include": "#brackets" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.axm", "match": "//.*$" },
+        { "name": "comment.block.axm", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "header": {
+      "match": "\\b(axiom)\\s+(\"2\")",
+      "captures": {
+        "1": { "name": "keyword.control.header.axm" },
+        "2": { "name": "constant.numeric.version.axm" }
+      }
+    },
+    "plan": {
+      "match": "\\b(plan)\\s+([A-Za-z0-9_][A-Za-z0-9_-]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.plan.axm" },
+        "2": { "name": "entity.name.type.plan.axm" }
+      }
+    },
+    "artifact": {
+      "match": "\\b(artifact)\\b",
+      "captures": { "1": { "name": "keyword.declaration.artifact.axm" } }
+    },
+    "check": {
+      "begin": "\\b(check)\\s+([A-Za-z0-9_][A-Za-z0-9_-]*)\\s+(using)\\s+([A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_][A-Za-z0-9_-]*)*)",
+      "beginCaptures": {
+        "1": { "name": "keyword.declaration.check.axm" },
+        "2": { "name": "entity.name.function.check.axm" },
+        "3": { "name": "keyword.other.using.axm" },
+        "4": { "name": "support.function.predicate.axm" }
+      },
+      "end": "(?=\\n)|(?<=\\})|(?<=\\])",
+      "patterns": [{ "include": "#json-block" }]
+    },
+    "meta": {
+      "begin": "\\b(meta)\\b",
+      "beginCaptures": { "1": { "name": "keyword.declaration.meta.axm" } },
+      "end": "(?<=\\})|(?=\\n)",
+      "patterns": [{ "include": "#json-block" }]
+    },
+    "field-keywords": {
+      "patterns": [
+        {
+          "match": "\\b(intent|profile|capabilities)\\b",
+          "captures": { "1": { "name": "keyword.other.plan-item.axm" } }
+        },
+        {
+          "match": "\\b(mode)\\s+(0644|0755)\\b",
+          "captures": {
+            "1": { "name": "keyword.other.field.axm" },
+            "2": { "name": "constant.numeric.mode.axm" }
+          }
+        },
+        {
+          "match": "\\b(op)\\s+(create|overwrite|delete)\\b",
+          "captures": {
+            "1": { "name": "keyword.other.field.axm" },
+            "2": { "name": "constant.language.op.axm" }
+          }
+        },
+        {
+          "match": "\\b(profile)\\s+([A-Za-z0-9_][A-Za-z0-9_-]*)",
+          "captures": {
+            "1": { "name": "keyword.other.plan-item.axm" },
+            "2": { "name": "variable.other.constant.profile.axm" }
+          }
+        },
+        { "match": "\\b(inline|template|cas|ref)\\b", "name": "keyword.other.source.axm" },
+        {
+          "match": "\\b(fs|net|secret|ai|compute|git)\\b",
+          "name": "constant.language.capability.axm"
+        }
+      ]
+    },
+    "heredoc": {
+      "name": "string.unquoted.heredoc.axm",
+      "begin": "(<<)([A-Za-z_][A-Za-z0-9_-]*)[ \\t]*$",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.heredoc.begin.axm" },
+        "2": { "name": "entity.name.tag.heredoc.axm" }
+      },
+      "end": "^(\\2)\\r?$",
+      "endCaptures": { "1": { "name": "entity.name.tag.heredoc.axm" } }
+    },
+    "digest": {
+      "name": "string.quoted.double.digest.axm",
+      "match": "\"sha256:[a-f0-9]{64}\"",
+      "captures": { "0": { "name": "constant.other.digest.axm" } }
+    },
+    "string": {
+      "name": "string.quoted.double.axm",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.axm", "match": "\\\\([\"\\\\/bfnrt]|u[0-9a-fA-F]{4})" }
+      ]
+    },
+    "json-block": {
+      "patterns": [
+        {
+          "name": "meta.embedded.block.json",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.definition.dictionary.begin.json" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.dictionary.end.json" } },
+          "patterns": [{ "include": "source.json" }]
+        },
+        {
+          "name": "meta.embedded.block.json",
+          "begin": "\\[",
+          "end": "\\]",
+          "beginCaptures": { "0": { "name": "punctuation.definition.array.begin.json" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.array.end.json" } },
+          "patterns": [{ "include": "source.json" }]
+        }
+      ]
+    },
+    "brackets": {
+      "patterns": [
+        { "match": "[{}]", "name": "punctuation.section.block.axm" },
+        { "match": "[\\[\\]]", "name": "punctuation.section.brackets.axm" },
+        { "match": ",", "name": "punctuation.separator.axm" }
+      ]
+    }
+  }
+}
