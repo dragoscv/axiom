@@ -154,8 +154,10 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 - Golden digests identical on ubuntu/windows/macos from run #1 onward (determinism invariant holds).
 
 ## 8. Release runbook (2.0.0) — owner steps
-1. Wait for CI green on all 9 jobs for the commit to release.
-2. One-time on npmjs.com for **each** of `@codai/axiom-schema|canon|plan|checks|apply|axm|mcp`: package → Settings → Publishing access → *Trusted publisher: GitHub Actions* → repo `dragoscv/axiom`, workflow `release.yml`. (New packages must exist first: publish 2.0.0 once manually with `pnpm publish --access public` from a logged-in terminal, then enable trusted publishing.)
-3. `pnpm changeset version` → commit → tag `v2.0.0` → push tag → `release.yml` publishes with provenance.
-4. Verify live: `npm view @codai/axiom-mcp@2.0.0 dist.attestations` shows provenance; `npx @codai/axiom-mcp@2.0.0 --version`.
-5. S-005: `npm deprecate "@codai/axiom-mcp@<2.0.0" "v1 superseded by 2.x: manifest hash was not content-bound, apply had no rollback; see MIGRATION.md"` and the same for `@codai/axiom-core`, `-engine`, `-policies`, `@codai/axiom-emitter-*`.
+**State 2026-09-18:** versions bumped to 2.0.0 (`4286d4f`), tag `v2.0.0` pushed, `release.yml` ran and **failed 404** (run 35322058007): npm trusted publishing is configured per package on npmjs.com and cannot authorize packages that do not exist yet. Publish metadata + sourcemap exclusion landed in `bd293fc`; packed `@codai/axiom-mcp` CLI verified to run standalone.
+
+1. **Owner, once, interactive** (needs `npm login` + 2FA): `pwsh -NoProfile -File scripts/release-bootstrap.ps1 -Publish` — publishes the 7 packages in dependency order (dry-run without `-Publish`). Idempotent.
+2. **Owner, once per package** on npmjs.com → package → Settings → Trusted publishing → GitHub Actions: owner `dragoscv`, repo `axiom`, workflow `release.yml`, allow `npm publish`. Then Publishing access → "Require 2FA and disallow tokens".
+3. Verify live: `npx -y @codai/axiom-mcp@2.0.0 --version` → `2.0.0`; `npm view @codai/axiom-mcp@2.0.0 dist.attestations` (provenance appears from the first CI publish onward, i.e. 2.0.1+).
+4. S-005: `npm deprecate "@codai/axiom-mcp@<2.0.0" "v1 superseded by 2.x: manifest hash was not content-bound, apply had no rollback; see MIGRATION.md"` and the same for `@codai/axiom-core`, `-engine`, `-policies`, `@codai/axiom-emitter-*`.
+5. Future releases: add changesets → `pnpm changeset version` → commit → tag `vX.Y.Z` → push → `release.yml` publishes with provenance. Move/re-push the `v2.0.0` tag to `bd293fc` after step 1 if you want the GitHub release to point at the published tree.
