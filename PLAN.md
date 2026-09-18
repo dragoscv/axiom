@@ -126,7 +126,7 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 | S-303 | `ref` sources with `--allow-net`; CAS GC | todo |
 | S-304 | `axiom_repo_snapshot` (successor of v1 `reverse-ir`) | todo |
 | S-305 | `axiom migrate v1 manifest.json` → Plan | todo |
-| S-306 | Integrations: brivio guards as check runner; metu skills emit Plans; codai agent-core consumes `@codai/axiom-apply` | todo |
+| S-306 | Integrations: brivio guards as check runner; metu skills emit Plans; codai agent-core consumes `@codai/axiom-apply` — brivio: done (adapter+profiles+ADR-0200 staged in brivio, not committed; e2e transcript in `docs/integration/brivio.md`); metu: done (axiom-plan-apply skill + footers on 6 skills + `.axiom/profiles/metu.json` with 8 `repo.requireCompanion` rules, gate profile, `.vscode/mcp.json`, hook — staged in metu, not committed; e2e in `docs/integration/metu.md`); codai: done (swe-harness `AXIOM_APPLY=1` opt-in — `applyViaAxiom` in `packages/swe-harness/src/axiom-apply.ts`, 6 tests green without the packages installed, `.vscode/mcp.json`, `docs/design/axiom-write-gate-2026-09.md`; staged in codai, not committed; `pnpm install` there after the npm publish) | done |
 
 ---
 
