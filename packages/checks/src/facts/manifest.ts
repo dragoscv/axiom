@@ -21,7 +21,10 @@ export function deriveManifestFacts(bundle: ManifestBundle): ManifestFacts {
     const ext = extOf(a.path);
     byExt[ext] = (byExt[ext] ?? 0) + 1;
   }
-  const signed = bundle.envelope !== undefined && bundle.envelope.signatures.length > 0;
+  /** Presence only — verification is the job of `manifest.requireSigned`. */
+  const signed =
+    (bundle.signatures !== undefined && bundle.signatures.length > 0) ||
+    (bundle.envelope !== undefined && bundle.envelope.signatures.length > 0);
   return {
     artifactCount: bundle.manifest.artifacts.length,
     totalBytes,

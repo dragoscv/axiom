@@ -79,6 +79,11 @@ export const ManifestBodySchema = z
     /** Sorted by id, unique (§2.4 determinism). */
     checks: z.array(CheckRefSchema),
     toolchain: ToolchainSchema,
+    /**
+     * Anti-rollback counter (D-16): monotonic per root, part of the canonical body so a
+     * signature binds it. Verified by `manifest.requireSigned { antiRollback: true }`.
+     */
+    counter: z.int().nonnegative().optional(),
   })
   .strict()
   .superRefine((m, ctx) => {
@@ -125,12 +130,62 @@ export const InTotoStatementLooseSchema = z
   })
   .strict();
 
-/** DSSE envelope (secure-systems-lab/dsse v1.0.2). */
+/** DSSE envelope (secure-systems-lab/dsse v1.0.2) around an in-toto attestation. */
 export const DsseEnvelopeSchema = z
   .object({
     payloadType: z.literal("application/vnd.in-toto+json"),
     payload: z.base64(),
     signatures: z.array(z.object({ keyid: z.string().optional(), sig: z.base64() }).strict()),
+  })
+  .strict();
+
+/** DSSE payloadType of a signed `ManifestBody` (D-16). */
+export const AXIOM_MANIFEST_PAYLOAD_TYPE = "application/vnd.axiom.manifest+json" as const;
+
+/**
+ * DSSE envelope whose payload is `base64(JCS(manifest))`, signed with Ed25519 (D-16).
+ * Lives outside the canonical body: `manifestDigest` is unchanged whether signed or not.
+ */
+export const ManifestSignatureSchema = z
+  .object({
+    payloadType: z.literal(AXIOM_MANIFEST_PAYLOAD_TYPE),
+    payload: z.base64(),
+    signatures: z
+      .array(z.object({ keyid: z.string().optional(), sig: z.base64() }).strict())
+      .min(1),
+  })
+  .strict();
+
+/** `.axiom/trust/keys.json` — the per-root allowlist of signing keys (D-16). */
+export const TrustedKeySchema = z
+  .object({
+    /** sha256(raw 32-byte public key), lowercase hex. */
+    keyid: z.string().regex(/^[0-9a-f]{64}$/),
+    alg: z.literal("ed25519"),
+    /** base64 of the raw 32-byte Ed25519 public key. */
+    publicKey: z.base64(),
+    name: z.string().min(1).max(200).optional(),
+    /** Lowest manifest `counter` this key may sign for. */
+    notBefore: z.int().nonnegative().optional(),
+  })
+  .strict();
+
+export const TrustStoreSchema = z
+  .object({
+    version: z.literal(1),
+    keys: z.array(TrustedKeySchema),
+    /** Floor for `counter` when no state has been recorded yet. */
+    minCounter: z.int().nonnegative().optional(),
+  })
+  .strict();
+
+/** `.axiom/trust/state.json` — last accepted counter for this root (D-16). */
+export const TrustStateSchema = z
+  .object({
+    version: z.literal(1),
+    lastCounter: z.int().nonnegative(),
+    /** Digest of the manifest that advanced `lastCounter` (informational). */
+    manifestDigest: DigestRefSchema.optional(),
   })
   .strict();
 
@@ -141,6 +196,8 @@ export const ManifestBundleSchema = z
     manifestDigest: DigestRefSchema,
     attestation: InTotoStatementLooseSchema.optional(),
     envelope: DsseEnvelopeSchema.optional(),
+    /** Detached DSSE signatures over `manifest` (D-16). Not part of `manifestDigest`. */
+    signatures: z.array(ManifestSignatureSchema).optional(),
     /** Inline side-channel keyed by `sha256:<hex>`. */
     blobs: z.record(DigestRefSchema, BlobSchema).default({}),
   })
@@ -164,5 +221,9 @@ export type ManifestBody = z.infer<typeof ManifestBodySchema>;
 export type Blob = z.infer<typeof BlobSchema>;
 export type InTotoStatementLoose = z.infer<typeof InTotoStatementLooseSchema>;
 export type DsseEnvelope = z.infer<typeof DsseEnvelopeSchema>;
+export type ManifestSignature = z.infer<typeof ManifestSignatureSchema>;
+export type TrustedKey = z.infer<typeof TrustedKeySchema>;
+export type TrustStore = z.infer<typeof TrustStoreSchema>;
+export type TrustState = z.infer<typeof TrustStateSchema>;
 export type ManifestBundle = z.infer<typeof ManifestBundleSchema>;
 export type ManifestBundleInput = z.input<typeof ManifestBundleSchema>;

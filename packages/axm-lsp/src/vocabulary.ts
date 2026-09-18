@@ -109,7 +109,8 @@ export const PREDICATES: Readonly<Record<string, string>> = {
   "content.encodingUtf8": "Inline content must be valid UTF-8.",
   "manifest.maxArtifacts": "The manifest may contain at most `max` artifacts.",
   "manifest.maxTotalBytes": "Sum of blob sizes must be at most `max` bytes.",
-  "manifest.requireSigned": "The bundle must carry a DSSE signature (v2.2).",
+  "manifest.requireSigned":
+    "≥ `minSignatures` valid DSSE signatures from `.axiom/trust/keys.json`; `antiRollback` enforces `counter` > last accepted.",
   "manifest.noDeletes": "No artifact may use `op delete`.",
   "deps.max": "A dependency manifest may declare at most `max` dependencies.",
   "deps.deny": "Reject dependencies matching `patterns`.",

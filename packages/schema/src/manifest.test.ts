@@ -7,6 +7,8 @@ import {
   ManifestArtifactSchema,
   ManifestBodySchema,
   ManifestBundleSchema,
+  TrustStateSchema,
+  TrustStoreSchema,
 } from "./manifest.js";
 
 describe("compareUtf8", () => {
@@ -174,5 +176,65 @@ describe("ManifestBundleSchema", () => {
     expect(
       ManifestBundleSchema.safeParse({ ...validBundle(), manifestDigest: HEX_B }).success,
     ).toBe(false);
+  });
+
+  it("accepts detached manifest signatures (D-16) and rejects wrong payloadType / empty signatures", () => {
+    const b = validBundle();
+    b.signatures = [
+      {
+        payloadType: "application/vnd.axiom.manifest+json",
+        payload: "eyJhIjoxfQ==",
+        signatures: [{ keyid: "a".repeat(64), sig: "c2ln" }],
+      },
+    ];
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(true);
+    b.signatures[0]!.signatures = [];
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(false);
+    b.signatures = [
+      {
+        payloadType: "application/vnd.in-toto+json" as never,
+        payload: "e30=",
+        signatures: [{ sig: "c2ln" }],
+      },
+    ];
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(false);
+  });
+
+  it("manifest.counter is an optional non-negative int inside the canonical body", () => {
+    const b = validBundle();
+    b.manifest.counter = 7;
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(true);
+    b.manifest.counter = -1;
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(false);
+    b.manifest.counter = 1.5;
+    expect(ManifestBundleSchema.safeParse(b).success).toBe(false);
+  });
+});
+
+describe("trust store schemas (D-16)", () => {
+  const key = { keyid: "0".repeat(64), alg: "ed25519" as const, publicKey: "QUJD" };
+  it("TrustStoreSchema accepts keys with optional name/notBefore/minCounter", () => {
+    expect(TrustStoreSchema.safeParse({ version: 1, keys: [key] }).success).toBe(true);
+    expect(
+      TrustStoreSchema.safeParse({
+        version: 1,
+        keys: [{ ...key, name: "ci", notBefore: 3 }],
+        minCounter: 2,
+      }).success,
+    ).toBe(true);
+    expect(TrustStoreSchema.safeParse({ version: 2, keys: [] }).success).toBe(false);
+    expect(
+      TrustStoreSchema.safeParse({ version: 1, keys: [{ ...key, keyid: "short" }] }).success,
+    ).toBe(false);
+    expect(TrustStoreSchema.safeParse({ version: 1, keys: [{ ...key, alg: "rsa" }] }).success).toBe(
+      false,
+    );
+  });
+  it("TrustStateSchema", () => {
+    expect(TrustStateSchema.safeParse({ version: 1, lastCounter: 0 }).success).toBe(true);
+    expect(TrustStateSchema.safeParse({ version: 1, lastCounter: -1 }).success).toBe(false);
+    expect(TrustStateSchema.safeParse({ version: 1, lastCounter: 1, extra: 1 }).success).toBe(
+      false,
+    );
   });
 });

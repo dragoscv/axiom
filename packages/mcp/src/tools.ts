@@ -18,6 +18,7 @@ import {
 } from "@codai/axiom-schema";
 import { z } from "zod";
 import { EMITTERS } from "./emitters.js";
+import { advanceTrustState, profileWantsAntiRollback, verifyBundleAgainstRoot } from "./keys.js";
 import type { Logger } from "./log.js";
 import { type RootsPolicy, resolveRoot } from "./roots.js";
 import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
@@ -208,6 +209,16 @@ export const ManifestVerifyOutput = z.object({
   errors: z.array(
     z.object({ code: ErrorCodeSchema, message: z.string(), path: z.string().optional() }),
   ),
+  /** Present only when a root with `.axiom/trust/keys.json` was available (D-16). */
+  signatures: z
+    .object({
+      trustFile: z.string(),
+      /** Trusted keyids whose signature verified over this manifest. */
+      keyids: z.array(z.string()),
+      findings: z.array(z.object({ id: z.string(), message: z.string() })),
+      ok: z.boolean(),
+    })
+    .optional(),
 });
 
 export const RollbackOutput = z.object({
@@ -344,11 +355,11 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     name: "axiom_manifest_verify",
     title: "Verify a ManifestBundle",
     description:
-      "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. Never writes.",
-    inputSchema: { bundle: LooseObject.describe("ManifestBundle") },
+      "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. When a root with .axiom/trust/keys.json is available, detached DSSE signatures are verified and the trusted keyids are reported under `signatures`. Never writes.",
+    inputSchema: { bundle: LooseObject.describe("ManifestBundle"), root: RootArg },
     outputSchema: ManifestVerifyOutput,
     annotations: READ,
-    async handler(_ctx, { bundle }) {
+    async handler(ctx, { bundle, root }) {
       guardPayloadSize("bundle", bundle);
       const r = verifyBundle(bundle);
       const out: z.output<typeof ManifestVerifyOutput> = {
@@ -359,12 +370,25 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         errors: r.errors,
       };
       if (r.manifestDigest !== undefined) out.manifestDigest = r.manifestDigest;
+      if (r.ok) {
+        const rootReal = await optionalRoot(ctx, root);
+        if (rootReal !== undefined) {
+          const sig = await verifyBundleAgainstRoot(rootReal, parseBundle(bundle));
+          if (sig !== undefined) {
+            out.signatures = sig;
+            out.signed = sig.keyids.length > 0;
+            if (!sig.ok) out.ok = false;
+          }
+        }
+      }
       return out;
     },
     summarize: (o) => ({
       ok: o.ok,
       manifestDigest: o.manifestDigest,
       canonical: o.canonical,
+      signed: o.signed,
+      keyids: o.signatures?.keyids,
       missing: o.missing.length,
       errors: o.errors.slice(0, SUMMARY_LIST_MAX),
     }),
@@ -458,6 +482,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         );
       }
       const { rootReal } = await resolveRoot(ctx.policy, root);
+      const profileDoc = await profileFor(ctx, parsed, profile, rootReal);
       const result = await apply({
         bundle: parsed,
         root: rootReal,
@@ -470,6 +495,12 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       if (result.status === "applied" || result.status === "noop") {
         await saveManifest(rootReal, parsed);
         ctx.seenRoots.add(rootReal);
+      }
+      if (
+        result.status === "applied" &&
+        profileWantsAntiRollback([...profileDoc.checks, ...parsed.manifest.checks])
+      ) {
+        await advanceTrustState(rootReal, parsed);
       }
       ctx.log.info("apply", {
         manifestDigest: parsed.manifestDigest,

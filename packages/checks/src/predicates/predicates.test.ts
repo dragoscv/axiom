@@ -133,16 +133,10 @@ describe("manifest.*", () => {
     const clean = makeBundle([{ path: "a", content: "x" }]);
     expect((await ids(clean, "manifest.noDeletes", {})).verdict).toBe("pass");
   });
-  it("requireSigned", async () => {
-    expect((await ids(b, "manifest.requireSigned", {})).verdict).toBe("fail");
-    const signed = makeBundle([{ path: "a", content: "x" }], {
-      envelope: {
-        payloadType: "application/vnd.in-toto+json",
-        payload: Buffer.from("{}").toString("base64"),
-        signatures: [{ sig: Buffer.from("s").toString("base64") }],
-      },
-    });
-    expect((await ids(signed, "manifest.requireSigned", {})).verdict).toBe("pass");
+  it("requireSigned without a root is an error (fail closed), never a pass", async () => {
+    const r = await ids(b, "manifest.requireSigned", {});
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_PROVIDER_FAILED");
   });
 });
 

@@ -59,7 +59,7 @@
     {
       "name": "axiom_manifest_verify",
       "risk": "READ",
-      "description": "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. Never writes.",
+      "description": "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. When a root with .axiom/trust/keys.json is available, detached DSSE signatures are verified and the trusted keyids are reported under `signatures`. Never writes.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -70,6 +70,10 @@
             },
             "additionalProperties": {},
             "description": "ManifestBundle"
+          },
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
           }
         },
         "required": [

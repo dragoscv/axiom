@@ -154,8 +154,10 @@ tools, `axiom://` resources), CLI verbs, repo guards, CI on three OSes.
 mode (spawn args array), `guard.external` predicate, `axiom gate --stdin` hook
 mode, streamable HTTP transport, optional template emitters.
 
-**v2.2.** CEL predicates, DSSE signing with `manifest.requireSigned`, `ref`
-sources with `--allow-net`, CAS GC, `axiom migrate v1`.
+**v2.2.** CEL predicates (`expr.cel`, done), DSSE/Ed25519 signing with
+`manifest.requireSigned` + key pinning + anti-rollback (done — see
+[docs/signing.md](docs/signing.md); `axiom keygen | sign | trust | verify --root`),
+`ref` sources with `--allow-net`, CAS GC, `axiom migrate v1`.
 
 Decisions and stories live in [PLAN.md](PLAN.md) and [TRACKER.csv](TRACKER.csv).
 

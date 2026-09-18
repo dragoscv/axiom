@@ -320,6 +320,7 @@ export async function compilePlan(
     checks: [...plan.checks].sort((x, y) => compareUtf8(x.id, y.id)),
     toolchain,
   };
+  if (plan.counter !== undefined) body.counter = plan.counter;
   const manifestDigest = canonicalDigestRef(body);
 
   const blobs: Record<DigestRef, Blob> = {};

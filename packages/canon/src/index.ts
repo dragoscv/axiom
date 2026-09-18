@@ -8,6 +8,26 @@ export {
   sha256Hex,
   verifyCanonical,
 } from "./digest.js";
+export type {
+  DsseEnvelope,
+  DsseSignature,
+  EnvelopeFailure,
+  GeneratedKeyPair,
+  TrustedKey,
+  VerifyEnvelopeResult,
+} from "./dsse.js";
+export {
+  AXIOM_MANIFEST_PAYLOAD_TYPE,
+  ED25519_RAW_PUBLIC_BYTES,
+  ED25519_SEED_BYTES,
+  generateKeyPair,
+  keyidFor,
+  privateKeyFrom,
+  publicKeyBase64,
+  publicKeyFrom,
+  signEnvelope,
+  verifyEnvelope,
+} from "./dsse.js";
 export { CanonicalizeError, canonicalize } from "./jcs.js";
 export { DSSE_IN_TOTO_PAYLOAD_TYPE, pae } from "./pae.js";
 export type {

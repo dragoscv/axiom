@@ -89,6 +89,8 @@ export const PlanSchema = z
     capabilities: z.array(CapabilitySchema).default([]),
     artifacts: z.array(PlanArtifactSchema).min(1).max(2000),
     checks: z.array(CheckRefSchema).default([]),
+    /** Anti-rollback counter (D-16); copied verbatim into `ManifestBody.counter`. */
+    counter: z.int().nonnegative().optional(),
     metadata: z.record(z.string(), z.json()).default({}),
   })
   .strict();

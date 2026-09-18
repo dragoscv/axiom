@@ -70,7 +70,7 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 |---|---|---|---|
 | `axiom_plan_validate` | READ | `{ plan }` | `{ ok, planDigest?, errors[] }` |
 | `axiom_plan_compile` | ACT | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (writes only under `<root>/.axiom/` — CAS blobs and the stored manifest — when a root is given) |
-| `axiom_manifest_verify` | READ | `{ bundle }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[] }` |
+| `axiom_manifest_verify` | READ | `{ bundle, root? }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok } }` — `signatures` only when `root` has `.axiom/trust/keys.json` |
 | `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`) |
 | `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
 | `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
@@ -106,6 +106,11 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
   absolute ones must be listed exactly via `--guard-allowlist <abs>` (repeatable). Guards are spawned
   with an args array (never a shell), a scrubbed environment, a wall-clock timeout, and must print
   `GuardOutput` JSON — see `docs/checks.md`.
+- **Signed manifests** (`docs/signing.md`): a root can pin Ed25519 public keys in
+  `.axiom/trust/keys.json`; a profile with `manifest.requireSigned` then refuses unsigned, tampered or
+  untrusted bundles, and with `antiRollback: true` refuses any `counter ≤ .axiom/trust/state.json#lastCounter`.
+  `axiom_apply` advances that state only on `status: "applied"`. Private keys never enter the server:
+  signing is `axiom sign` with `AXIOM_SIGNING_KEY` or `--key-file`.
 
 ## CLI
 
@@ -113,13 +118,16 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
               [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
 axiom compile <plan.json> [-o out.json] [--store cas --root .]
-axiom verify  <bundle.json>
+axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
 axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
 axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal>
 axiom emitters [--json]
+axiom keygen  [--out <dir>] [--name <label>]     (ed25519; private key → <dir>/axiom-signing-<id>.key 0600, public entry → stdout)
+axiom sign    <bundle.json> [--key-file <path>] [-o out.json]   (key from --key-file or $AXIOM_SIGNING_KEY)
+axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root .
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level warn]
 ```
 

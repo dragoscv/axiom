@@ -8,6 +8,18 @@ import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EMITTERS, emitterCatalogue } from "./emitters.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
+import {
+  advanceTrustState,
+  keygen,
+  loadTrustStore,
+  parsePublicEntry,
+  profileWantsAntiRollback,
+  SIGNING_KEY_ENV,
+  signBundle,
+  trustAdd,
+  trustRemove,
+  verifyBundleAgainstRoot,
+} from "./keys.js";
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
 import { createServer } from "./server.js";
@@ -23,7 +35,7 @@ Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
             [--http <host:port>] [--http-token-env <NAME>]
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
-	axiom verify <bundle.json>
+  axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
   axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
   axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
@@ -32,6 +44,9 @@ Usage:
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
   axiom emitters [--json]                  (template emitters available to \`compile\`)
+  axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
+  axiom sign <bundle.json> [--key-file <path>] [-o <out.json>]   (private key from --key-file or $${SIGNING_KEY_ENV})
+  axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
   axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level ...]   (PreToolUse hook; exit 0 allow / 2 deny)
 	axiom --version | --help
 
@@ -197,12 +212,23 @@ async function cmdCompile(argv: string[]): Promise<number> {
 }
 
 async function cmdVerify(argv: string[]): Promise<number> {
-  const { positionals } = opts(argv, {});
+  const { values, positionals } = opts(argv, { root: { type: "string" } });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("verify: <bundle.json> is required");
-  const r = verifyBundle(await readJson(file));
-  out(r);
-  return r.ok ? EXIT_OK : EXIT_FAIL;
+  const raw = await readJson(file);
+  const r = verifyBundle(raw);
+  if (values.root === undefined || !r.ok) {
+    out(r);
+    return r.ok ? EXIT_OK : EXIT_FAIL;
+  }
+  const rootReal = await realRootArg(values.root);
+  const sig = await verifyBundleAgainstRoot(rootReal, parseBundleFile(raw));
+  if (sig === undefined) {
+    out({ ...r, signatures: null, note: "no .axiom/trust/keys.json under root" });
+    return EXIT_OK;
+  }
+  out({ ...r, signed: sig.keyids.length > 0, signatures: sig });
+  return sig.ok ? EXIT_OK : EXIT_FAIL;
 }
 
 async function loadProfileFor(rootReal: string, name: string) {
@@ -294,6 +320,13 @@ async function cmdApply(argv: string[]): Promise<number> {
   if (values.message !== undefined) applyOpts.commitMessage = values.message;
   const result = await apply(applyOpts);
   if (result.status === "applied" || result.status === "noop") await saveManifest(rootReal, bundle);
+  if (
+    result.status === "applied" &&
+    !dryRun &&
+    profileWantsAntiRollback([...profile.checks, ...bundle.manifest.checks])
+  ) {
+    await advanceTrustState(rootReal, bundle);
+  }
   out(result);
   return result.status === "failed" || result.status === "rolled-back" ? EXIT_FAIL : EXIT_OK;
 }
@@ -339,6 +372,66 @@ async function cmdEmitters(argv: string[]): Promise<number> {
 }
 
 /** Reachable when `main()` is called as a library; `cli.ts` short-circuits `gate` to the lazy chunk. */
+async function cmdKeygen(argv: string[]): Promise<number> {
+  const { values } = opts(argv, { out: { type: "string" }, name: { type: "string" } });
+  const r = await keygen(path.resolve(values.out ?? "."), values.name);
+  // The private key NEVER reaches stdout; only its location does.
+  out({ publicEntry: r.publicEntry, privateKeyFile: r.privateKeyFile });
+  return EXIT_OK;
+}
+
+async function cmdSign(argv: string[]): Promise<number> {
+  const { values, positionals } = opts(argv, {
+    "key-file": { type: "string" },
+    out: { type: "string", short: "o" },
+  });
+  const file = positionals[0];
+  if (file === undefined) throw new UsageError("sign: <bundle.json> is required");
+  const bundle = parseBundleFile(await readJson(file));
+  const src: Parameters<typeof signBundle>[1] = {};
+  if (values["key-file"] !== undefined) src.keyFile = values["key-file"];
+  const { bundle: signed, keyid } = await signBundle(bundle, src);
+  const target = values.out ?? file;
+  await writeFile(path.resolve(target), `${JSON.stringify(signed, null, 2)}\n`, "utf8");
+  out({
+    manifestDigest: signed.manifestDigest,
+    keyid,
+    signatures: signed.signatures?.length ?? 0,
+    out: target,
+  });
+  return EXIT_OK;
+}
+
+async function cmdTrust(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const { values, positionals } = opts(rest, { root: { type: "string" } });
+  const rootReal = await realRootArg(values.root);
+  switch (sub) {
+    case "list": {
+      const store = await loadTrustStore(rootReal);
+      out(store ?? { version: 1, keys: [] });
+      return EXIT_OK;
+    }
+    case "add": {
+      const file = positionals[0];
+      if (file === undefined) throw new UsageError("trust add: <pubkey.json> is required");
+      const entry = parsePublicEntry(await readJson(file));
+      const store = await trustAdd(rootReal, entry);
+      out({ added: entry.keyid, keys: store.keys.length });
+      return EXIT_OK;
+    }
+    case "remove": {
+      const keyid = positionals[0];
+      if (keyid === undefined) throw new UsageError("trust remove: <keyid> is required");
+      const store = await trustRemove(rootReal, keyid);
+      out({ removed: keyid, keys: store.keys.length });
+      return EXIT_OK;
+    }
+    default:
+      throw new UsageError("trust: subcommand must be add|remove|list");
+  }
+}
+
 async function cmdGate(argv: string[]): Promise<number> {
   const { gateMain } = await import("./gate-lazy.js");
   const r = await gateMain(argv);
@@ -357,6 +450,9 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   diff: cmdDiff,
   schema: cmdSchema,
   emitters: cmdEmitters,
+  keygen: cmdKeygen,
+  sign: cmdSign,
+  trust: cmdTrust,
   gate: cmdGate,
 };
 

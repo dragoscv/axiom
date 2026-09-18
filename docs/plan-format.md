@@ -63,6 +63,7 @@ reports every violation, each as an error code:
 | `capabilities` | enum[] | any of `fs net secret ai compute git`; default `[]`. Recorded, not enforced by a sandbox |
 | `artifacts` | `PlanArtifact[]` | 1–2000 entries |
 | `checks` | `CheckRef[]` | default `[]`; merged after the profile's checks (same `id` → the plan's wins) |
+| `counter` | int ≥ 0 | optional; anti-rollback counter copied verbatim into `ManifestBody.counter` (see [signing.md](signing.md)) |
 | `metadata` | record<string, json> | default `{}`; free-form, hashed into `planDigest` |
 
 ### `PlanArtifact`
@@ -135,6 +136,7 @@ hashed; everything else is transport.
 | `artifacts` | `ManifestArtifact[]` | 1–2000; **sorted by path in UTF-8 byte order, unique** (`ERR_NOT_CANONICAL`) |
 | `checks` | `CheckRef[]` | **sorted by id, unique** (`ERR_NOT_CANONICAL`) |
 | `toolchain` | `{ axiom: string, emitters: record<string,string> }` | versions that produced the bundle; keys sorted by JCS |
+| `counter` | int ≥ 0 | optional; anti-rollback counter — inside the hash, so a signature binds it (`manifest.requireSigned { antiRollback }`) |
 
 No timestamps, no invocation ids, no absolute paths. Two compiles of the same
 plan on different operating systems yield the same `manifestDigest`; this is
@@ -159,7 +161,8 @@ ubuntu/windows/macos in CI.
 | `manifest` | `ManifestBody` | the hashed part |
 | `manifestDigest` | `DigestRef` | must equal the recomputed hash (`ERR_NOT_CANONICAL`) |
 | `attestation` | in-toto Statement v1 | optional; `subject[0].digest.sha256` is the manifest hex; `predicateType` `https://slsa.dev/provenance/v1`; timestamps live here, outside the hash |
-| `envelope` | DSSE envelope | optional; `payloadType: "application/vnd.in-toto+json"`. Signing is v2.2; in v2.0 `signed` is `true` only if `signatures.length > 0` |
+| `envelope` | DSSE envelope | optional; `payloadType: "application/vnd.in-toto+json"` around the attestation (unsigned record) |
+| `signatures` | `ManifestSignature[]` | optional; detached DSSE v1.0.2 envelopes over `manifest`: `payloadType: "application/vnd.axiom.manifest+json"`, `payload = base64(JCS(manifest))`, Ed25519 `sig`, `keyid = sha256(raw pubkey)`. Not part of `manifestDigest`. Verified by `manifest.requireSigned` — see [signing.md](signing.md) |
 | `blobs` | record<`DigestRef`, `{ encoding: utf8 \| base64, data: string }`> | default `{}`; inline side-channel. Sum of decoded sizes ≤ 4 MiB (`BUNDLE_BLOB_BYTES_MAX`) → `ERR_BUNDLE_TOO_LARGE` |
 
 Content resolution order at check/apply time: `blobs` → CAS (`<root>/.axiom/cas`)

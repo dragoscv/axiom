@@ -154,9 +154,30 @@ Fails when the sum of `artifacts[].bytes` exceeds `max`. `requires: manifest`.
 
 ### `manifest.requireSigned`
 
-Fails unless `bundle.envelope.signatures` is non-empty. In v2.0 nothing signs
-bundles, so this fails every unsigned bundle by design (signing is v2.2).
-`requires: manifest`. Params: `{}`.
+Verifies the bundle's detached DSSE envelopes (`bundle.signatures[]`) against the
+root's trust store and, optionally, enforces the anti-rollback counter. Full
+protocol, key handling and CLI in [signing.md](signing.md). `requires: manifest`;
+needs a root (no root → `verdict: error`).
+
+| Param | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `minSignatures` | int 1–16 | `1` | distinct trusted keys that must have produced a valid signature |
+| `antiRollback` | boolean | `false` | require `manifest.counter` and `counter > .axiom/trust/state.json#lastCounter` (and `≥ keys.json#minCounter`) |
+| `trustFile` | string | `.axiom/trust/keys.json` | root-relative POSIX path of the trust store |
+
+Finding ids: `signature.missing`, `signature.unknownKey`, `signature.bad`,
+`signature.notCanonical`, `signature.rollback` (`facts.reason` ∈ `NO_COUNTER |
+ROLLBACK | BELOW_MIN`). Fail-closed: missing trust file → `ERR_NOT_FOUND`,
+unreadable/invalid → `ERR_PROVIDER_FAILED`, corrupt state → `ERR_JOURNAL_CORRUPT`,
+all as provider errors (`verdict: error`).
+
+```json
+{ "id": "manifest.requireSigned", "predicate": "manifest.requireSigned",
+  "params": { "minSignatures": 1, "antiRollback": true } }
+```
+
+`apply` advances `lastCounter` only when the effective checks include this predicate
+with `antiRollback: true` and the result is `status: "applied"`.
 
 ### `manifest.noDeletes`
 

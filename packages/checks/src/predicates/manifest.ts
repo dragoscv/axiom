@@ -41,23 +41,6 @@ export const manifestMaxTotalBytes = definePredicate<z.infer<typeof Max>>({
   },
 });
 
-export const manifestRequireSigned = definePredicate<Record<string, never>>({
-  id: "manifest.requireSigned",
-  params: Empty,
-  requires: ["manifest"],
-  async run(ctx) {
-    if (ctx.facts.manifest.signed) return [];
-    return [
-      finding({
-        id: "manifest.requireSigned",
-        predicate: "manifest.requireSigned",
-        message: "bundle has no DSSE signature",
-        facts: { signed: false },
-      }),
-    ];
-  },
-});
-
 export const manifestNoDeletes = definePredicate<Record<string, never>>({
   id: "manifest.noDeletes",
   params: Empty,

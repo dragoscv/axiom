@@ -3,14 +3,10 @@ import { exprCel } from "./cel.js";
 import { contentEncodingUtf8, contentMaxBytes, contentNoSecrets } from "./content.js";
 import { depsDeny, depsMax } from "./deps.js";
 import { guardExternal } from "./guard.js";
-import {
-  manifestMaxArtifacts,
-  manifestMaxTotalBytes,
-  manifestNoDeletes,
-  manifestRequireSigned,
-} from "./manifest.js";
+import { manifestMaxArtifacts, manifestMaxTotalBytes, manifestNoDeletes } from "./manifest.js";
 import { pathAllow, pathDeny, pathReservedNames } from "./path.js";
 import { repoNoOverwriteOf, repoRequireCompanion } from "./repo.js";
+import { manifestRequireSigned } from "./signature.js";
 
 export {
   CEL_ALLOWED_FUNCTIONS,
@@ -31,6 +27,17 @@ export {
   parseLegacyText,
   resolveGuardCommand,
 } from "./guard.js";
+export {
+  loadTrustState,
+  loadTrustStore,
+  RequireSignedParams,
+  type RequireSignedParamsT,
+  SIGNATURE_FINDING_IDS,
+  type SignatureVerdict,
+  TRUST_FILE_DEFAULT,
+  TRUST_STATE_FILE,
+  verifyBundleSignatures,
+} from "./signature.js";
 export {
   contentEncodingUtf8,
   contentMaxBytes,
