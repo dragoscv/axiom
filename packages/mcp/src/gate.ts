@@ -355,7 +355,13 @@ export async function resolveGateTarget(
   target: GateTarget,
 ): Promise<ResolvedGateTarget> {
   const supplied = target.rawPath.replace(/\\/g, "/");
-  const abs = path.isAbsolute(supplied) ? path.resolve(supplied) : path.resolve(rootReal, supplied);
+  let abs = path.isAbsolute(supplied) ? path.resolve(supplied) : path.resolve(rootReal, supplied);
+  if (path.isAbsolute(supplied)) {
+    // The harness hands us paths under its own cwd, which may be non-canonical
+    // (macOS /var → /private/var, Windows RUNNER~1). Canonicalize the deepest
+    // existing ancestor so the comparison against rootReal is apples to apples.
+    abs = await canonicalizeExisting(abs);
+  }
   const rel = path.relative(rootReal, abs);
   if (rel === "" || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new GateDeny("ERR_CONTAINMENT", "target escapes root", supplied);
@@ -374,6 +380,22 @@ export async function resolveGateTarget(
     throw err;
   }
   return { relPath: relPosix, target };
+}
+
+async function canonicalizeExisting(abs: string): Promise<string> {
+  const missing: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      const real = await realpathNative(cur);
+      return missing.length === 0 ? real : path.join(real, ...missing.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return abs;
+      missing.push(path.basename(cur));
+      cur = parent;
+    }
+  }
 }
 
 // ------------------------------------------------------------- predicates --
