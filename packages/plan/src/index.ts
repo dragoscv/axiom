@@ -8,4 +8,11 @@ export {
   INLINE_BASE64_DECODED_MAX,
 } from "./compile.js";
 export { diffManifests, type ManifestChange, type ManifestDiff } from "./diff.js";
+export {
+  createEmitterRegistry,
+  type EmitterRegistry,
+  type ParamsSchema,
+  type TemplateDef,
+  type TemplateEmitter,
+} from "./template.js";
 export { type VerifyError, type VerifyResult, verifyBundle } from "./verify.js";

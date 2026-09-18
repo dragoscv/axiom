@@ -4,6 +4,7 @@ import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { emitterCatalogue } from "./emitters.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import { type Logger, silentLogger } from "./log.js";
 import type { RootsPolicy } from "./roots.js";
@@ -189,6 +190,16 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
         ],
       };
     },
+  );
+
+  server.registerResource(
+    "emitters",
+    "axiom://emitters",
+    {
+      title: "Template emitters available to axiom_plan_compile",
+      mimeType: "application/json",
+    },
+    async (uri) => json(uri.href, emitterCatalogue()),
   );
 
   log.info("server created", {

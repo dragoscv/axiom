@@ -42,6 +42,10 @@ export const ERROR_CODES = [
   "ERR_PROVIDER_FAILED",
   "ERR_GUARD_TIMEOUT",
   "ERR_GUARD_OUTPUT",
+  // template sources (v2.1)
+  "ERR_EMITTER_UNKNOWN",
+  "ERR_TEMPLATE_UNKNOWN",
+  "ERR_TEMPLATE_PARAMS",
   // git (PR mode)
   "ERR_GIT_NOT_FOUND",
   "ERR_GIT_NOT_REPO",

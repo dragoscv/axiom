@@ -18,7 +18,9 @@ inline↔CAS, or passing a clock never changes `manifestDigest`.
 - `compilePlan(plan, { store?, root?, toolchain?, now?, invocationId? }) → { bundle, statement }`
   Errors are `AxiomError` with codes `ERR_INVALID_PLAN`, `ERR_BLOB_TOO_LARGE`,
   `ERR_BUNDLE_TOO_LARGE`, `ERR_BLOB_MISSING`, `ERR_DIGEST_MISMATCH`,
-  `ERR_REF_OFFLINE` (ref, v2.0), `ERR_UNSUPPORTED_OP` (template, v2.1).
+  `ERR_REF_OFFLINE` (ref, v2.0); `template` sources need `compilePlan(plan, { emitters })` —
+  `ERR_EMITTER_UNKNOWN` / `ERR_TEMPLATE_UNKNOWN` / `ERR_TEMPLATE_PARAMS` otherwise
+  (`createEmitterRegistry`, `TemplateEmitter`; see `docs/emitters.md`).
 - `verifyBundle(bundle)` — schema, recomputed digest, blob hashes, attestation subject. Never throws.
 - `diffManifests(a, b)` — `{ added, removed, changed[{path, from, to}] }` by path/digest.
 - `casPath / casPut / casGet / casHas` — tmp→fsync→rename content store.

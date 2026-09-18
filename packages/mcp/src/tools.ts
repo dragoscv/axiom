@@ -17,6 +17,7 @@ import {
   PlanSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
+import { EMITTERS } from "./emitters.js";
 import type { Logger } from "./log.js";
 import { type RootsPolicy, resolveRoot } from "./roots.js";
 import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
@@ -279,7 +280,10 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         };
       }
       try {
-        const { bundle } = await compilePlan(parsed.data, { store: "inline" });
+        const { bundle } = await compilePlan(parsed.data, {
+          store: "inline",
+          emitters: EMITTERS,
+        });
         return { ok: true, planDigest: bundle.manifest.planDigest, errors: [] };
       } catch (err) {
         if (err instanceof AxiomError && err.code === "ERR_BLOB_MISSING")
@@ -298,7 +302,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     name: "axiom_plan_compile",
     title: "Compile a Plan into a ManifestBundle",
     description:
-      "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest.",
+      "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest. `template` sources are rendered by the built-in `web` emitter (see `axiom emitters`); its version is recorded in toolchain.emitters.",
     inputSchema: {
       plan: LooseObject.describe("Plan document"),
       store: z.enum(["inline", "cas"]).optional().describe("Blob transport; default inline"),
@@ -310,7 +314,10 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       guardPayloadSize("plan", plan);
       const wantsRoot = root !== undefined || store === "cas";
       const rootReal = wantsRoot ? (await resolveRoot(ctx.policy, root)).rootReal : undefined;
-      const opts: Parameters<typeof compilePlan>[1] = { store: store ?? "inline" };
+      const opts: Parameters<typeof compilePlan>[1] = {
+        store: store ?? "inline",
+        emitters: EMITTERS,
+      };
       if (rootReal !== undefined) opts.root = rootReal;
       const { bundle } = await compilePlan(plan, opts);
       if (rootReal !== undefined) {

@@ -23,6 +23,7 @@ import {
 } from "@codai/axiom-schema";
 import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
 import { casGet, casPut } from "./cas.js";
+import type { EmitterRegistry } from "./template.js";
 
 /** Decoded byte budget for a base64 inline source (§2.5). */
 export const INLINE_BASE64_DECODED_MAX: number = 192 * 1024;
@@ -39,6 +40,8 @@ export interface CompileOptions {
   /** Clock for `runDetails.metadata.startedOn/finishedOn`. Omit for a fully deterministic statement. */
   now?: () => string;
   invocationId?: string;
+  /** Emitters available to `template` sources; absent → every template source fails `ERR_EMITTER_UNKNOWN`. */
+  emitters?: EmitterRegistry;
 }
 
 export interface CompileResult {
@@ -49,6 +52,8 @@ export interface CompileResult {
 interface Resolved {
   artifact: ManifestArtifact;
   bytes: Uint8Array | undefined;
+  /** Set when the bytes came from a template emitter (recorded in `toolchain.emitters`). */
+  emitter?: { id: string; version: string };
 }
 
 function invalidPlan(err: { issues: readonly unknown[] }): AxiomError {
@@ -57,7 +62,59 @@ function invalidPlan(err: { issues: readonly unknown[] }): AxiomError {
   });
 }
 
-async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Uint8Array> {
+interface SourceBytes {
+  bytes: Uint8Array;
+  emitter?: { id: string; version: string };
+}
+
+function renderTemplate(
+  a: PlanArtifact,
+  src: { emitter: string; template: string; params: Record<string, unknown> },
+  opts: CompileOptions,
+): SourceBytes {
+  const emitter = opts.emitters?.get(src.emitter);
+  if (emitter === undefined) {
+    throw new AxiomError("ERR_EMITTER_UNKNOWN", `no emitter registered as "${src.emitter}"`, {
+      path: a.path,
+      details: { emitter: src.emitter, available: opts.emitters?.list() ?? [] },
+    });
+  }
+  const def = Object.hasOwn(emitter.templates, src.template)
+    ? emitter.templates[src.template]
+    : undefined;
+  if (def === undefined) {
+    throw new AxiomError(
+      "ERR_TEMPLATE_UNKNOWN",
+      `emitter "${src.emitter}" has no template "${src.template}"`,
+      {
+        path: a.path,
+        details: {
+          emitter: src.emitter,
+          template: src.template,
+          available: Object.keys(emitter.templates).sort(),
+        },
+      },
+    );
+  }
+  const parsed = def.params.safeParse(src.params);
+  if (!parsed.success) {
+    throw new AxiomError("ERR_TEMPLATE_PARAMS", "template params fail the template schema", {
+      path: a.path,
+      details: { emitter: src.emitter, template: src.template, issues: parsed.error.issues },
+    });
+  }
+  const rendered = def.render(parsed.data);
+  const bytes = typeof rendered === "string" ? utf8Bytes(rendered) : rendered;
+  if (bytes.length > INLINE_CONTENT_MAX) {
+    throw new AxiomError("ERR_BLOB_TOO_LARGE", `template rendered ${bytes.length} bytes`, {
+      path: a.path,
+      details: { bytes: bytes.length, max: INLINE_CONTENT_MAX },
+    });
+  }
+  return { bytes, emitter: { id: emitter.id, version: emitter.version } };
+}
+
+async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<SourceBytes> {
   const src = a.source;
   if (src === undefined) {
     throw new AxiomError("ERR_INVALID_PLAN", "source is required unless op is delete", {
@@ -78,7 +135,7 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Uin
             },
           );
         }
-        return bytes;
+        return { bytes };
       }
       if (!isBase64(src.content)) {
         throw new AxiomError("ERR_INVALID_PLAN", "inline content is not valid base64", {
@@ -96,7 +153,7 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Uin
           },
         );
       }
-      return bytes;
+      return { bytes };
     }
     case "cas": {
       const hex = parseDigestRef(src.digest);
@@ -124,7 +181,7 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Uin
           },
         );
       }
-      return bytes;
+      return { bytes };
     }
     case "ref":
       throw new AxiomError("ERR_REF_OFFLINE", "ref sources are not fetched in v2.0", {
@@ -132,10 +189,7 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Uin
         details: { uri: src.uri, digest: src.digest },
       });
     case "template":
-      throw new AxiomError("ERR_UNSUPPORTED_OP", "template sources ship in v2.1", {
-        path: a.path,
-        details: { emitter: src.emitter, template: src.template },
-      });
+      return renderTemplate(a, src, opts);
   }
 }
 
@@ -143,9 +197,9 @@ async function resolveArtifact(a: PlanArtifact, opts: CompileOptions): Promise<R
   if (a.op === "delete") {
     return { artifact: { path: a.path, op: a.op, mode: a.mode }, bytes: undefined };
   }
-  const bytes = await resolveSource(a, opts);
+  const { bytes, emitter } = await resolveSource(a, opts);
   const origin = a.source?.type ?? "inline";
-  return {
+  const out: Resolved = {
     artifact: {
       path: a.path,
       op: a.op,
@@ -156,11 +210,15 @@ async function resolveArtifact(a: PlanArtifact, opts: CompileOptions): Promise<R
     },
     bytes,
   };
+  if (emitter !== undefined) out.emitter = emitter;
+  return out;
 }
 
 /**
  * Plan with every `source` reduced to `{ type, digest }` and artifacts sorted by
  * path, so the plan digest is independent of authoring order and content transport.
+ * Template sources additionally keep `{ emitter, template, params }` — those are the
+ * inputs, and the plan digest must change when they do.
  */
 function digestOnlyPlan(plan: Plan, digests: ReadonlyMap<string, string>): Record<string, unknown> {
   const artifacts = [...plan.artifacts]
@@ -168,14 +226,27 @@ function digestOnlyPlan(plan: Plan, digests: ReadonlyMap<string, string>): Recor
     .map((a) => {
       const out: Record<string, unknown> = { path: a.path, mode: a.mode, op: a.op };
       if (a.source !== undefined) {
-        out.source = { type: a.source.type, digest: `sha256:${digests.get(a.path) ?? ""}` };
+        const digest = `sha256:${digests.get(a.path) ?? ""}`;
+        out.source =
+          a.source.type === "template"
+            ? {
+                type: "template",
+                emitter: a.source.emitter,
+                template: a.source.template,
+                params: a.source.params,
+                digest,
+              }
+            : { type: a.source.type, digest };
       }
       return out;
     });
   return { ...plan, artifacts };
 }
 
-function splitToolchain(input: Record<string, string> | undefined): Toolchain {
+function splitToolchain(
+  input: Record<string, string> | undefined,
+  used: ReadonlyMap<string, string>,
+): Toolchain {
   const emitters: Record<string, string> = {};
   let axiom = AXIOM_VERSION;
   for (const key of Object.keys(input ?? {}).sort()) {
@@ -184,6 +255,8 @@ function splitToolchain(input: Record<string, string> | undefined): Toolchain {
     if (key === "axiom") axiom = v;
     else emitters[key] = v;
   }
+  // Emitters that actually rendered something win over caller-declared versions.
+  for (const id of [...used.keys()].sort()) emitters[id] = used.get(id) as string;
   return { axiom, emitters };
 }
 
@@ -229,11 +302,13 @@ export async function compilePlan(
   resolved.sort((x, y) => compareUtf8(x.artifact.path, y.artifact.path));
 
   const digests = new Map<string, string>();
+  const usedEmitters = new Map<string, string>();
   for (const r of resolved) {
     if (r.artifact.digest !== undefined) digests.set(r.artifact.path, r.artifact.digest.sha256);
+    if (r.emitter !== undefined) usedEmitters.set(r.emitter.id, r.emitter.version);
   }
   const planDigest = canonicalDigestRef(digestOnlyPlan(plan, digests));
-  const toolchain = splitToolchain(opts.toolchain);
+  const toolchain = splitToolchain(opts.toolchain, usedEmitters);
 
   const body: ManifestBody = {
     apiVersion: plan.apiVersion,

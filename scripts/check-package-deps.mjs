@@ -6,6 +6,8 @@
  *   schema, canon      → no @codai/* deps
  *   plan, checks, apply → only schema + canon
  *   axm                → only schema (+ plan as a devDependency for the compile-through test)
+ *   emitters-web       → only schema (+ plan as a devDependency for the compile-through test);
+ *                        `plan` does NOT depend on it — the emitter registry is an injected interface
  *   axm-lsp            → schema + axm (+ checks as a devDependency for the predicate-id parity test)
  *   vscode-axm         → axm-lsp only (private extension; spawns the LSP bin)
  *   testkit            → schema + canon + plan
@@ -29,16 +31,18 @@ const ALLOWED = {
   checks: ["schema", "canon"],
   apply: ["schema", "canon"],
   axm: ["schema"],
+  "emitters-web": ["schema"],
   "axm-lsp": ["schema", "axm"],
   "vscode-axm": ["axm-lsp"],
   testkit: ["schema", "canon", "plan"],
-  mcp: ["schema", "canon", "plan", "checks", "apply", "axm"],
+  mcp: ["schema", "canon", "plan", "checks", "apply", "axm", "emitters-web"],
   conformance: [],
 };
 
 /** devDependencies-only exceptions (test tooling that must not leak into runtime deps). */
 const DEV_ALLOWED = {
   axm: ["plan"],
+  "emitters-web": ["plan"],
   "axm-lsp": ["checks"],
   conformance: ["mcp"],
 };

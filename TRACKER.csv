@@ -35,12 +35,12 @@ S-203,story,2,axiom gate --stdin hook mode,done,agent,S-105,p95 <120ms; both pay
 S-204,story,2,.axm v2 Chevrotain parser,done,agent,S-102,parses spec + examples w/ positions,packages/axm: parseAxm/formatAxm + golden fixture + roundtrip property; MCP axiom_axm_parse; axiom compile plan.axm; chevrotain lazy chunk keeps bundle budget
 S-205,story,2,LSP + VS Code ext,done,agent,S-204,completions for predicate ids,D-14 option B: packages/axm-lsp hand-written over vscode-languageserver 10 reusing parseAxm/formatAxm (one grammar; Langium would need a second .langium grammar); diagnostics/completion (15 predicate ids parity vs builtinRegistry; caps; mode/op/profile; depth-aware keyword snippets)/hover/symbols/format-on-clean-parse/semantic tokens; 32 tests; packages/vscode-axm private ext codai.axiom-axm with TextMate grammar + LanguageClient (node-ipc) + bundled server.cjs fallback; vsix 309 KB via vsce --no-dependencies into .copilot-tmp; not on Marketplace
 S-206,story,2,Streamable HTTP + conformance,done,agent,S-107,0 unexpected conformance failures,packages/mcp/src/http.ts (node:http + SDK web-standard transport; per-session McpServer; loopback default; bearer mandatory off-loopback; lazy chunk http-lazy.js); axiom mcp --http host:port [--http-token-env]; packages/conformance harness + baseline.yml (10 pass / 22 expected / 0 unexpected); CI job conformance (ubuntu)
-S-207,story,2,template sources + emitters-web (Next16/Hono4),todo,agent,S-104,golden fixtures,
+S-207,story,2,template sources + emitters-web (Next16/Hono4),done,agent,S-104,golden fixtures,plan/template.ts registry interface + compile wiring; @codai/axiom-emitters-web web@2.0.0 7 templates with goldens + pinned digest; ERR_EMITTER_UNKNOWN/ERR_TEMPLATE_UNKNOWN/ERR_TEMPLATE_PARAMS; axiom emitters verb + axiom://emitters; docs/emitters.md
 S-301,story,3,CEL predicates via cel-js,todo,agent,S-105,200 vector suite pure,
 S-302,story,3,DSSE signing + requireSigned + anti-rollback,todo,agent,S-103,byte-change rejected,
 S-303,story,3,ref sources --allow-net; CAS GC,todo,agent,S-104,offline default enforced,
 S-304,story,3,axiom_repo_snapshot,todo,agent,S-107,,
 S-305,story,3,axiom migrate v1,todo,agent,S-102,v1 fixtures roundtrip,
 S-306,story,3,Integrations brivio/metu/codai,todo,agent,S-201;S-202,each consumer has a passing e2e,
-D-13,decision,0,Template emitters as v2.1 plugin,done,owner,,answer recorded,
+D-13,decision,0,Template emitters as v2.1 plugin,done,owner,,answer recorded,delivered by S-207 (emitters-web; registry injected into compilePlan)
 D-14,decision,2,LSP: hand-written vscode-languageserver (B) not Langium (A),done,agent,S-204,rationale in packages/axm-lsp/README.md,Langium derives all services from a .langium Grammar AST -> second grammar that can drift; .axm is small enough to hand-write completion/hover/symbols

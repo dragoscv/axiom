@@ -185,6 +185,67 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     expect(out.diagnostics[0]?.range.start).toEqual({ line: 3, column: 10 });
   });
 
+  it("emitters lists web@2.0.0 templates; compile renders a template source through it", async () => {
+    const list = await run(["emitters"]);
+    expect(list.code).toBe(0);
+    const lines = list.stdout.trim().split("\n");
+    expect(lines).toHaveLength(7);
+    expect(lines[0]).toMatch(/^web@2\.0\.0: biome\.config — .+/);
+    const json = await run(["emitters", "--json"]);
+    const rows = JSON.parse(json.stdout) as { emitter: string; template: string }[];
+    expect(rows.map((r) => r.template)).toContain("hono.route");
+
+    const planFile = join(repo.root, "tpl.json");
+    await writeFile(
+      planFile,
+      JSON.stringify({
+        apiVersion: "axiom.dev/v2",
+        kind: "Plan",
+        name: "tpl",
+        intent: "template via cli",
+        artifacts: [
+          {
+            path: "src/routes/health.ts",
+            source: {
+              type: "template",
+              emitter: "web",
+              template: "hono.route",
+              params: { name: "health", path: "/health", methods: ["GET"] },
+            },
+          },
+        ],
+      }),
+    );
+    const c = await run(["compile", planFile]);
+    expect(c.code, c.stderr).toBe(0);
+    const bundle = JSON.parse(c.stdout) as {
+      manifest: {
+        toolchain: { emitters: Record<string, string> };
+        artifacts: { origin?: string }[];
+      };
+    };
+    expect(bundle.manifest.toolchain.emitters).toEqual({ web: "2.0.0" });
+    expect(bundle.manifest.artifacts[0]?.origin).toBe("template");
+
+    await writeFile(
+      planFile,
+      JSON.stringify({
+        apiVersion: "axiom.dev/v2",
+        kind: "Plan",
+        name: "tpl",
+        intent: "x",
+        artifacts: [
+          { path: "a", source: { type: "template", emitter: "nope", template: "x", params: {} } },
+        ],
+      }),
+    );
+    const bad = await run(["compile", planFile]);
+    expect(bad.code).toBe(2);
+    expect(JSON.parse(bad.stderr.trim().split("\n").at(-1) ?? "{}")).toMatchObject({
+      code: "ERR_EMITTER_UNKNOWN",
+    });
+  });
+
   it("mcp verb over real stdio keeps stdout clean (framing survives tools/list + a call)", async () => {
     await mkdir(join(repo.root, "sub"), { recursive: true });
     const transport = new StdioClientTransport({

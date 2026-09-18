@@ -1,0 +1,62 @@
+{
+  "name": "@codai/axiom-emitters-web",
+  "version": "2.0.0",
+  "description": "AXIOM v2 template emitter `web`: small, deterministic, golden-stack file templates (Next 16 route handler / server action, Hono 4 route, Drizzle pgTable, Biome config, Tailwind v4 globals, README section) for `template` plan sources",
+  "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/emitters-web"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "emitter",
+    "template",
+    "nextjs",
+    "hono",
+    "drizzle"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "update-golden": "node --import tsx/esm scripts/update-golden.ts"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@codai/axiom-plan": "workspace:*",
+    "@codai/axiom-schema": "workspace:*",
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

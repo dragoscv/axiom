@@ -34,7 +34,9 @@ tools under their `APPROVAL_MATRIX` — see `docs/integration/codai.md`.
 ## Resources
 
 `axiom://journal/<root-id>` (recent journal entries), `axiom://profile/<name>`
-(built-in check profiles: `default`, `strict`, `permissive`).
+(built-in check profiles: `default`, `strict`, `permissive`), `axiom://emitters` (static list of
+`{emitter, version, template, description}` rows for the template emitters compiled into this
+server — currently `web@2.0.0`; see [emitters.md](emitters.md)).
 
 ## Transports
 

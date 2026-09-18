@@ -6,6 +6,7 @@ import { type AxiomError, isAxiomError, type PlanInput } from "@codai/axiom-sche
 import { afterEach, describe, expect, it } from "vitest";
 import { casPath } from "./cas.js";
 import { compilePlan } from "./compile.js";
+import { createEmitterRegistry, type TemplateEmitter } from "./template.js";
 
 function plan(artifacts: PlanInput["artifacts"], extra: Partial<PlanInput> = {}): PlanInput {
   return {
@@ -340,13 +341,14 @@ describe("compilePlan — sources", () => {
     );
   });
 
-  it("template → ERR_UNSUPPORTED_OP", async () => {
-    await expectAxiom(
+  it("template without a registry → ERR_EMITTER_UNKNOWN", async () => {
+    const err = await expectAxiom(
       compilePlan(
         plan([{ path: "t", source: { type: "template", emitter: "webapp", template: "page" } }]),
       ),
-      "ERR_UNSUPPORTED_OP",
+      "ERR_EMITTER_UNKNOWN",
     );
+    expect(err.details).toEqual({ emitter: "webapp", available: [] });
   });
 
   it("cas missing → ERR_BLOB_MISSING (with and without root)", async () => {
@@ -369,5 +371,111 @@ describe("compilePlan — sources", () => {
       }),
       "ERR_DIGEST_MISMATCH",
     );
+  });
+});
+
+describe("compilePlan — template sources", () => {
+  const strParams = {
+    safeParse(input: unknown) {
+      const p = input as { name?: unknown };
+      if (typeof p.name === "string" && p.name.length > 0)
+        return { success: true as const, data: { name: p.name } };
+      return {
+        success: false as const,
+        error: { issues: [{ path: ["name"], message: "expected non-empty string" }] },
+      };
+    },
+  };
+  const emitter = (version: string): TemplateEmitter => ({
+    id: "demo",
+    version,
+    templates: {
+      greet: {
+        description: "hello file",
+        params: strParams,
+        render: (p: unknown) => `hello ${(p as { name: string }).name}\n`,
+      },
+      bin: {
+        description: "bytes",
+        params: strParams,
+        render: () => new Uint8Array([0, 1, 2]),
+      },
+    },
+  });
+  const tpl = (
+    path: string,
+    template: string,
+    params: Record<string, string> = { name: "ax" },
+  ): PlanInput["artifacts"][number] => ({
+    path,
+    source: { type: "template", emitter: "demo", template, params },
+  });
+
+  it("renders through the registry, records origin + toolchain.emitters", async () => {
+    const { bundle } = await compilePlan(plan([tpl("hi.txt", "greet"), tpl("b.bin", "bin")]), {
+      emitters: createEmitterRegistry([emitter("1.2.3")]),
+    });
+    const hi = bundle.manifest.artifacts.find((a) => a.path === "hi.txt");
+    expect(hi?.origin).toBe("template");
+    expect(hi?.digest?.sha256).toBe(sha256Hex("hello ax\n"));
+    expect(hi?.bytes).toBe(9);
+    const b = bundle.manifest.artifacts.find((a) => a.path === "b.bin");
+    expect(b?.digest?.sha256).toBe(sha256Hex(new Uint8Array([0, 1, 2])));
+    expect(bundle.manifest.toolchain.emitters).toEqual({ demo: "1.2.3" });
+    expect(Object.keys(bundle.blobs)).toHaveLength(2);
+    expect(bundle.attestation.predicate.runDetails.builder.version).toMatchObject({
+      "emitter:demo": "1.2.3",
+    });
+  });
+
+  it("emitter version is part of the manifest digest; params are part of the plan digest", async () => {
+    const p = plan([tpl("hi.txt", "greet")]);
+    const a = await compilePlan(p, { emitters: createEmitterRegistry([emitter("1.0.0")]) });
+    const b = await compilePlan(p, { emitters: createEmitterRegistry([emitter("1.0.0")]) });
+    const c = await compilePlan(p, { emitters: createEmitterRegistry([emitter("1.0.1")]) });
+    expect(a.bundle.manifestDigest).toBe(b.bundle.manifestDigest);
+    expect(c.bundle.manifestDigest).not.toBe(a.bundle.manifestDigest);
+    expect(c.bundle.manifest.planDigest).toBe(a.bundle.manifest.planDigest);
+
+    const d = await compilePlan(plan([tpl("hi.txt", "greet", { name: "bx" })]), {
+      emitters: createEmitterRegistry([emitter("1.0.0")]),
+    });
+    expect(d.bundle.manifest.planDigest).not.toBe(a.bundle.manifest.planDigest);
+  });
+
+  it("unknown emitter / unknown template / bad params → closed error codes", async () => {
+    const emitters = createEmitterRegistry([emitter("1.0.0")]);
+    const e1 = await expectAxiom(
+      compilePlan(
+        plan([{ path: "t", source: { type: "template", emitter: "nope", template: "greet" } }]),
+        { emitters },
+      ),
+      "ERR_EMITTER_UNKNOWN",
+    );
+    expect(e1.details?.available).toEqual(["demo"]);
+    const e2 = await expectAxiom(
+      compilePlan(plan([tpl("t", "missing")]), { emitters }),
+      "ERR_TEMPLATE_UNKNOWN",
+    );
+    expect(e2.details?.available).toEqual(["bin", "greet"]);
+    const e3 = await expectAxiom(
+      compilePlan(plan([tpl("t", "greet", { name: "" })]), { emitters }),
+      "ERR_TEMPLATE_PARAMS",
+    );
+    expect(e3.path).toBe("t");
+    expect(Array.isArray(e3.details?.issues)).toBe(true);
+    // prototype keys are not templates
+    await expectAxiom(
+      compilePlan(plan([tpl("t", "toString")]), { emitters }),
+      "ERR_TEMPLATE_UNKNOWN",
+    );
+  });
+
+  it("createEmitterRegistry rejects duplicate ids and lists sorted", () => {
+    expect(() => createEmitterRegistry([emitter("1"), emitter("2")])).toThrow(/duplicate/);
+    const r = createEmitterRegistry([{ ...emitter("1"), id: "zeta" }, emitter("1")]);
+    expect(r.list()).toEqual(["demo", "zeta"]);
+    expect(r.get("zeta")?.version).toBe("1");
+    expect(r.get("x")).toBeUndefined();
   });
 });

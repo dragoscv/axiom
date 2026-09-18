@@ -6,6 +6,7 @@ import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { EMITTERS, emitterCatalogue } from "./emitters.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
@@ -30,6 +31,7 @@ Usage:
 	axiom rollback <digest> --root <dir>
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
+  axiom emitters [--json]                  (template emitters available to \`compile\`)
   axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level ...]   (PreToolUse hook; exit 0 allow / 2 deny)
 	axiom --version | --help
 
@@ -173,7 +175,7 @@ async function cmdCompile(argv: string[]): Promise<number> {
   if (file === undefined) throw new UsageError("compile: <plan.json|plan.axm> is required");
   const store = values.store ?? "inline";
   if (store !== "inline" && store !== "cas") throw new UsageError("--store must be inline|cas");
-  const compileOpts: Parameters<typeof compilePlan>[1] = { store };
+  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters: EMITTERS };
   let rootReal: string | undefined;
   if (values.root !== undefined || store === "cas") {
     rootReal = await realRootArg(values.root ?? ".");
@@ -325,6 +327,17 @@ async function cmdSchema(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
+async function cmdEmitters(argv: string[]): Promise<number> {
+  const { values } = opts(argv, { json: { type: "boolean" } });
+  const rows = emitterCatalogue();
+  if (values.json) {
+    out(rows);
+    return EXIT_OK;
+  }
+  for (const r of rows) console.log(`${r.emitter}@${r.version}: ${r.template} — ${r.description}`);
+  return EXIT_OK;
+}
+
 /** Reachable when `main()` is called as a library; `cli.ts` short-circuits `gate` to the lazy chunk. */
 async function cmdGate(argv: string[]): Promise<number> {
   const { gateMain } = await import("./gate-lazy.js");
@@ -343,6 +356,7 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   rollback: cmdRollback,
   diff: cmdDiff,
   schema: cmdSchema,
+  emitters: cmdEmitters,
   gate: cmdGate,
 };
 

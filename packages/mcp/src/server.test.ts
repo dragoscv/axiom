@@ -112,6 +112,13 @@ describe("full pipeline", () => {
     });
     const sch = await h.client.readResource({ uri: "axiom://schema/Plan" });
     expect(JSON.parse(sch.contents[0]?.text as string).title).toBe("Plan");
+    const em = await h.client.readResource({ uri: "axiom://emitters" });
+    const rows = JSON.parse(em.contents[0]?.text as string) as {
+      emitter: string;
+      version: string;
+    }[];
+    expect(rows).toHaveLength(7);
+    expect(rows[0]).toMatchObject({ emitter: "web", version: "2.0.0", template: "biome.config" });
     const templates = await h.client.listResourceTemplates();
     expect(templates.resourceTemplates.map((t) => t.uriTemplate).sort()).toEqual([
       "axiom://applied/{sha}",

@@ -55,6 +55,7 @@
     "@codai/axiom-axm": "workspace:*",
     "@codai/axiom-canon": "workspace:*",
     "@codai/axiom-checks": "workspace:*",
+    "@codai/axiom-emitters-web": "workspace:*",
     "@codai/axiom-plan": "workspace:*",
     "@codai/axiom-schema": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:",

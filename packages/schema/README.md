@@ -8,7 +8,7 @@ Zod v4 schemas, closed error codes and generated JSON Schema for the AXIOM v2 da
 | `digest` | `Sha256HexSchema`, `DigestSchema`, `DigestRefSchema` (`sha256:<hex>`), `toDigestRef`, `digestRefHex` |
 | `path` | `RelPathSchema`, `isValidRelPath`, `relPathIssues` — relative POSIX, NFC, ≤1024, no `..`/`\`/drive/reserved names/`<>:"|?*`/C0 |
 | `errors` | `ERROR_CODES` tuple, `ErrorCode`, `AxiomError { code, path?, details? }`, `isAxiomError`, `isErrorCode` |
-| `plan` | `PlanSchema`, `PlanArtifactSchema`, `PlanArtifactSourceSchema` (inline/cas/ref; `template` reserved for v2.1) |
+| `plan` | `PlanSchema`, `PlanArtifactSchema`, `PlanArtifactSourceSchema` (inline/cas/ref/template) |
 | `check` | `CheckRefSchema`, `FindingSchema`, `CheckReportSchema` |
 | `manifest` | `ManifestBodySchema` (JCS-hashed; artifacts/checks sorted+unique by UTF-8 byte order), `ManifestBundleSchema` (blobs ≤ 4 MiB), `compareUtf8` |
 | `profile` | `ProfileSchema` |

@@ -88,7 +88,8 @@ codai's `packages/agent-core/spec/tools-v2.json` entry shape (`{ name, risk, des
 see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
-`axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal}`.
+`axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal}`,
+`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/emitters.md`).
 
 ## Trust model
 
@@ -118,6 +119,7 @@ axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <diges
 axiom rollback <digest> --root .
 axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal>
+axiom emitters [--json]
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level warn]
 ```
 

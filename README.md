@@ -116,12 +116,14 @@ Inputs, outputs, resources and the error contract: [docs/mcp_api.md](docs/mcp_ap
 | `@codai/axiom-apply` | Containment, staging, two-phase commit, journal, rollback, lock, dry-run diff — [docs/apply.md](docs/apply.md) |
 | `@codai/axiom-axm` | `.axm` DSL → `Plan` parser (Chevrotain 13) with `{line, column}` diagnostics, plus `formatAxm` — [docs/syntax_spec.md](docs/syntax_spec.md) |
 | `@codai/axiom-axm-lsp` | Language server for `.axm` (bin `axiom-axm-lsp --stdio`): diagnostics, completion, hover, symbols, formatting, semantic tokens — reuses the `axm` parser, one grammar |
+| `@codai/axiom-emitters-web` | Optional `template` sources: the `web@2.0.0` emitter — 7 small, deterministic golden-stack file templates (Next 16 route handler / server action, Hono 4 route, Drizzle table, Biome, Tailwind v4, README section) — [docs/emitters.md](docs/emitters.md) |
 | `@codai/axiom-mcp` | The published bin: MCP stdio server + CLI |
 | `@codai/axiom-testkit` | Private: golden fixtures, fast-check arbitraries, tmp-repo helpers |
 | `axiom-axm` (`packages/vscode-axm`) | Private VS Code extension: TextMate grammar + `LanguageClient` for the LSP; packaged to a .vsix, not on the Marketplace |
 
 Dependency direction is enforced: `schema`, `canon` are leaves; `plan`, `checks`,
-`apply` depend only on those two; `axm` only on `schema`; `axm-lsp` on `schema` + `axm`;
+`apply` depend only on those two; `axm` and `emitters-web` only on `schema` (the emitter registry
+is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on `schema` + `axm`;
 `vscode-axm` on `axm-lsp`; `mcp` depends on everything except `testkit`.
 
 ## Invariants

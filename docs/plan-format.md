@@ -89,7 +89,21 @@ Op semantics at apply time:
 | `inline` | `content: string`, `encoding: "utf8" \| "base64"` (default `utf8`) | `content` ≤ 262 144 chars (`INLINE_CONTENT_MAX`, 256 KiB). Decoded bytes ≈ 192 KiB when base64. Compiled into `bundle.blobs`. |
 | `cas` | `digest: DigestRef` | Bytes must already be at `<root>/.axiom/cas/sha256/<aa>/<hex>`; missing → `ERR_BLOB_MISSING`. |
 | `ref` | `uri: url` (`file:` or `https:` only), `digest: DigestRef` | Accepted by the schema; **not fetched in v2.0** → `ERR_REF_OFFLINE`. Network refs are v2.2. |
-| `template` | `emitter: string`, `template: string`, `params: record` (default `{}`) | Reserved for v2.1 so v2.0 tooling can parse v2.1 plans; compile rejects with `ERR_UNSUPPORTED_OP`. |
+| `template` | `emitter: string`, `template: string`, `params: record` (default `{}`) | Rendered at compile time by an emitter from the caller-supplied `EmitterRegistry` (see [Template sources](#template-sources)); the rendered bytes then follow the `inline` path. No registry / unknown emitter → `ERR_EMITTER_UNKNOWN`; unknown template → `ERR_TEMPLATE_UNKNOWN`; bad params → `ERR_TEMPLATE_PARAMS`. |
+
+### Template sources
+
+`{ type: "template", emitter, template, params }` asks a registered *emitter* to render the
+bytes at compile time. `compilePlan` ships no emitters; the caller passes
+`{ emitters: createEmitterRegistry([...]) }` (the `axiom` CLI/MCP register `web@2.0.0` from
+`@codai/axiom-emitters-web`). After rendering, the artifact is a normal blob: sha256 digest,
+checks, two-phase apply. The manifest records `origin: "template"` and
+`toolchain.emitters[emitter] = version`.
+
+Digest rules: `params` are inputs, so they are hashed into `planDigest`
+(`{ type, emitter, template, params, digest }` replaces the source); the emitter `version` is
+toolchain, so it is hashed into `manifestDigest` only. Rendered output must be deterministic —
+see [emitters.md](emitters.md) for the contract, the `web` catalogue and how to author one.
 
 ### `CheckRef`
 
@@ -244,7 +258,10 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_PROVIDER_FAILED` | a fact provider or predicate threw |
 | `ERR_GUARD_TIMEOUT` | external guard exceeded `timeoutMs` (v2.1) |
 | `ERR_GUARD_OUTPUT` | external guard stdout was not a valid `GuardOutput` (v2.1) |
+| `ERR_EMITTER_UNKNOWN` | `template` source names an emitter that is not in the compile-time registry (or no registry was given) |
+| `ERR_TEMPLATE_UNKNOWN` | the emitter exists but has no template with that name |
+| `ERR_TEMPLATE_PARAMS` | `template.params` fail the template's Zod schema (details carry `issues`) |
 | `ERR_REF_OFFLINE` | `ref` source in v2.0 (no network) |
 | `ERR_NOT_CANONICAL` | manifest not sorted/unique, or `manifestDigest` does not match the recomputed hash |
-| `ERR_UNSUPPORTED_OP` | v2.1+ feature used in v2.0 (`template` source, `guard.external`, `mode: pr`) |
+| `ERR_UNSUPPORTED_OP` | v2.1+ feature used without its gate (`guard.external` without `--allow-guards`) |
 | `ERR_INTERNAL` | invariant violation inside AXIOM; please report |
