@@ -50,6 +50,7 @@ describe("spec/tools.json parity", () => {
     expect(TOOL_DEFS.map((t) => t.name).sort()).toEqual([
       "axiom_apply",
       "axiom_apply_dry_run",
+      "axiom_axm_parse",
       "axiom_check",
       "axiom_manifest_diff",
       "axiom_manifest_verify",

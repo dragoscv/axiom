@@ -8,6 +8,18 @@ const shared = {
   sourcemap: true,
 } as const;
 
+/**
+ * Rolldown writes a `//#region <file>` / `//#endregion` comment pair around every bundled
+ * module (~19 KB across the CLI bundle). They are comments only, so dropping them changes no
+ * behaviour and keeps the eager `cli.js + cli-main.js` inside the 950 KB budget.
+ */
+const stripRegionMarkers = {
+  name: "axiom-strip-region-markers",
+  renderChunk(code: string) {
+    return { code: code.replace(/^\/\/#(?:end)?region\b[^\n]*\n/gm, ""), map: null };
+  },
+};
+
 export default defineConfig([
   {
     ...shared,
@@ -25,6 +37,22 @@ export default defineConfig([
     dts: false,
     clean: false,
     bin: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      // `./axm-lazy.js` stays a verbatim dynamic import so the .axm parser never
+      // enters the eager bundle (and no shared schema/zod chunk gets split out).
+      neverBundle: [/^node:/, /axm-lazy/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone .axm parser chunk for the CLI (chevrotain + its own schema/zod copy); loaded on
+    // demand only. (The library build above emits its own tiny hashed chunk that re-exports
+    // from the `@codai/axiom-axm` dependency instead.)
+    entry: { "axm-lazy": "src/axm-lazy.ts" },
+    dts: false,
+    clean: false,
     deps: {
       alwaysBundle: [/.*/],
       neverBundle: [/^node:/],

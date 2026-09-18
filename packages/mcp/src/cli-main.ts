@@ -20,7 +20,7 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 
 Usage:
 	axiom mcp [--root <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
-	axiom compile <plan.json> [-o <out.json>] [--store inline|cas] [--root <dir>]
+  axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
 	axiom verify <bundle.json>
 	axiom check <bundle.json> --root <dir> [--profile <name>] [--json]
 	axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
@@ -31,6 +31,7 @@ Usage:
 
 Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
 The \`mcp\` verb speaks JSON-RPC on stdout and logs JSON lines on stderr; every other verb prints JSON to stdout.
+A \`.axm\` plan with errors prints its diagnostics as JSON and exits 2.
 `;
 
 function out(value: unknown): void {
@@ -40,6 +41,23 @@ function out(value: unknown): void {
 async function readJson(file: string): Promise<unknown> {
   const text = await readFile(path.resolve(file), "utf8");
   return JSON.parse(text) as unknown;
+}
+
+class AxmDiagnosticsError extends Error {
+  readonly diagnostics: unknown[];
+  constructor(diagnostics: unknown[]) {
+    super("axm: source has errors");
+    this.diagnostics = diagnostics;
+  }
+}
+
+async function readPlan(file: string): Promise<unknown> {
+  if (path.extname(file).toLowerCase() !== ".axm") return readJson(file);
+  const text = await readFile(path.resolve(file), "utf8");
+  const { parseAxm } = await import("./axm-lazy.js");
+  const r = parseAxm(text);
+  if (r.plan === undefined) throw new AxmDiagnosticsError(r.diagnostics);
+  return r.plan;
 }
 
 function parseBundleFile(raw: unknown) {
@@ -102,7 +120,7 @@ async function cmdCompile(argv: string[]): Promise<number> {
     root: { type: "string" },
   });
   const file = positionals[0];
-  if (file === undefined) throw new UsageError("compile: <plan.json> is required");
+  if (file === undefined) throw new UsageError("compile: <plan.json|plan.axm> is required");
   const store = values.store ?? "inline";
   if (store !== "inline" && store !== "cas") throw new UsageError("--store must be inline|cas");
   const compileOpts: Parameters<typeof compilePlan>[1] = { store };
@@ -111,7 +129,7 @@ async function cmdCompile(argv: string[]): Promise<number> {
     rootReal = await realRootArg(values.root ?? ".");
     compileOpts.root = rootReal;
   }
-  const { bundle } = await compilePlan(await readJson(file), compileOpts);
+  const { bundle } = await compilePlan(await readPlan(file), compileOpts);
   if (rootReal !== undefined) await saveManifest(rootReal, bundle);
   if (values.out !== undefined) {
     await writeFile(path.resolve(values.out), `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
@@ -277,6 +295,10 @@ export async function main(argv: readonly string[], version: string): Promise<nu
   try {
     return await run(rest);
   } catch (err) {
+    if (err instanceof AxmDiagnosticsError) {
+      out({ code: "ERR_INVALID_PLAN", diagnostics: err.diagnostics });
+      return EXIT_USAGE;
+    }
     if (err instanceof UsageError) {
       console.error(`error: ${err.message}\n\n${HELP}`);
       return EXIT_USAGE;

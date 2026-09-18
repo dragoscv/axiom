@@ -19,6 +19,7 @@ catalog:
   diff: 9.0.0
   "@types/node": 26.6.1
   tsx: 4.23.13
+  chevrotain: 13.2.0
 
 allowBuilds:
   esbuild: true

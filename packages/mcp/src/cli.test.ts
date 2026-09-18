@@ -71,6 +71,8 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
       expect(imports.length).toBeGreaterThan(0);
       expect(imports.filter((s) => !s.startsWith("node:") && !s.startsWith("./"))).toEqual([]);
     }
+    // The eager bundle must not statically pull sibling chunks (the .axm parser is `import()`-only).
+    expect(mainText).not.toMatch(/^import\b[^\n]*?from\s+["']\.\//m);
     // Empirical: a copy of the bundle in a directory with no node_modules still runs.
     const alone = join(repo.root, "alone");
     await mkdir(join(alone, "dist"), { recursive: true });
@@ -157,6 +159,32 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     expect(chk.stdout).toMatch(/^FAIL /);
   });
 
+  it("compile accepts a .axm plan; diagnostics → JSON on stdout, exit 2", async () => {
+    const axmFile = join(repo.root, "plan.axm");
+    const bundleFile = join(repo.root, "bundle.json");
+    await writeFile(
+      axmFile,
+      'axiom "2"\nplan cli-axm {\n  intent "x"\n  artifact "src/x.ts" {\n    inline <<EOF\nexport {};\n\nEOF\n  }\n}\n',
+    );
+    const c = await run(["compile", axmFile, "-o", bundleFile]);
+    expect(c.code, c.stderr).toBe(0);
+    const bundle = JSON.parse(await readFile(bundleFile, "utf8")) as {
+      manifest: { name: string; artifacts: { path: string }[] };
+    };
+    expect(bundle.manifest.name).toBe("cli-axm");
+    expect(bundle.manifest.artifacts.map((a) => a.path)).toEqual(["src/x.ts"]);
+
+    await writeFile(axmFile, 'axiom "2"\nplan bad {\n  intent 42\n}\n');
+    const bad = await run(["compile", axmFile]);
+    expect(bad.code).toBe(2);
+    const out = JSON.parse(bad.stdout) as {
+      code: string;
+      diagnostics: { range: { start: { line: number; column: number } } }[];
+    };
+    expect(out.code).toBe("ERR_INVALID_PLAN");
+    expect(out.diagnostics[0]?.range.start).toEqual({ line: 3, column: 10 });
+  });
+
   it("mcp verb over real stdio keeps stdout clean (framing survives tools/list + a call)", async () => {
     await mkdir(join(repo.root, "sub"), { recursive: true });
     const transport = new StdioClientTransport({
@@ -168,7 +196,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     await client.connect(transport);
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(9);
+      expect(tools).toHaveLength(10);
       const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
       expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
       const v = await client.callTool({

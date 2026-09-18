@@ -5,6 +5,7 @@
  *
  *   schema, canon      → no @codai/* deps
  *   plan, checks, apply → only schema + canon
+ *   axm                → only schema (+ plan as a devDependency for the compile-through test)
  *   testkit            → schema + canon + plan
  *   mcp                → anything EXCEPT testkit
  *   nobody depends on mcp
@@ -24,8 +25,14 @@ const ALLOWED = {
   plan: ["schema", "canon"],
   checks: ["schema", "canon"],
   apply: ["schema", "canon"],
+  axm: ["schema"],
   testkit: ["schema", "canon", "plan"],
-  mcp: ["schema", "canon", "plan", "checks", "apply"],
+  mcp: ["schema", "canon", "plan", "checks", "apply", "axm"],
+};
+
+/** devDependencies-only exceptions (test tooling that must not leak into runtime deps). */
+const DEV_ALLOWED = {
+  axm: ["plan"],
 };
 
 const problems = [];
@@ -44,11 +51,12 @@ for (const name of pkgs) {
     for (const [dep, spec] of Object.entries(pkg[section] ?? {})) {
       if (dep.startsWith(SCOPE)) {
         const short = dep.slice(SCOPE.length);
+        const devOk = section === "devDependencies" && (DEV_ALLOWED[name] ?? []).includes(short);
         if (short === "mcp") {
           problems.push(`packages/${name}: depends on ${dep} — nobody may depend on mcp`);
         } else if (short === "testkit" && name !== "testkit") {
           problems.push(`packages/${name}: depends on ${dep} — testkit is private test tooling`);
-        } else if (!allowed.includes(short)) {
+        } else if (!allowed.includes(short) && !devOk) {
           problems.push(
             `packages/${name}: ${section} → ${dep} violates boundary (allowed: ${allowed.join(", ") || "none"})`,
           );

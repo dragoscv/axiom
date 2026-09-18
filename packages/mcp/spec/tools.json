@@ -1396,6 +1396,487 @@
     }
   },
   {
+    "name": "axiom_axm_parse",
+    "description": "Parse .axm v2 text into a Plan with 1-based {line, column} diagnostics; `plan` is present only when error-free. Read-only.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": ".axm source text"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "object",
+          "properties": {
+            "apiVersion": {
+              "type": "string",
+              "const": "axiom.dev/v2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "Plan"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+            },
+            "intent": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "profile": {
+              "default": "default",
+              "type": "string",
+              "minLength": 1
+            },
+            "capabilities": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "fs",
+                  "net",
+                  "secret",
+                  "ai",
+                  "compute",
+                  "git"
+                ]
+              }
+            },
+            "artifacts": {
+              "minItems": 1,
+              "maxItems": 2000,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "mode": {
+                    "default": "0644",
+                    "type": "string",
+                    "enum": [
+                      "0644",
+                      "0755"
+                    ]
+                  },
+                  "op": {
+                    "default": "create",
+                    "type": "string",
+                    "enum": [
+                      "create",
+                      "overwrite",
+                      "delete"
+                    ]
+                  },
+                  "source": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "inline"
+                          },
+                          "content": {
+                            "type": "string",
+                            "maxLength": 262144
+                          },
+                          "encoding": {
+                            "default": "utf8",
+                            "type": "string",
+                            "enum": [
+                              "utf8",
+                              "base64"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "content"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "cas"
+                          },
+                          "digest": {
+                            "type": "string",
+                            "pattern": "^sha256:[a-f0-9]{64}$",
+                            "description": "sha256:<64 lowercase hex>"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "digest"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "ref"
+                          },
+                          "uri": {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          "digest": {
+                            "type": "string",
+                            "pattern": "^sha256:[a-f0-9]{64}$",
+                            "description": "sha256:<64 lowercase hex>"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "uri",
+                          "digest"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "template"
+                          },
+                          "emitter": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "template": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "params": {
+                            "default": {},
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "$ref": "#/$defs/__schema0"
+                            }
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "emitter",
+                          "template"
+                        ],
+                        "additionalProperties": false,
+                        "description": "v2.1"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "checks": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "predicate": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*$"
+                  },
+                  "params": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "severity": {
+                    "default": "error",
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warn",
+                      "info"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "predicate",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "metadata": {
+              "default": {},
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema2"
+              }
+            }
+          },
+          "required": [
+            "apiVersion",
+            "kind",
+            "name",
+            "intent",
+            "artifacts"
+          ],
+          "additionalProperties": false
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning"
+                ]
+              },
+              "code": {
+                "type": "string",
+                "enum": [
+                  "ERR_PATH_NOT_RELATIVE_POSIX",
+                  "ERR_PATH_SEGMENT",
+                  "ERR_PATH_NOT_NFC",
+                  "ERR_PATH_RESERVED_NAME",
+                  "ERR_PATH_INVALID_CHAR",
+                  "ERR_PATH_CASE_COLLISION",
+                  "ERR_SYMLINK_IN_PATH",
+                  "ERR_CONTAINMENT",
+                  "ERR_TARGET_TYPE",
+                  "ERR_EXISTS",
+                  "ERR_NOT_FOUND",
+                  "ERR_BLOB_MISSING",
+                  "ERR_DIGEST_FORMAT",
+                  "ERR_DIGEST_MISMATCH",
+                  "ERR_SIZE_MISMATCH",
+                  "ERR_BLOB_TOO_LARGE",
+                  "ERR_BUNDLE_TOO_LARGE",
+                  "ERR_LOCKED",
+                  "ERR_ROOT_NOT_ALLOWED",
+                  "ERR_ROOT_REQUIRED",
+                  "ERR_ROOT_NOT_DIR",
+                  "ERR_CONFIRM_DIGEST_MISMATCH",
+                  "ERR_CHECKS_FAILED",
+                  "ERR_PREIMAGE_CHANGED",
+                  "ERR_JOURNAL_CORRUPT",
+                  "ERR_EBUSY",
+                  "ERR_INVALID_PLAN",
+                  "ERR_INVALID_MANIFEST",
+                  "ERR_INVALID_PROFILE",
+                  "ERR_PREDICATE_UNKNOWN",
+                  "ERR_PREDICATE_PARAMS",
+                  "ERR_PROVIDER_FAILED",
+                  "ERR_GUARD_TIMEOUT",
+                  "ERR_GUARD_OUTPUT",
+                  "ERR_REF_OFFLINE",
+                  "ERR_NOT_CANONICAL",
+                  "ERR_UNSUPPORTED_OP",
+                  "ERR_INTERNAL"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "range": {
+                "type": "object",
+                "properties": {
+                  "start": {
+                    "type": "object",
+                    "properties": {
+                      "line": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "column": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "line",
+                      "column"
+                    ]
+                  },
+                  "end": {
+                    "type": "object",
+                    "properties": {
+                      "line": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "column": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "line",
+                      "column"
+                    ]
+                  }
+                },
+                "required": [
+                  "start",
+                  "end"
+                ]
+              }
+            },
+            "required": [
+              "severity",
+              "code",
+              "message",
+              "range"
+            ]
+          }
+        }
+      },
+      "required": [
+        "diagnostics"
+      ],
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        },
+        "__schema1": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          ]
+        },
+        "__schema2": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema2"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema2"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "axiom_roots_list",
     "description": "The frozen set of roots this server may read and write, as given by --root at startup.",
     "riskClass": "READ",

@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@codai/axiom-apply": "workspace:*",
+    "@codai/axiom-axm": "workspace:*",
     "@codai/axiom-canon": "workspace:*",
     "@codai/axiom-checks": "workspace:*",
     "@codai/axiom-plan": "workspace:*",

@@ -100,6 +100,7 @@ Full field reference: [docs/plan-format.md](docs/plan-format.md).
 | `axiom_apply` | destructive | Two-phase commit; requires `confirmDigest` |
 | `axiom_rollback` | destructive | Reverse a journal entry, scoped to its paths |
 | `axiom_manifest_diff` | read | Added / removed / changed between two manifests |
+| `axiom_axm_parse` | read | `.axm` DSL text → `Plan` with `{line, column}` diagnostics |
 | `axiom_roots_list` | read | The allowlisted roots |
 
 Inputs, outputs, resources and the error contract: [docs/mcp_api.md](docs/mcp_api.md).
@@ -113,11 +114,12 @@ Inputs, outputs, resources and the error contract: [docs/mcp_api.md](docs/mcp_ap
 | `@codai/axiom-plan` | Plan → ManifestBundle compiler, CAS store, `verifyBundle`, `diffManifests` |
 | `@codai/axiom-checks` | Predicate registry, fact providers, profiles `default` / `strict` / `permissive` — [docs/checks.md](docs/checks.md) |
 | `@codai/axiom-apply` | Containment, staging, two-phase commit, journal, rollback, lock, dry-run diff — [docs/apply.md](docs/apply.md) |
+| `@codai/axiom-axm` | `.axm` DSL → `Plan` parser (Chevrotain 13) with `{line, column}` diagnostics, plus `formatAxm` — [docs/syntax_spec.md](docs/syntax_spec.md) |
 | `@codai/axiom-mcp` | The published bin: MCP stdio server + CLI |
 | `@codai/axiom-testkit` | Private: golden fixtures, fast-check arbitraries, tmp-repo helpers |
 
 Dependency direction is enforced: `schema`, `canon` are leaves; `plan`, `checks`,
-`apply` depend only on those two; `mcp` depends on everything except `testkit`.
+`apply` depend only on those two; `axm` only on `schema`; `mcp` depends on everything except `testkit`.
 
 ## Invariants
 

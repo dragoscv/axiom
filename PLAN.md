@@ -112,7 +112,7 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 | S-201 | Git PR mode (spawn args array, `-F -` message, branch validation, explicit `git add -- <paths>`) | todo |
 | S-202 | `guard.external` predicate (brivio `check-*.mjs` contract, JSON stdout, timeout, allowlist) | todo |
 | S-203 | `axiom gate --stdin` hook mode (Claude Code + Copilot CLI payloads, exit 0/2, <120 ms) + docs to wire into `~/.copilot/hooks` | todo |
-| S-204 | `.axm` v2 grammar (Chevrotain 13) → Plan, position-bearing diagnostics | todo |
+| S-204 | `.axm` v2 grammar (Chevrotain 13) → Plan, position-bearing diagnostics | done — `packages/axm` (`parseAxm`/`formatAxm`, golden `examples/notes.axm`, 200-run roundtrip property), MCP `axiom_axm_parse`, `axiom compile <plan.axm>`; chevrotain is a lazy chunk so `cli.js+cli-main.js` stay under 950 KB |
 | S-205 | Langium LSP + VS Code extension (replaces `vscode-bridge`) | todo |
 | S-206 | Streamable HTTP transport (loopback, bearer) + `@modelcontextprotocol/conformance` job | todo |
 | S-207 | Optional `template` sources + `emitters-web` plugin (Next 16 / Hono 4 — golden-stack, not Next 14) | todo |

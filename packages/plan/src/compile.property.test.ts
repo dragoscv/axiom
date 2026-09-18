@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 import { compilePlan } from "./compile.js";
 import { verifyBundle } from "./verify.js";
 
-const segment = fc.stringMatching(/^[a-z0-9_-]{1,12}$/).filter((s) => !/[.\s]$/.test(s));
+// RelPathSchema rejects Windows reserved device names on every OS; keep the
+// generator inside the valid domain so a rare `con`/`nul`/`com1` does not flake.
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const segment = fc
+  .stringMatching(/^[a-z0-9_-]{1,12}$/)
+  .filter((s) => !/[.\s]$/.test(s) && !RESERVED.test(s));
 const ext = fc.constantFrom("", ".ts", ".md", ".json", ".txt");
 const relPath = fc
   .tuple(fc.array(segment, { minLength: 1, maxLength: 4 }), ext)

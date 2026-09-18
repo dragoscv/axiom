@@ -226,6 +226,19 @@ export const RootsListOutput = z.object({
   roots: z.array(z.object({ path: z.string(), writable: z.boolean(), hasGit: z.boolean() })),
 });
 
+const Pos = z.object({ line: z.int().positive(), column: z.int().positive() });
+export const AxmParseOutput = z.object({
+  plan: PlanSchema.optional(),
+  diagnostics: z.array(
+    z.object({
+      severity: z.enum(["error", "warning"]),
+      code: ErrorCodeSchema,
+      message: z.string(),
+      range: z.object({ start: Pos, end: Pos }),
+    }),
+  ),
+});
+
 const BundleOrRef = z
   .union([DigestRefSchema, LooseObject])
   .describe(
@@ -495,6 +508,29 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         removed: d.removed.slice(0, SUMMARY_LIST_MAX),
         changed: d.changed.slice(0, SUMMARY_LIST_MAX),
       },
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_axm_parse",
+    title: "Parse .axm source into a Plan",
+    description:
+      "Parse .axm v2 text into a Plan with 1-based {line, column} diagnostics; `plan` is present only when error-free. Read-only.",
+    inputSchema: {
+      source: z.string().describe(".axm source text"),
+    },
+    outputSchema: AxmParseOutput,
+    annotations: READ,
+    async handler(_ctx, { source }) {
+      guardPayloadSize("source", source);
+      const { parseAxm } = await import("./axm-lazy.js"); // lazy chunk (chevrotain)
+      const r = parseAxm(source);
+      return r.plan === undefined ? { diagnostics: r.diagnostics } : r;
+    },
+    summarize: (o) => ({
+      ok: o.plan !== undefined,
+      name: o.plan?.name,
+      diagnostics: o.diagnostics.slice(0, SUMMARY_LIST_MAX),
     }),
   }),
 

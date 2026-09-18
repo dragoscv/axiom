@@ -238,6 +238,23 @@
       }
     },
     {
+      "name": "axiom_axm_parse",
+      "risk": "READ",
+      "description": "Parse .axm v2 text into a Plan with 1-based {line, column} diagnostics; `plan` is present only when error-free. Read-only.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": ".axm source text"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      }
+    },
+    {
       "name": "axiom_roots_list",
       "risk": "READ",
       "description": "The frozen set of roots this server may read and write, as given by --root at startup.",

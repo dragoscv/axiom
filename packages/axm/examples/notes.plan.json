@@ -1,0 +1,42 @@
+{
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Plan",
+  "name": "notes-app",
+  "intent": "Scaffold a notes CLI with a README and drop the legacy shim",
+  "profile": "strict",
+  "capabilities": ["fs"],
+  "artifacts": [
+    {
+      "path": "src/notes.ts",
+      "mode": "0644",
+      "op": "create",
+      "source": {
+        "type": "inline",
+        "encoding": "utf8",
+        "content": "export interface Note { id: string; body: string }\nexport function render(n: Note): string {\n  return `{\"id\":\"${n.id}\"}`; // braces } and quotes \" are fine here\n}"
+      }
+    },
+    {
+      "path": "bin/notes",
+      "mode": "0755",
+      "op": "create",
+      "source": {
+        "type": "cas",
+        "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    },
+    { "path": "legacy/shim.js", "mode": "0644", "op": "delete" }
+  ],
+  "checks": [
+    { "id": "no-secrets", "predicate": "content.noSecrets", "params": {}, "severity": "error" },
+    {
+      "id": "readme-with-src",
+      "predicate": "repo.requireCompanion",
+      "params": {
+        "rules": [{ "when": "src/**", "expect": [{ "name": "readme", "match": "README.md" }] }]
+      },
+      "severity": "error"
+    }
+  ],
+  "metadata": { "ticket": "S-204", "tags": ["example", "golden"] }
+}

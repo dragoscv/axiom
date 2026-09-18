@@ -1,0 +1,34 @@
+// notes.axm — a small, complete .axm v2 plan used as the golden fixture.
+axiom "2"
+
+plan notes-app {
+  intent "Scaffold a notes CLI with a README and drop the legacy shim"
+  profile strict
+  capabilities [fs]
+
+  /* an inline artifact: braces and quotes inside the heredoc are plain bytes */
+  artifact "src/notes.ts" {
+    mode 0644
+    op create
+    inline <<TS
+export interface Note { id: string; body: string }
+export function render(n: Note): string {
+  return `{"id":"${n.id}"}`; // braces } and quotes " are fine here
+}
+TS
+  }
+
+  artifact "bin/notes" {
+    mode 0755
+    cas "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  artifact "legacy/shim.js" {
+    op delete
+  }
+
+  check no-secrets using content.noSecrets {}
+  check readme-with-src using repo.requireCompanion {"rules":[{"when":"src/**","expect":[{"name":"readme","match":"README.md"}]}]}
+
+  meta {"ticket":"S-204","tags":["example","golden"]}
+}

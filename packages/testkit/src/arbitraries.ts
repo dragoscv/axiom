@@ -4,11 +4,13 @@ import fc from "fast-check";
 type PlanArtifactInput = PlanInput["artifacts"][number];
 
 const SEGMENT_RE: RegExp = /^[a-z0-9_-]{1,12}$/;
+/** Windows device names that `RelPathSchema` rejects on every OS. */
+const RESERVED_RE: RegExp = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const EXTENSIONS: readonly string[] = ["", ".ts", ".tsx", ".md", ".json", ".txt", ".css"];
 
 /** One path segment: `[a-z0-9_-]{1,12}` (never `.`/`..`, no reserved names, no trailing dot/space). */
 export function segmentArb(): fc.Arbitrary<string> {
-  return fc.stringMatching(SEGMENT_RE);
+  return fc.stringMatching(SEGMENT_RE).filter((s) => !RESERVED_RE.test(s));
 }
 
 /** Valid `RelPath`: 1–4 segments joined by `/`, optional extension on the last one. */

@@ -41,7 +41,7 @@ AXIOM is the **transactional write gate for coding agents**: `Plan` → canonica
 ## Package boundaries (enforced by `check-package-deps`)
 
 `schema`, `canon` → no `@codai/*` deps · `plan`/`checks`/`apply` → only `schema`+`canon`
-· `testkit` → `schema`+`canon`+`plan` · `mcp` → anything except `testkit` · nobody
+· `axm` → `schema` only (`plan` as devDependency) · `testkit` → `schema`+`canon`+`plan` · `mcp` → anything except `testkit` · nobody
 depends on `mcp`. Workspace deps are `workspace:*`; **every external dep is
 `catalog:`** (versions live only in `pnpm-workspace.yaml`).
 

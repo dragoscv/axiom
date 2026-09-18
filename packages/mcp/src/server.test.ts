@@ -23,9 +23,9 @@ const plan = () =>
   makePlan({ "src/a.ts": "export const a = 1;\n", "README.md": "# hi\n" }, { name: "demo" });
 
 describe("tools/list", () => {
-  it("exposes 9 tools with annotations, input and output schemas", async () => {
+  it("exposes 10 tools with annotations, input and output schemas", async () => {
     const { tools } = await h.client.listTools();
-    expect(tools).toHaveLength(9);
+    expect(tools).toHaveLength(10);
     expect(tools.map((t) => t.name).sort()).toEqual(TOOL_DEFS.map((t) => t.name).sort());
     for (const t of tools) {
       expect(t.annotations).toMatchObject({
@@ -152,6 +152,45 @@ describe("full pipeline", () => {
       1,
     );
     expect(structured<{ roots: { writable: boolean }[] }>(roots).roots[0]?.writable).toBe(true);
+  });
+});
+
+describe("axiom_axm_parse", () => {
+  const AXM =
+    'axiom "2"\nplan demo {\n  intent "x"\n  artifact "src/a.ts" {\n    inline <<EOF\nexport const a = 1;\nEOF\n  }\n}\n';
+
+  it("parses .axm text into a Plan that axiom_plan_compile accepts", async () => {
+    const r = await h.call("axiom_axm_parse", { source: AXM });
+    expect(r.isError).toBeUndefined();
+    const out = structured<{ plan?: { name: string }; diagnostics: unknown[] }>(r);
+    expect(out.diagnostics).toEqual([]);
+    expect(out.plan?.name).toBe("demo");
+    const c = await h.call("axiom_plan_compile", { plan: out.plan });
+    expect(c.isError).toBeUndefined();
+    expect(structured<ManifestBundle>(c).manifest.artifacts.map((a) => a.path)).toEqual([
+      "src/a.ts",
+    ]);
+    expect(JSON.parse(textOf(r))).toMatchObject({ ok: true, name: "demo" });
+  });
+
+  it("returns positioned diagnostics (not isError) on a syntax error", async () => {
+    const r = await h.call("axiom_axm_parse", {
+      source: 'axiom "2"\nplan demo {\n  intent 42\n}\n',
+    });
+    expect(r.isError).toBeUndefined();
+    const out = structured<{
+      plan?: unknown;
+      diagnostics: { code: string; range: { start: { line: number; column: number } } }[];
+    }>(r);
+    expect(out.plan).toBeUndefined();
+    expect(out.diagnostics[0]?.code).toBe("ERR_INVALID_PLAN");
+    expect(out.diagnostics[0]?.range.start).toEqual({ line: 3, column: 10 });
+  });
+
+  it("oversized source → ERR_BUNDLE_TOO_LARGE", async () => {
+    const r = await h.call("axiom_axm_parse", { source: "x".repeat(BUNDLE_BYTES_MAX + 1) });
+    expect(r.isError).toBe(true);
+    expect(structured<{ code: string }>(r).code).toBe("ERR_BUNDLE_TOO_LARGE");
   });
 });
 

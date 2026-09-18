@@ -1,0 +1,43 @@
+{
+  "name": "@codai/axiom-axm",
+  "version": "2.0.0",
+  "description": "AXIOM v2 `.axm` front-end: Chevrotain lexer + CST parser that compiles the .axm DSL 1:1 into a Plan, with position-bearing diagnostics and a deterministic inverse printer",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.14"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codai/axiom-schema": "workspace:*",
+    "chevrotain": "catalog:"
+  },
+  "devDependencies": {
+    "@codai/axiom-plan": "workspace:*",
+    "fast-check": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

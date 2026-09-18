@@ -32,7 +32,7 @@ S-113,story,1,codai spec/tools.json RiskClass entries,done,agent,S-107,parity te
 S-201,story,2,Git PR mode no-shell,todo,agent,S-106,fuzz: no arg reaches shell,
 S-202,story,2,guard.external predicate,todo,agent,S-105,brivio guard runs via axiom,
 S-203,story,2,axiom gate --stdin hook mode,todo,agent,S-105,p95 <120ms; both payload casings,
-S-204,story,2,.axm v2 Chevrotain parser,todo,agent,S-102,parses spec + examples w/ positions,
+S-204,story,2,.axm v2 Chevrotain parser,done,agent,S-102,parses spec + examples w/ positions,packages/axm: parseAxm/formatAxm + golden fixture + roundtrip property; MCP axiom_axm_parse; axiom compile plan.axm; chevrotain lazy chunk keeps bundle budget
 S-205,story,2,Langium LSP + VS Code ext,todo,agent,S-204,completions for predicate ids,
 S-206,story,2,Streamable HTTP + conformance,todo,agent,S-107,0 unexpected conformance failures,
 S-207,story,2,template sources + emitters-web (Next16/Hono4),todo,agent,S-104,golden fixtures,
