@@ -51,7 +51,9 @@ const source = fc.oneof(
   digest.map((d) => ({ type: "cas" as const, digest: d })),
   fc
     .tuple(
-      fc.stringMatching(/^[a-z0-9]{1,8}(\.[a-z]{2,3})?$/),
+      // Leading letter: an all-digit host is parsed as an IPv4 number by WHATWG URL
+      // and values like "08" (invalid octal) are rejected by z.url().
+      fc.stringMatching(/^[a-z][a-z0-9]{0,7}(\.[a-z]{2,3})?$/),
       fc.stringMatching(/^[a-z0-9]{1,8}$/),
       digest,
     )
