@@ -42,7 +42,8 @@ export default defineConfig([
       alwaysBundle: [/.*/],
       // `./axm-lazy.js` stays a verbatim dynamic import so the .axm parser never
       // enters the eager bundle (and no shared schema/zod chunk gets split out).
-      neverBundle: [/^node:/, /axm-lazy/],
+      // Same for `./gate-lazy.js`: the hook must not pay for the SDK/server code.
+      neverBundle: [/^node:/, /axm-lazy/, /gate-lazy/],
     },
   },
   {
@@ -53,6 +54,19 @@ export default defineConfig([
     entry: { "axm-lazy": "src/axm-lazy.ts" },
     dts: false,
     clean: false,
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone PreToolUse hook chunk (`axiom gate --stdin`): schema + zod + checks + apply
+    // containment, no MCP SDK. Loaded straight from `cli.ts`, bypassing `cli-main`.
+    entry: { "gate-lazy": "src/gate-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
       neverBundle: [/^node:/],

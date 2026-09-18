@@ -161,6 +161,22 @@
           "confirmDigest": {
             "description": "Must equal bundle.manifestDigest",
             "type": "string"
+          },
+          "mode": {
+            "description": "fs (default) writes files; pr additionally creates a git branch and commits exactly the touched paths (no push, no PR creation)",
+            "type": "string",
+            "enum": [
+              "fs",
+              "pr"
+            ]
+          },
+          "branch": {
+            "description": "pr mode: branch name (default axiom/<name>/<digest12>)",
+            "type": "string"
+          },
+          "commitMessage": {
+            "description": "pr mode: commit message (passed to git on stdin)",
+            "type": "string"
           }
         },
         "required": [

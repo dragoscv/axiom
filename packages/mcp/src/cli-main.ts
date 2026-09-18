@@ -24,9 +24,11 @@ Usage:
 	axiom verify <bundle.json>
 	axiom check <bundle.json> --root <dir> [--profile <name>] [--json]
 	axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
+                                         [--pr [--branch <name>] [--message <text>]]
 	axiom rollback <digest> --root <dir>
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
+  axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level ...]   (PreToolUse hook; exit 0 allow / 2 deny)
 	axiom --version | --help
 
 Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
@@ -197,6 +199,9 @@ async function cmdApply(argv: string[]): Promise<number> {
     profile: { type: "string" },
     confirm: { type: "string" },
     "dry-run": { type: "boolean" },
+    pr: { type: "boolean" },
+    branch: { type: "string" },
+    message: { type: "string" },
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("apply: <bundle.json> is required");
@@ -216,7 +221,7 @@ async function cmdApply(argv: string[]): Promise<number> {
   const applyOpts: Parameters<typeof apply>[0] = {
     bundle,
     root: rootReal,
-    mode: dryRun ? "dry-run" : "fs",
+    mode: dryRun ? "dry-run" : values.pr === true ? "pr" : "fs",
     preChecks: async () => {
       const report = await runChecks({
         bundle,
@@ -230,6 +235,8 @@ async function cmdApply(argv: string[]): Promise<number> {
     },
   };
   if (!dryRun && values.confirm !== undefined) applyOpts.confirmDigest = values.confirm;
+  if (values.branch !== undefined) applyOpts.branch = values.branch;
+  if (values.message !== undefined) applyOpts.commitMessage = values.message;
   const result = await apply(applyOpts);
   if (result.status === "applied" || result.status === "noop") await saveManifest(rootReal, bundle);
   out(result);
@@ -265,6 +272,15 @@ async function cmdSchema(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
+/** Reachable when `main()` is called as a library; `cli.ts` short-circuits `gate` to the lazy chunk. */
+async function cmdGate(argv: string[]): Promise<number> {
+  const { gateMain } = await import("./gate-lazy.js");
+  const r = await gateMain(argv);
+  for (const line of r.stderr) console.error(line);
+  if (r.stdout !== undefined) console.log(r.stdout);
+  return r.exitCode;
+}
+
 const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   mcp: cmdMcp,
   compile: cmdCompile,
@@ -274,6 +290,7 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   rollback: cmdRollback,
   diff: cmdDiff,
   schema: cmdSchema,
+  gate: cmdGate,
 };
 
 export async function main(argv: readonly string[], version: string): Promise<number> {

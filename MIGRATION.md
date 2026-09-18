@@ -36,7 +36,7 @@ choice. There is nothing in a v1 manifest whose integrity v2 could vouch for.
 | HTTP server on `:3411` (`POST /parse`, `/generate`, `/check`, `/apply`, …) | MCP **stdio** server: `npx @codai/axiom-mcp mcp --root <dir>`. Streamable HTTP is v2.1 (S-206). |
 | `axiom_generate` | `axiom_plan_compile` |
 | `axiom_check` | `axiom_check` (same name; input is a `ManifestBundle`, output is a `CheckReport` with `verdict: pass\|fail\|error`) |
-| `axiom_apply` (mode `fs` / `pr`) | `axiom_apply` — **requires `confirmDigest === bundle.manifestDigest`** and a `root` inside the server's `--root` allowlist. `mode: "pr"` is v2.1 (S-201). |
+| `axiom_apply` (mode `fs` / `pr`) | `axiom_apply` — **requires `confirmDigest === bundle.manifestDigest`** and a `root` inside the server's `--root` allowlist. `mode: "pr"` creates a branch and commits the touched paths without a shell (no push, no PR creation). |
 | `axiom_reverse` / reverse-IR | Removed. `axiom_repo_snapshot` is planned for v2.2 (S-304). |
 | `axiom_diff` (JSON-Patch between IRs) | `axiom_manifest_diff` (added / removed / changed artifacts between two manifests). |
 | `AXIOM_REPO_ROOT` env var, `.git` walk-up | Removed. Roots are an explicit `--root` allowlist; no `cwd` or env fallback. |

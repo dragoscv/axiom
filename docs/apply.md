@@ -68,7 +68,7 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
   a snapshotting filesystem.
 - **Backups are not version control.** `.axiom/backup/` keeps pre-images for the
   last `keepBackups` manifests (default 3), then prunes.
-- **No git operations.** `mode: pr` is a v2.1 item; v2.0 writes files only.
+- **No network.** `mode: pr` never pushes or opens a pull request (see below).
 - **`ref` sources are not fetched** (`ERR_REF_OFFLINE`); only inline blobs and the
   local CAS.
 - **Directory `fsync` is skipped on Windows**; a power loss in the milliseconds
@@ -151,6 +151,62 @@ as differing without a hunk), removes staging and returns
 `status: applied, files[], diff`. The diff is capped at 1 MiB. No journal is
 written, no lock file remains, no marker is created. The `manifestDigest` in the
 result is the value to pass as `confirmDigest`.
+
+## PR mode (`mode: "pr"`)
+
+`mode: pr` wraps the normal `fs` two-phase apply in a git branch + commit. It
+is the v2 replacement for v1's `applyPR`, which spawned `git` with `shell: true`
+and a caller-supplied branch name (command injection). Sequence:
+
+1. **Branch name** — `options.branch` or the deterministic default
+  `axiom/<manifest.name>/<manifestDigest hex 0..12>` (no timestamps). It must
+  match `^[A-Za-z0-9._/-]{1,120}$` with no `..`, `//`, `@{`, leading `-`/`/`,
+  trailing `/`, `.` or `.lock`, and then pass `git check-ref-format --branch
+  <name>` (as an argv element). Anything else → `ERR_GIT_BRANCH_INVALID`, and
+  no git process is spawned for the syntactic rejects.
+2. `git rev-parse --show-toplevel` must be the root itself (realpath, case
+  insensitive on Windows) → else `ERR_GIT_NOT_REPO`. A subdirectory of a repo
+  is rejected on purpose: artifact paths are relative to the root.
+3. `git status --porcelain -- <touched paths>` must be empty → else
+  `ERR_GIT_DIRTY` with the dirty list in `details`. Only the paths the
+  manifest touches are inspected; other agents' uncommitted work elsewhere in
+  the tree is left alone and is **not** committed.
+4. `refs/heads/<branch>` must not exist → else `ERR_GIT_BRANCH_EXISTS`.
+5. `git switch -c <branch>`, then the ordinary fs apply (lock, staging,
+  journal, TOCTOU check, rename, marker). If that fails or rolls back, axiom
+  switches back to the previous branch and deletes the new one (best effort)
+  and returns the fs result unchanged.
+6. `git add -- <touched paths>` (explicit paths only — this stages deletions of
+  tracked files too), `git commit --quiet -F -` with the message on **stdin**
+  (default: `axiom: apply <name> (<digest12>)` + `Manifest:`/`Plan:` trailers),
+  `git rev-parse HEAD`. If the commit fails, the fs apply is rolled back from
+  its journal and the branch dropped; the result is `rolled-back` with the git
+  error. Hooks (`pre-commit`, `commit-msg`) are **honoured** — a hook that
+  rejects the commit rolls the apply back.
+7. `result.git = { branch, commit, compareUrl? }`. `compareUrl` is derived from
+  `git remote get-url origin` when it is GitHub
+  (`/compare/<default>...<branch>?expand=1`, default branch from
+  `refs/remotes/origin/HEAD`, fallback `main`) or GitLab
+  (`/-/merge_requests/new?merge_request[source_branch]=<branch>`); otherwise
+  absent.
+
+What PR mode does **not** do: push, open a pull request, touch the network, or
+run `git` through a shell. Every invocation is
+`spawn("git", args, { shell: false, windowsHide: true, cwd: root, env })` with
+the env reduced to `PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT`, `TEMP`/`TMP`
+and `GIT_*` minus `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`, plus
+`GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=echo`, `LC_ALL=C` so nothing can block on
+a prompt. A git call that exits non-zero → `ERR_GIT_FAILED` (first stderr line
+in the message, last 4 KiB in `details.stderr`); no `git` on `PATH` →
+`ERR_GIT_NOT_FOUND`; 60 s timeout per call. To publish the branch afterwards:
+
+```
+git push -u origin <branch>
+gh pr create --head <branch>      # or open result.git.compareUrl
+```
+
+Idempotency is unchanged: re-applying an already-applied digest is `noop` and
+creates no branch.
 
 ## Windows notes
 

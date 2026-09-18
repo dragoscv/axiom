@@ -416,10 +416,24 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       root: RootArg,
       profile: ProfileArg,
       confirmDigest: z.string().optional().describe("Must equal bundle.manifestDigest"),
+      mode: z
+        .enum(["fs", "pr"])
+        .optional()
+        .describe(
+          "fs (default) writes files; pr additionally creates a git branch and commits exactly the touched paths (no push, no PR creation)",
+        ),
+      branch: z
+        .string()
+        .optional()
+        .describe("pr mode: branch name (default axiom/<name>/<digest12>)"),
+      commitMessage: z
+        .string()
+        .optional()
+        .describe("pr mode: commit message (passed to git on stdin)"),
     },
     outputSchema: ApplyResultSchema,
     annotations: WRITE,
-    async handler(ctx, { bundle, root, profile, confirmDigest }) {
+    async handler(ctx, { bundle, root, profile, confirmDigest, mode, branch, commitMessage }) {
       const parsed = parseBundle(bundle);
       if (confirmDigest !== parsed.manifestDigest) {
         throw new AxiomError(
@@ -437,8 +451,10 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       const result = await apply({
         bundle: parsed,
         root: rootReal,
-        mode: "fs",
+        mode: mode ?? "fs",
         confirmDigest,
+        ...(branch === undefined ? {} : { branch }),
+        ...(commitMessage === undefined ? {} : { commitMessage }),
         preChecks: () => checkBundle(ctx, parsed, profile, rootReal),
       });
       if (result.status === "applied" || result.status === "noop") {

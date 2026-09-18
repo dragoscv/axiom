@@ -29,9 +29,9 @@ S-110,story,1,Stryker mutation on canon/contain/predicates >=85%,blocked,agent,S
 S-111,story,1,Docs + .github/instructions + skills,done,agent,S-107,check-tool-parity green,
 S-112,story,1,Port/delete v1 tests,done,agent,S-106,0 failing 0 unexplained skips,audit docs/research/2026-09-18-v1-test-audit.md: 71 covered 14 differently 41 dropped 8 gaps -> G1-G5 added; 1 skip (G3 win32 chmod advisory) verified on linux
 S-113,story,1,codai spec/tools.json RiskClass entries,done,agent,S-107,parity test,codai has no external-tool entry type (parity.test.ts requires platforms/aliases) → emitted packages/mcp/spec/codai-tools.json in tools-v2.json shape + docs/integration/codai.md; plan_compile READ→ACT
-S-201,story,2,Git PR mode no-shell,todo,agent,S-106,fuzz: no arg reaches shell,
+S-201,story,2,Git PR mode no-shell,done,agent,S-106,fuzz: no arg reaches shell,2026-09-18 packages/apply/src/git.ts; injection corpus asserts spawn never called; spawn-arg snapshot shell=false; docs/apply.md PR section
 S-202,story,2,guard.external predicate,todo,agent,S-105,brivio guard runs via axiom,
-S-203,story,2,axiom gate --stdin hook mode,todo,agent,S-105,p95 <120ms; both payload casings,
+S-203,story,2,axiom gate --stdin hook mode,done,agent,S-105,p95 <120ms; both payload casings,packages/mcp/src/gate.ts + gate-lazy chunk (no SDK); both casings incl. Copilot toolArgs string; containment+RelPath+path.deny/allow+content.noSecrets/maxBytes; fail open unless --strict; in-process p95 5.5ms; e2e p50 ~150-194ms; check-gate-latency guard; docs/hooks.md
 S-204,story,2,.axm v2 Chevrotain parser,done,agent,S-102,parses spec + examples w/ positions,packages/axm: parseAxm/formatAxm + golden fixture + roundtrip property; MCP axiom_axm_parse; axiom compile plan.axm; chevrotain lazy chunk keeps bundle budget
 S-205,story,2,Langium LSP + VS Code ext,todo,agent,S-204,completions for predicate ids,
 S-206,story,2,Streamable HTTP + conformance,todo,agent,S-107,0 unexpected conformance failures,

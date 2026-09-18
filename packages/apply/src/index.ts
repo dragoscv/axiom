@@ -22,6 +22,19 @@ export {
 export type { DiffEntry } from "./diff.js";
 export { DIFF_CAP_BYTES, decodeText, diffOne, unifiedDiff } from "./diff.js";
 export { fileDigestOrAbsent, isContained, sha256Of } from "./fsx.js";
+export type { GitRunOptions, GitRunResult } from "./git.js";
+export {
+  buildCompareUrl,
+  compareUrlFor,
+  defaultBranchName,
+  defaultCommitMessage,
+  GIT_TIMEOUT_MS,
+  parseRemote,
+  runGit,
+  scrubEnv,
+  validateBranchName,
+  validateBranchNameSyntax,
+} from "./git.js";
 export {
   journalDir,
   journalPath,

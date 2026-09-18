@@ -39,9 +39,12 @@ Every bug here is a data-loss bug. Files: `contain.ts` (path containment),
 7. **Single writer.** Take `.axiom/lock` (O_EXCL create, pid + timestamp inside)
    for the whole apply; stale lock (dead pid) may be reclaimed, live lock →
    `ERR_LOCKED`.
-8. **No shell, no `cwd`.** `execFile`/`spawn` with args arrays only (there is no
-   process spawning in this package today — keep it that way unless PR mode
-   lands in v2.1); every path is resolved against the explicit root.
+8. **No shell, no `cwd`.** `execFile`/`spawn` with args arrays only. The ONLY
+   process spawning is `git.ts` → `runGit()` (PR mode): `spawn("git", args,
+   { shell: false, cwd: rootReal, env: scrubbed })`, branch names validated by
+   regex + `git check-ref-format --branch`, commit message on stdin (`-F -`).
+   Every new git call goes through `runGit`; every path is resolved against the
+   explicit root.
 9. **Windows is a first-class target.** Rename-over-existing needs the
    `fsx.replaceFile` helper (unlink+rename fallback), paths are compared
    case-insensitively for collisions, `EPERM` on rename is retried with backoff.

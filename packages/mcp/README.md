@@ -85,6 +85,34 @@ axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <diges
 axiom rollback <digest> --root .
 axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal>
+axiom gate    --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level warn]
 ```
 
 Exit codes: `0` ok · `1` verdict fail / apply failed · `2` usage or error. Non-`mcp` verbs print JSON to stdout.
+
+## Hook mode — `axiom gate --stdin`
+
+A PreToolUse hook for Claude Code, Copilot CLI and VS Code agent hooks. It reads **one** harness
+payload from stdin (both `{tool_name, tool_input, cwd}` and `{toolName, toolArgs, cwd}` casings;
+`toolArgs` may be a JSON string), extracts the write target(s) of `Write|Edit|MultiEdit|NotebookEdit`,
+`create_file|replace_string_in_file|insert_edit_into_file|apply_patch|multi_replace_string_in_file|edit_notebook_file`
+and generic `write|edit`, and runs **only** the fast predicates: containment + `RelPath` rules
+(`..`, `CON`, NTFS ADS → `ERR_CONTAINMENT` / `ERR_PATH_*`), `path.deny`, `path.allow`,
+`content.noSecrets` and `content.maxBytes` on the new content when the payload carries it.
+
+| outcome | exit | stdout | stderr |
+|---|---|---|---|
+| allow / unknown tool | `0` | — | — |
+| deny | `2` | `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
+| malformed payload, stdin timeout (2 s), internal error | `0` (**fail open**) | — | `AXIOM GATE WARN: …` |
+| same, with `--strict` | `2` | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: …` |
+
+Root = payload `cwd`, else `--root`, else the process cwd (the hook is the one place where cwd is
+acceptable: the harness spawns the hook in the project directory and owns that value).
+Profile = `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.axiom/gate-profile.json` →
+built-in `{ deny: [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"], noSecrets: true }`.
+Schema: `{ deny: string[], allow?: string[], noSecrets: boolean, maxBytes?: number }` (strict).
+
+`gate` is a separate lazy chunk (`dist/gate-lazy.js`, no MCP SDK): in-process p95 ≈ 5 ms per payload,
+end-to-end ≈ 150–200 ms including node startup; `check-gate-latency` guards p95 ≤ 250 ms.
+Wiring for each harness is in [`docs/hooks.md`](../../docs/hooks.md).

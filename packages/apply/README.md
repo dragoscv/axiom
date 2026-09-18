@@ -19,6 +19,14 @@ failure is an `AxiomError` code from `@codai/axiom-schema` surfaced in `ApplyRes
 - **Idempotent.** Same digest applied twice with matching on-disk content → `status: "noop"`.
 - **Crash-safe.** A journal left in `committing`/`rolling-back` is rolled back at the next `apply`; `rollback(root, digest)` is exposed for the CLI.
 - `mode: "dry-run"` runs phase 1 only, returns a unified diff (≤ 1 MiB) and leaves the tree untouched.
+- `mode: "pr"` wraps the fs apply in a git branch + commit (`git.ts`, spawn args array, **no shell**):
+  branch validated by regex + `git check-ref-format --branch`, default name `axiom/<name>/<digest12>`
+  (deterministic), touched paths must be clean (`git status --porcelain -- <paths>`), `git switch -c`,
+  fs apply, `git add -- <paths>` explicit only, `git commit --quiet -F -` with the message on stdin,
+  `result.git = { branch, commit, compareUrl? }`. Hooks are honoured. **No push, no PR creation, no
+  network** — run `gh pr create --head <branch>` afterwards. Failures: `ERR_GIT_NOT_REPO`, `ERR_GIT_DIRTY`,
+  `ERR_GIT_BRANCH_EXISTS`, `ERR_GIT_BRANCH_INVALID`, `ERR_GIT_NOT_FOUND`, `ERR_GIT_FAILED`; an fs or commit
+  failure rolls the apply back and drops the branch.
 
 ## Non-guarantees
 

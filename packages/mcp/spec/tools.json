@@ -537,6 +537,12 @@
                   "ERR_PROVIDER_FAILED",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
+                  "ERR_GIT_NOT_FOUND",
+                  "ERR_GIT_NOT_REPO",
+                  "ERR_GIT_DIRTY",
+                  "ERR_GIT_BRANCH_EXISTS",
+                  "ERR_GIT_BRANCH_INVALID",
+                  "ERR_GIT_FAILED",
                   "ERR_REF_OFFLINE",
                   "ERR_NOT_CANONICAL",
                   "ERR_UNSUPPORTED_OP",
@@ -956,6 +962,12 @@
                 "ERR_PROVIDER_FAILED",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
+                "ERR_GIT_NOT_FOUND",
+                "ERR_GIT_NOT_REPO",
+                "ERR_GIT_DIRTY",
+                "ERR_GIT_BRANCH_EXISTS",
+                "ERR_GIT_BRANCH_INVALID",
+                "ERR_GIT_FAILED",
                 "ERR_REF_OFFLINE",
                 "ERR_NOT_CANONICAL",
                 "ERR_UNSUPPORTED_OP",
@@ -1023,6 +1035,22 @@
         },
         "confirmDigest": {
           "description": "Must equal bundle.manifestDigest",
+          "type": "string"
+        },
+        "mode": {
+          "description": "fs (default) writes files; pr additionally creates a git branch and commits exactly the touched paths (no push, no PR creation)",
+          "type": "string",
+          "enum": [
+            "fs",
+            "pr"
+          ]
+        },
+        "branch": {
+          "description": "pr mode: branch name (default axiom/<name>/<digest12>)",
+          "type": "string"
+        },
+        "commitMessage": {
+          "description": "pr mode: commit message (passed to git on stdin)",
           "type": "string"
         }
       },
@@ -1186,6 +1214,12 @@
                 "ERR_PROVIDER_FAILED",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
+                "ERR_GIT_NOT_FOUND",
+                "ERR_GIT_NOT_REPO",
+                "ERR_GIT_DIRTY",
+                "ERR_GIT_BRANCH_EXISTS",
+                "ERR_GIT_BRANCH_INVALID",
+                "ERR_GIT_FAILED",
                 "ERR_REF_OFFLINE",
                 "ERR_NOT_CANONICAL",
                 "ERR_UNSUPPORTED_OP",
@@ -1710,6 +1744,12 @@
                   "ERR_PROVIDER_FAILED",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
+                  "ERR_GIT_NOT_FOUND",
+                  "ERR_GIT_NOT_REPO",
+                  "ERR_GIT_DIRTY",
+                  "ERR_GIT_BRANCH_EXISTS",
+                  "ERR_GIT_BRANCH_INVALID",
+                  "ERR_GIT_FAILED",
                   "ERR_REF_OFFLINE",
                   "ERR_NOT_CANONICAL",
                   "ERR_UNSUPPORTED_OP",

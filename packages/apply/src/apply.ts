@@ -37,6 +37,18 @@ import {
   sha256Of,
 } from "./fsx.js";
 import {
+  assertPathsClean,
+  assertRepoToplevel,
+  branchExists,
+  compareUrlFor,
+  currentBranch,
+  defaultBranchName,
+  defaultCommitMessage,
+  headCommit,
+  runGit,
+  validateBranchName,
+} from "./git.js";
+import {
   listJournals,
   newJournal,
   readJournal,
@@ -67,12 +79,16 @@ export interface StagedTree {
 export interface ApplyOptions {
   bundle: ManifestBundle;
   root: string;
-  mode: "dry-run" | "fs";
+  mode: "dry-run" | "fs" | "pr";
   confirmDigest?: string;
   keepBackups?: number;
   preChecks?: (staged: StagedTree) => Promise<CheckReport>;
   /** Test hook: override the lock wait (ms). */
   lockTimeoutMs?: number;
+  /** PR mode: branch to create (default `axiom/<name>/<digest12>`). */
+  branch?: string;
+  /** PR mode: commit message, passed to git on stdin (`-F -`). */
+  commitMessage?: string;
 }
 
 export const JOURNAL_FSYNC_EVERY = 32;
@@ -441,6 +457,45 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     return fail(rootReal, err);
   }
 
+  // PR mode preflight (§4.3): validate branch, repo toplevel, clean touched paths, create branch.
+  const touched = bundle.manifest.artifacts.map((a) => a.path);
+  let prBranch: string | undefined;
+  let prPrevBranch: string | undefined;
+  if (mode === "pr") {
+    try {
+      const branch =
+        options.branch ?? defaultBranchName(bundle.manifest.name, bundle.manifestDigest);
+      await validateBranchName(rootReal, branch);
+      await assertRepoToplevel(rootReal);
+      await assertPathsClean(rootReal, touched);
+      if (await branchExists(rootReal, branch)) {
+        throw new AxiomError("ERR_GIT_BRANCH_EXISTS", "branch already exists", {
+          details: { branch },
+        });
+      }
+      prPrevBranch = await currentBranch(rootReal);
+      await runGit(rootReal, ["switch", "--quiet", "-c", branch]);
+      prBranch = branch;
+    } catch (err) {
+      return fail(rootReal, err);
+    }
+  }
+  /** Best-effort: return to the previous branch and drop the axiom branch. */
+  const abandonBranch = async (): Promise<void> => {
+    if (prBranch === undefined) return;
+    try {
+      await runGit(
+        rootReal,
+        prPrevBranch === undefined
+          ? ["switch", "--quiet", "-"]
+          : ["switch", "--quiet", prPrevBranch],
+      );
+      await runGit(rootReal, ["branch", "--quiet", "-D", prBranch]);
+    } catch {
+      /* best-effort */
+    }
+  };
+
   let lockErr: unknown;
   let result: ApplyResult | undefined;
   try {
@@ -549,7 +604,64 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
   } catch (err) {
     lockErr = err;
   }
-  if (result === undefined) return fail(rootReal, lockErr);
+  if (result === undefined) {
+    await abandonBranch();
+    return fail(rootReal, lockErr);
+  }
+
+  if (prBranch !== undefined) {
+    if (result.status !== "applied") {
+      // failed / rolled-back / noop: nothing to commit, leave the tree on the original branch.
+      await abandonBranch();
+    } else {
+      try {
+        const paths = result.files
+          .filter((f) => f.status === "written" || f.status === "deleted")
+          .map((f) => f.path);
+        if (paths.length > 0) await runGit(rootReal, ["add", "--", ...paths]);
+        const message =
+          options.commitMessage ??
+          defaultCommitMessage(
+            bundle.manifest.name,
+            bundle.manifestDigest,
+            bundle.manifest.planDigest,
+          );
+        await runGit(rootReal, ["commit", "--quiet", "-F", "-"], { stdin: message });
+        const commit = await headCommit(rootReal);
+        const git: NonNullable<ApplyResult["git"]> = { branch: prBranch, commit };
+        const compareUrl = await compareUrlFor(rootReal, prBranch);
+        if (compareUrl !== undefined) git.compareUrl = compareUrl;
+        result = { ...result, git };
+      } catch (err) {
+        // Commit did not happen: undo the fs apply and the branch, report rolled-back.
+        let rbErr: unknown;
+        try {
+          await withLock(
+            rootReal,
+            bundle.manifestDigest,
+            async () => {
+              const j = await readJournal(rootReal, bundle.manifestDigest);
+              if (j !== undefined) await rollbackJournal(rootReal, j);
+              await fs.rm(appliedPath(rootReal, bundle.manifestDigest), { force: true });
+            },
+            options.lockTimeoutMs,
+          );
+        } catch (e) {
+          rbErr = e;
+        }
+        await abandonBranch();
+        const base2 = fail(rootReal, err, rbErr === undefined ? "rolled-back" : "failed");
+        if (result.journal !== undefined) base2.journal = result.journal;
+        if (rbErr !== undefined) {
+          base2.error = {
+            ...toApplyError(err),
+            message: `${toApplyError(err).message}; rollback failed: ${toApplyError(rbErr).message}`,
+          };
+        }
+        return base2;
+      }
+    }
+  }
   // Self-check: the result we hand out must be schema-valid.
   const v = ApplyResultSchema.safeParse(result);
   return v.success
