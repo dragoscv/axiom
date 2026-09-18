@@ -355,30 +355,35 @@ describe("TOCTOU and rollback", () => {
           const n = files.filter((f) => f.op !== "delete" || pre[f.path] !== undefined).length;
           const k = (kSeed % n) + 1;
 
+          // Commit-phase mutations of the user tree are: rename(staging→target) for
+          // create/overwrite and unlink(target) for delete. Inject at the k-th one.
           const realRename = fs.rename.bind(fs);
+          const realUnlink = fs.unlink.bind(fs);
           let calls = 0;
-          const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-            // Only count renames INTO the user tree (targets outside .axiom/), i.e. commit-phase renames.
-            const toStr = String(to);
-            const isCommitRename =
-              !toStr.includes(`${path.sep}.axiom${path.sep}`) ||
-              toStr.includes(`${path.sep}backup${path.sep}`);
-            if (isCommitRename) {
-              calls++;
-              if (calls === k) {
-                const e = new Error("injected") as NodeJS.ErrnoException;
-                e.code = "EIO";
-                throw e;
-              }
+          const inject = (): void => {
+            calls++;
+            if (calls === k) {
+              const e = new Error("injected") as NodeJS.ErrnoException;
+              e.code = "EIO";
+              throw e;
             }
+          };
+          const inUserTree = (p: string): boolean => !p.includes(`${path.sep}.axiom${path.sep}`);
+          const spyRename = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+            if (inUserTree(String(to))) inject();
             return realRename(from, to);
+          });
+          const spyUnlink = vi.spyOn(fs, "unlink").mockImplementation(async (p) => {
+            if (inUserTree(String(p))) inject();
+            return realUnlink(p);
           });
           try {
             const r = await fsApply(bundle, root);
             expect(r.status).toBe("rolled-back");
             expect(r.error?.code).toBe("ERR_INTERNAL");
           } finally {
-            spy.mockRestore();
+            spyRename.mockRestore();
+            spyUnlink.mockRestore();
           }
           expect(await snapshot(root)).toEqual(before);
           expect(enc.encode("").length).toBe(0);

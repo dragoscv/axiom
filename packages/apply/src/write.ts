@@ -32,6 +32,27 @@ export async function renameRetry(from: string, to: string, relPath?: string): P
   });
 }
 
+/** `unlink` with the same EBUSY/EPERM/EACCES retry policy as {@link renameRetry}. */
+export async function unlinkRetry(target: string, relPath?: string): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt++) {
+    try {
+      await fs.unlink(nsPath(target));
+      return;
+    } catch (err) {
+      lastErr = err;
+      const c = errnoCode(err);
+      if (c !== "EBUSY" && c !== "EPERM" && c !== "EACCES") throw err;
+      await sleep(RENAME_BACKOFF_MS * (attempt + 1));
+    }
+  }
+  throw new AxiomError("ERR_EBUSY", "target busy; unlink failed after retries", {
+    ...(relPath === undefined ? {} : { path: relPath }),
+    cause: lastErr,
+    details: { target },
+  });
+}
+
 /**
  * tmp (same dir, `.axiom-tmp-<rand>`, O_EXCL) → write → fsync → rename onto
  * target → re-read and re-hash. Lifted from v1 `writeAndVerify`, silent.

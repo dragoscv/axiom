@@ -46,7 +46,7 @@ import {
 } from "./journal.js";
 import { withLock } from "./lock.js";
 import { realpathNative } from "./realpath.js";
-import { renameRetry, writeAtomic } from "./write.js";
+import { renameRetry, unlinkRetry, writeAtomic } from "./write.js";
 
 export interface StagedFile {
   path: string;
@@ -353,7 +353,9 @@ async function commit(rootReal: string, staged: StagedTree, journal: Journal): P
     if (f.op === "delete") {
       if (f.preImage !== "absent") {
         step.backup = await backupPreImage(rootReal, j.manifestDigest, f.path, target);
-        await renameRetry(target, path.join(rootReal, ...step.backup.split("/")), f.path);
+        // The backup may be a hardlink to `target`; POSIX rename(target, backup) would then
+        // be a no-op and leave the file in place. The pre-image is already preserved, so unlink.
+        await unlinkRetry(target, f.path);
       }
     } else {
       if (f.op === "overwrite" && f.preImage !== "absent") {
