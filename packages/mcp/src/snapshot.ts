@@ -135,7 +135,7 @@ function modeOf(mode: number): "0644" | "0755" {
  * N paths of the full sorted inventory, deterministically.
  */
 export async function snapshotRoot(
-  rootReal: string,
+  root: string,
   opts: SnapshotOptions = {},
 ): Promise<RepoSnapshot> {
   if (opts.followSymlinks === true) {
@@ -144,6 +144,10 @@ export async function snapshotRoot(
       "followSymlinks is not supported (symlinks are recorded, never followed)",
     );
   }
+  // Symlink containment compares `realpath(link)` against the root, so the root must be
+  // canonical too — on macOS `mkdtemp` hands out `/var/folders/…` while realpath yields
+  // `/private/var/…`, and a link that is inside would otherwise be recorded as outside.
+  const rootReal = await realpath(root);
   const maxFiles = Math.min(opts.maxFiles ?? SNAPSHOT_MAX_FILES_DEFAULT, SNAPSHOT_MAX_FILES_CAP);
   const maxBytes = opts.maxBytes ?? SNAPSHOT_MAX_BYTES_DEFAULT;
   if (maxFiles < 1 || maxBytes < 0) {
