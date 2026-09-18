@@ -117,3 +117,43 @@ jobs:
           name: golden-digests-${{ matrix.os }}
           path: packages/testkit/golden/*.expected.json
           retention-days: 7
+
+  conformance:
+    # MCP conformance over Streamable HTTP (PLAN.md S-206). Ubuntu only: the suite is
+    # transport-level and OS-independent; the quality matrix already covers the OS axis.
+    # `continue-on-error: false` — the local run is fully green (0 unexpected, 0 stale).
+    name: mcp conformance / ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: quality
+    continue-on-error: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (the harness spawns packages/mcp/dist/cli.js)
+        run: pnpm build
+
+      - name: Conformance (expected-failures baseline)
+        run: pnpm --filter @codai/axiom-conformance conformance --out packages/conformance/results
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-report
+          path: packages/conformance/results/
+          if-no-files-found: ignore
+          retention-days: 14

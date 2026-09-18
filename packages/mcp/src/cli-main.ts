@@ -20,6 +20,7 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 
 Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
+            [--http <host:port>] [--http-token-env <NAME>]
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
 	axiom verify <bundle.json>
   axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
@@ -34,6 +35,9 @@ Usage:
 
 Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
 The \`mcp\` verb speaks JSON-RPC on stdout and logs JSON lines on stderr; every other verb prints JSON to stdout.
+With --http it serves Streamable HTTP at http://<host:port>/mcp instead (port 0 = random; the URL is logged at
+info level). A non-loopback host requires a bearer token in the env var named by --http-token-env
+(default AXIOM_HTTP_TOKEN); loopback binds accept an optional token.
 A \`.axm\` plan with errors prints its diagnostics as JSON and exits 2.
 \`guard.external\` checks run only with --allow-guards AND a profile that sets facts.allowGuards; absolute
 commands must additionally appear in --guard-allowlist (relative ones must live under <root>/scripts/).
@@ -114,6 +118,8 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string", multiple: true },
     "log-level": { type: "string" },
+    http: { type: "string" },
+    "http-token-env": { type: "string" },
     ...GUARD_FLAGS,
   });
   const level = values["log-level"] ?? "warn";
@@ -127,6 +133,25 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const guards = guardOptions(values);
   if (guards.allowGuards)
     log.warn("external guards ENABLED (--allow-guards)", { allowlist: guards.guardAllowlist });
+  if (values.http !== undefined) {
+    const { parseHostPort, startHttp, HTTP_TOKEN_ENV_DEFAULT } = await import("./http-lazy.js");
+    const { host, port } = parseHostPort(values.http);
+    const tokenEnv = values["http-token-env"] ?? HTTP_TOKEN_ENV_DEFAULT;
+    const token = process.env[tokenEnv];
+    const httpOpts: Parameters<typeof startHttp>[1] = { host, port, log };
+    if (token !== undefined && token.length > 0) httpOpts.token = token;
+    const handle = await startHttp(() => createServer(policy, { log, guards }), httpOpts);
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        void handle.close().then(resolve);
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      process.stdin.on("end", stop);
+      process.stdin.resume();
+    });
+    return EXIT_OK;
+  }
   const server = createServer(policy, { log, guards });
   const transport = new StdioServerTransport();
   await server.connect(transport);

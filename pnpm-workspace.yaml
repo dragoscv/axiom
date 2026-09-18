@@ -11,6 +11,7 @@ catalog:
   "@biomejs/biome": 2.5.14
   "@changesets/cli": 3.0.3
   "@modelcontextprotocol/sdk": 1.30.0
+  "@modelcontextprotocol/conformance": 0.1.16
   fast-check: 4.10.1
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0

@@ -1,6 +1,6 @@
 # @codai/axiom-mcp
 
-MCP server (stdio) and CLI for AXIOM v2 — the transactional write gate for coding agents:
+MCP server (stdio or Streamable HTTP) and CLI for AXIOM v2 — the transactional write gate for coding agents:
 `Plan` → canonical `ManifestBundle` → set-level checks → hash-gated two-phase `apply` → journal.
 `dist/cli.js` (thin entry) + `dist/cli-main.js` (lazy-loaded engines, SDK and zod bundled in); no runtime dependencies.
 
@@ -8,6 +8,7 @@ MCP server (stdio) and CLI for AXIOM v2 — the transactional write gate for cod
 
 ```sh
 npx @codai/axiom-mcp mcp --root /abs/path/to/repo          # stdio MCP server
+npx @codai/axiom-mcp mcp --root /abs/path/to/repo --http 127.0.0.1:3411   # Streamable HTTP at /mcp
 npx @codai/axiom-mcp --help                                # CLI verbs
 ```
 
@@ -27,6 +28,31 @@ root it is the default. There is **no** env-var or `cwd` fallback (`ERR_ROOT_REQ
   }
 }
 ```
+
+### Streamable HTTP — `--http <host:port>`
+
+```sh
+axiom mcp --root /abs/repo --http 127.0.0.1:3411            # loopback, no token needed
+axiom mcp --root /abs/repo --http 0                          # random port; URL logged at info level
+AXIOM_HTTP_TOKEN=$(openssl rand -hex 32) axiom mcp --root /abs/repo --http 0.0.0.0:3411 --log-level info
+```
+
+- Endpoints: `POST /mcp` (an `initialize` opens a session and returns `Mcp-Session-Id`; every later
+  request must send it), `GET /mcp` (standalone SSE stream, one per session), `DELETE /mcp` (close the
+  session), `GET /health` → `{ ok, name, version }` (unauthenticated). Anything else is `404` JSON.
+- **Loopback by default.** A non-loopback host **refuses to start** unless a bearer token is present in
+  the env var named by `--http-token-env <NAME>` (default `AXIOM_HTTP_TOKEN`, ≥ 16 chars). Clients send
+  `Authorization: Bearer <token>`; the compare is constant-time. A token is optional on loopback.
+- DNS-rebinding protection is on for loopback binds (`Host` must be `<host>:<port>`, `localhost:<port>`
+  or `127.0.0.1:<port>`; otherwise `403`). Request bodies over 4 MiB are `413`.
+- Sessions idle for 30 minutes are evicted; each session has its own server instance (roots and guard
+  settings are shared). The transport lives in `dist/http-lazy.js`, loaded only with `--http`, and is
+  plain `node:http` — no express/hono at runtime.
+- VS Code: `{ "type": "http", "url": "http://127.0.0.1:3411/mcp" }`; add
+  `"headers": { "Authorization": "Bearer ${input:axiom-token}" }` when a token is set.
+
+Conformance: `packages/conformance` runs `@modelcontextprotocol/conformance server` against this transport
+in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 
 ### Claude Desktop — `claude_desktop_config.json`
 
@@ -84,6 +110,7 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 
 ```
 axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
+              [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
 axiom compile <plan.json> [-o out.json] [--store cas --root .]
 axiom verify  <bundle.json>
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...

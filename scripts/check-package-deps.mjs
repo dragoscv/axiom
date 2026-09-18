@@ -8,7 +8,8 @@
  *   axm                → only schema (+ plan as a devDependency for the compile-through test)
  *   testkit            → schema + canon + plan
  *   mcp                → anything EXCEPT testkit
- *   nobody depends on mcp
+ *   conformance        → mcp as a devDependency ONLY (private harness that spawns the built CLI)
+ *   nobody else depends on mcp
  *
  * Every `@codai/axiom-*` dep must be `workspace:*`; every external dep must be
  * `catalog:` (pnpm-workspace.yaml is the single version source).
@@ -28,11 +29,13 @@ const ALLOWED = {
   axm: ["schema"],
   testkit: ["schema", "canon", "plan"],
   mcp: ["schema", "canon", "plan", "checks", "apply", "axm"],
+  conformance: [],
 };
 
 /** devDependencies-only exceptions (test tooling that must not leak into runtime deps). */
 const DEV_ALLOWED = {
   axm: ["plan"],
+  conformance: ["mcp"],
 };
 
 const problems = [];
@@ -52,8 +55,10 @@ for (const name of pkgs) {
       if (dep.startsWith(SCOPE)) {
         const short = dep.slice(SCOPE.length);
         const devOk = section === "devDependencies" && (DEV_ALLOWED[name] ?? []).includes(short);
-        if (short === "mcp") {
-          problems.push(`packages/${name}: depends on ${dep} — nobody may depend on mcp`);
+        if (short === "mcp" && !devOk) {
+          problems.push(
+            `packages/${name}: depends on ${dep} — nobody may depend on mcp (conformance: devDependency only)`,
+          );
         } else if (short === "testkit" && name !== "testkit") {
           problems.push(`packages/${name}: depends on ${dep} — testkit is private test tooling`);
         } else if (!allowed.includes(short) && !devOk) {

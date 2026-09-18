@@ -50,7 +50,8 @@ export default defineConfig([
       // `./axm-lazy.js` stays a verbatim dynamic import so the .axm parser never
       // enters the eager bundle (and no shared schema/zod chunk gets split out).
       // Same for `./gate-lazy.js`: the hook must not pay for the SDK/server code.
-      neverBundle: [/^node:/, /axm-lazy/, /gate-lazy/],
+      // And `./http-lazy.js`: the Streamable HTTP transport is opt-in (`--http`).
+      neverBundle: [/^node:/, /axm-lazy/, /gate-lazy/, /http-lazy/],
     },
   },
   {
@@ -71,6 +72,19 @@ export default defineConfig([
     // Standalone PreToolUse hook chunk (`axiom gate --stdin`): schema + zod + checks + apply
     // containment, no MCP SDK. Loaded straight from `cli.ts`, bypassing `cli-main`.
     entry: { "gate-lazy": "src/gate-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone Streamable HTTP chunk (`axiom mcp --http`): the SDK's web-standard transport
+    // bridged onto node:http — no express/hono at runtime (asserted by http.test.ts).
+    entry: { "http-lazy": "src/http-lazy.ts" },
     dts: false,
     clean: false,
     plugins: [stripRegionMarkers],

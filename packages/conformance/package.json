@@ -1,0 +1,24 @@
+{
+  "name": "@codai/axiom-conformance",
+  "version": "2.0.0",
+  "private": true,
+  "description": "MCP conformance harness: starts `axiom mcp --http 127.0.0.1:0` and runs @modelcontextprotocol/conformance against it with an expected-failures baseline",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "scripts": {
+    "build": "node -e \"process.exit(0)\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "conformance": "node --import tsx/esm src/run.ts"
+  },
+  "devDependencies": {
+    "@codai/axiom-mcp": "workspace:*",
+    "@modelcontextprotocol/conformance": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

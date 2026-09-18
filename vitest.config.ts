@@ -10,6 +10,7 @@ export default defineConfig({
         "**/*.test.ts",
         "packages/_v1/**",
         "packages/testkit/**",
+        "packages/conformance/**",
         "packages/mcp/src/cli.ts",
         "packages/mcp/src/cli-main.ts",
       ],

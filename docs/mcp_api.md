@@ -3,8 +3,8 @@
 > The v1 HTTP demo API this file used to describe is archived at
 > `docs/archive/v1/mcp_api-v1-http.md`. v1 is superseded (see `PLAN.md` §0).
 
-`@codai/axiom-mcp` exposes the transactional write gate as an MCP **stdio** server
-(streamable HTTP arrives in v2.1). Every tool carries `annotations` and an
+`@codai/axiom-mcp` exposes the transactional write gate as an MCP **stdio** server by
+default, or as a **Streamable HTTP** server with `--http` (see Transports). Every tool carries `annotations` and an
 `outputSchema`; stdout is JSON-RPC only, logs go to stderr at `warn`. Roots are an
 explicit allowlist (`--root <dir>`, repeatable) — there is no `cwd` fallback.
 
@@ -35,6 +35,29 @@ tools under their `APPROVAL_MATRIX` — see `docs/integration/codai.md`.
 
 `axiom://journal/<root-id>` (recent journal entries), `axiom://profile/<name>`
 (built-in check profiles: `default`, `strict`, `permissive`).
+
+## Transports
+
+| Transport | Start | Notes |
+|-----------|-------|-------|
+| stdio (default) | `axiom mcp --root <dir>` | JSON-RPC on stdout, JSON-line logs on stderr. |
+| Streamable HTTP | `axiom mcp --root <dir> --http <host:port> [--http-token-env NAME]` | `POST/GET/DELETE /mcp`, `GET /health`; `--http 0` = random loopback port, URL in the `http listening` stderr log line (`--log-level info`). |
+
+HTTP rules (v2-architecture §5.4): bind is loopback (`127.0.0.1`) unless a host is given; a
+**non-loopback host requires a bearer token** from the env var named by `--http-token-env`
+(default `AXIOM_HTTP_TOKEN`) or the server refuses to start (`ERR_INTERNAL`, exit 2). Clients send
+`Authorization: Bearer <token>` (constant-time compare; `401` + `WWW-Authenticate` otherwise).
+One `StreamableHTTPServerTransport` + one server instance per session (`Mcp-Session-Id`, UUID);
+a non-`initialize` request without the header is `400`, an unknown/expired id is `404`; idle
+sessions are evicted after 30 min. DNS-rebinding protection (Host allowlist) is on for loopback
+binds; bodies over 4 MiB are `413`. The transport is a lazy chunk (`dist/http-lazy.js`) built on
+`node:http` only — the stdio path and the bundle-size budget are unaffected.
+
+Conformance: `packages/conformance` starts `axiom mcp --http 127.0.0.1:0` and runs
+`@modelcontextprotocol/conformance server --url … --expected-failures baseline.yml` in CI
+(ubuntu). The baseline lists the scenarios AXIOM fails by design (prompts, logging, subscribe,
+sampling, elicitation, progress, non-text content, `test://` fixtures); the run fails on any
+unexpected failure and on any stale baseline entry.
 
 ## Error contract
 

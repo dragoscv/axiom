@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * check-changeset-present — a change under packages/(star)/src (not _v1, not
- * the private testkit) must ship with a `.changeset/*.md` entry, or the
+ * the private testkit/conformance) must ship with a `.changeset/*.md` entry, or the
  * release has no changelog and no version bump.
  *
  * Diff base: `origin/main...HEAD`; falls back to `HEAD~1` (shallow clones,
@@ -38,7 +38,8 @@ const working = git("diff", "--name-only", "HEAD") ?? "";
 const changed = new Set([...diff.split("\n"), ...working.split("\n")].filter(Boolean));
 
 const srcTouched = [...changed].filter(
-  (f) => /^packages\/(?!_v1\/|testkit\/)[^/]+\/src\//.test(f) && !/\.test\.ts$/.test(f),
+  (f) =>
+    /^packages\/(?!_v1\/|testkit\/|conformance\/)[^/]+\/src\//.test(f) && !/\.test\.ts$/.test(f),
 );
 
 if (srcTouched.length === 0) {

@@ -1,0 +1,36 @@
+# Expected-failures baseline for `@modelcontextprotocol/conformance server` (0.1.16, suite "active")
+# against `axiom mcp --http`. Format: https://github.com/modelcontextprotocol/conformance#expected-failures
+# The CLI exits 1 on any failure NOT listed here AND on any entry that starts passing (stale) —
+# so removing a capability gap below requires deleting its line in the same change.
+#
+# Every entry is a deliberate scope decision, not a bug. AXIOM is a write gate: it exposes
+# tools + resources only (PLAN.md §2). It registers no prompts, no logging capability
+# (`notifications/message` is deprecated in spec 2026-07-28, v2-architecture §5.4), never
+# initiates sampling/elicitation, and its resources are `axiom://` digests — not the
+# `test://` fixtures the suite's reference "everything" server ships.
+server:
+  # --- capability not offered (JSON-RPC -32601 Method not found is the correct answer) ---
+  - logging-set-level # no `logging` capability (deprecated in 2026-07-28)
+  - tools-call-with-logging # same: expects notifications/message during a tool call
+  - prompts-list # no `prompts` capability
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image
+  - resources-subscribe # resources are immutable content-addressed digests; no subscribe
+  - resources-unsubscribe
+  # --- reference-server fixtures the suite expects to exist (test://…, test_* tools/prompts) ---
+  - completion-complete # completion for prompt `test_prompt_with_arguments` (no prompts here)
+  - resources-read-text # `test://static-text` — axiom serves axiom://{manifest,report,applied,profile,schema}
+  - resources-read-binary # `test://static-binary`
+  - resources-templates-read # `test://template/{id}/data`
+  - tools-call-image # axiom tools return text + structuredContent only
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  # --- server-initiated client features axiom never uses ---
+  - tools-call-with-progress # no long-running tool emits progress (apply is sub-second)
+  - tools-call-sampling # write gate never asks the model for completions
+  - tools-call-elicitation # inputs come fully specified from the agent; no elicitation
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums

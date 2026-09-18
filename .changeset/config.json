@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@codai/axiom-testkit"]
+  "ignore": ["@codai/axiom-testkit", "@codai/axiom-conformance"]
 }
