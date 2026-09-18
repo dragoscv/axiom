@@ -3,6 +3,23 @@
   "version": "2.0.0",
   "description": "AXIOM v2 `.axm` front-end: Chevrotain lexer + CST parser that compiles the .axm DSL 1:1 into a Plan, with position-bearing diagnostics and a deterministic inverse printer",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/axm"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "dsl",
+    "parser",
+    "chevrotain",
+    "axm"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +33,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "examples",
     "README.md"
   ],

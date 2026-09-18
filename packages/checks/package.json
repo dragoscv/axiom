@@ -3,6 +3,24 @@
   "version": "2.0.0",
   "description": "Predicate registry, fact providers and profiles for the AXIOM checks engine",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/checks"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "policy",
+    "checks",
+    "predicates",
+    "secrets",
+    "guard"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +34,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md"
   ],
   "scripts": {

@@ -3,6 +3,24 @@
   "version": "2.0.0",
   "description": "AXIOM v2 MCP server (stdio) and CLI: validate, compile, check and transactionally apply content-addressed manifest bundles inside an allowlisted set of roots",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "cli",
+    "hook"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.14"
@@ -21,6 +39,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "spec",
     "README.md"
   ],

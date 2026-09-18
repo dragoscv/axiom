@@ -3,6 +3,25 @@
   "version": "2.0.0",
   "description": "RFC 8785 JSON canonicalization, sha256 digests and in-toto Statement/SLSA provenance builders for AXIOM",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/canon"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "jcs",
+    "rfc8785",
+    "sha256",
+    "in-toto",
+    "slsa",
+    "provenance"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +35,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md"
   ],
   "scripts": {

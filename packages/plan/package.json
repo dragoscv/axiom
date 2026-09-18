@@ -3,6 +3,23 @@
   "version": "2.0.0",
   "description": "Plan → ManifestBundle compiler for AXIOM v2: content-addressed artifacts, JCS manifest digest, inline/CAS blob transport, in-toto attestation, bundle verification and manifest diff",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/plan"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "manifest",
+    "content-addressed",
+    "codegen",
+    "agent"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +33,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md"
   ],
   "scripts": {

@@ -3,6 +3,23 @@
   "version": "2.0.0",
   "description": "Transactional two-phase-commit apply engine for AXIOM v2 manifest bundles: containment, staging, journal, scoped rollback",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/apply"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "atomic-write",
+    "two-phase-commit",
+    "rollback",
+    "git"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +33,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md"
   ],
   "scripts": {

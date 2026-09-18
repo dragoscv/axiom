@@ -3,6 +3,23 @@
   "version": "2.0.0",
   "description": "Zod v4 schemas, closed error codes and JSON Schema for AXIOM v2 Plan, Manifest, CheckReport, ApplyResult, Profile and Journal",
   "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/schema"
+  },
+  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "mcp",
+    "zod",
+    "json-schema",
+    "agent"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -17,6 +34,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "schemas",
     "README.md"
   ],
