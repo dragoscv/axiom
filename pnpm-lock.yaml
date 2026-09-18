@@ -113,6 +113,9 @@ catalogs:
     '@changesets/cli':
       specifier: 3.0.3
       version: 3.0.3
+    '@marcbachmann/cel-js':
+      specifier: 8.0.0
+      version: 8.0.0
     '@modelcontextprotocol/conformance':
       specifier: 0.1.16
       version: 0.1.16
@@ -310,6 +313,9 @@ importers:
       '@codai/axiom-schema':
         specifier: workspace:*
         version: link:../schema
+      '@marcbachmann/cel-js':
+        specifier: 'catalog:'
+        version: 8.0.0
       picomatch:
         specifier: 'catalog:'
         version: 4.0.7
@@ -1230,6 +1236,11 @@ packages:
   '@manypkg/tools@2.1.2':
     resolution: {integrity: sha512-6QEf6yqFbETdwGITKq57aYoPfX/3K8XFNwsAlx0C1M7o8cb79sv1M3w+tWuWvIcSbNqrLF7OD7YpZMVVz335hQ==}
     engines: {node: '>=20.0.0'}
+
+  '@marcbachmann/cel-js@8.0.0':
+    resolution: {integrity: sha512-oaTrAziGr3zDLFiMt/yLU3nZuRMawyWQB5X1a0I7s9eGy3JYzX9l8ZXXHyMd64nzbeVFZTewuUShwsZQdK6UCA==}
+    engines: {node: '>=20.19.0'}
+    hasBin: true
 
   '@modelcontextprotocol/conformance@0.1.16':
     resolution: {integrity: sha512-GI7qiN0r39/MH2srVUR3AXaEN0YLCro20lIBbnvc1frBhszenxvUifBuTzxeVQVagILfBzCIcnungUOma8OrgA==}
@@ -3920,6 +3931,8 @@ snapshots:
       jju: 1.4.0
       tinyglobby: 0.2.17
       yaml: 2.9.1
+
+  '@marcbachmann/cel-js@8.0.0': {}
 
   '@modelcontextprotocol/conformance@0.1.16':
     dependencies:

@@ -42,7 +42,7 @@ replayed.
 
 ## Predicate catalogue
 
-Fifteen built-ins, exactly as registered in
+Sixteen built-ins, exactly as registered in
 `packages/checks/src/predicates/index.ts`. `requires` names the fact providers
 the predicate reads.
 
@@ -309,6 +309,88 @@ output) or `skipped` (no guard checks in the set).
 ```
 
 See `docs/integration/brivio.md` for wiring brivio's `run-guards.mjs`.
+
+### `expr.cel`
+
+A boolean [CEL](https://github.com/google/cel-spec) expression over the frozen
+facts (PLAN.md S-301, decision D-15). Evaluated by `@marcbachmann/cel-js` 8,
+loaded lazily on first use so the MCP eager bundle does not pay for it.
+`requires: manifest, content` (`repo` is read when referenced — see below).
+
+| Param | Type | Default |
+|-------|------|---------|
+| `expression` | string, 1–4096 chars | required |
+| `message` | string ≤ 2000 | `expression evaluated to false: <expression>` |
+| `severity` | `"error" \| "warn" \| "info"` | the CheckRef severity |
+
+**Activation** — the only variables an expression may reference:
+
+| Variable | Shape |
+|----------|-------|
+| `manifest` | the canonical `ManifestBody`: `name`, `profile`, `planDigest`, `artifacts[]`, `checks[]`, `toolchain`, … — integers are CEL `int` |
+| `artifacts` | alias of `manifest.artifacts`: `{ path, op, mode, digest?: { sha256 }, bytes?, origin? }` — `delete` entries have no `digest`/`bytes` |
+| `content` | map `path → { bytes: int, sha256: string, text?: string }` for every non-delete artifact whose blob is available; `text` only when the blob is valid UTF-8 and ≤ 256 KiB |
+| `repo` | `{ exists: map path → bool (for every artifact path), packageJson?, gitHead?, gitDirty? }` — only when a root is authorised (`facts.allowRepo`). Referencing `repo` without one is an `error` finding (`ERR_PROVIDER_FAILED`), never a pass |
+
+**Semantics.** The result must be `bool`: `true` → no finding; `false` → exactly
+**one** finding (`id: expr.cel`, `facts.expression`) with `message`; anything
+else — parse error, unknown variable, missing key (`a.bytes` on a `delete`),
+division by zero, type mismatch (`2 == 2.0` is an error in CEL: use
+`double(2)`), non-bool result — is a provider-style `error` finding and the
+report verdict is `error`. No `${…}` templating in `message`; keep it a plain
+string. Use `has(a.bytes)` on select paths and `'text' in content[k]` on
+indexed maps to guard optional fields.
+
+**Determinism bar (D-15), enforced in the predicate, not trusted from the lib:**
+
+- **Function allowlist** — only `has all exists exists_one map filter size
+  contains startsWith endsWith matches lowerAscii upperAscii trim split join
+  indexOf lastIndexOf substring string int uint double bool bytes dyn type`.
+  `timestamp`, `duration`, `now`, `base64`, `hex`, `json`, `cel.bind`,
+  `optional.*`, `at` and any unknown name → `ERR_PREDICATE_PARAMS`.
+- **RE2-safe regex** — `matches()` takes a string **literal** only; lookaround
+  `(?= (?! (?<= (?<!`, backreferences `\1` and `\k<n>` are rejected.
+- **Resource caps** — expression ≤ 4096 chars (Zod), AST depth ≤ 24, ≤ 2000
+  nodes, ≤ 256 list elements / map entries, ≤ 8 call arguments (cel-js
+  `limits`, parse-time), and a 100 ms wall-clock guard on evaluation
+  (`ERR_PROVIDER_FAILED` when exceeded).
+- **Closed variable set** — `unlistedVariablesAreDyn: false`; any other
+  identifier is an evaluation error.
+
+A 345-case vector suite (`packages/checks/src/predicates/cel-vectors.json`:
+197 true / 58 false / 90 error) plus a purity test (same suite twice →
+identical) and fast-check properties against a JS reference guard this.
+
+```json
+{ "id": "no-large-ts", "predicate": "expr.cel", "severity": "error",
+  "params": {
+    "expression": "artifacts.filter(a, a.path.endsWith('.ts')).all(a, a.op == 'delete' || a.bytes < 200000)",
+    "message": "TypeScript artifacts must stay under 200 KB" } }
+```
+
+A worked profile that combines three expressions:
+
+```json
+{
+  "apiVersion": "axiom.dev/v2", "kind": "Profile", "name": "web-cel",
+  "extends": "default",
+  "checks": [
+    { "id": "cel.no-todo", "predicate": "expr.cel", "severity": "warn",
+      "params": { "expression": "content.all(k, !('text' in content[k]) || !content[k].text.contains('TODO'))",
+                  "message": "new content must not contain TODO" } },
+    { "id": "cel.exec-only-scripts", "predicate": "expr.cel",
+      "params": { "expression": "artifacts.all(a, a.mode != '0755' || a.path.startsWith('scripts/'))",
+                  "message": "0755 is allowed only under scripts/" } },
+    { "id": "cel.create-is-new", "predicate": "expr.cel",
+      "params": { "expression": "artifacts.filter(a, a.op == 'create').all(a, !repo.exists[a.path])",
+                  "message": "create must not target an existing file" } }
+  ]
+}
+```
+
+The last check needs `facts.allowRepo` (inherited from `default`) **and** an
+authorised root; without one it reports `error`, so a profile that uses `repo`
+cannot silently pass in a root-less run.
 
 ## Built-in profiles
 

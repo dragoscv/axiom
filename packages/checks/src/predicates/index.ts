@@ -1,4 +1,5 @@
 import type { AnyPredicate } from "../types.js";
+import { exprCel } from "./cel.js";
 import { contentEncodingUtf8, contentMaxBytes, contentNoSecrets } from "./content.js";
 import { depsDeny, depsMax } from "./deps.js";
 import { guardExternal } from "./guard.js";
@@ -11,6 +12,16 @@ import {
 import { pathAllow, pathDeny, pathReservedNames } from "./path.js";
 import { repoNoOverwriteOf, repoRequireCompanion } from "./repo.js";
 
+export {
+  CEL_ALLOWED_FUNCTIONS,
+  CEL_LIMITS,
+  CEL_VARIABLES,
+  CelParams,
+  type CelParamsT,
+  EVAL_BUDGET_MS,
+  EXPRESSION_MAX_CHARS,
+  evaluateCel,
+} from "./cel.js";
 export { SECRET_PATTERN_NAMES, SECRET_PATTERNS } from "./content.js";
 export {
   GuardExternalParams,
@@ -26,6 +37,7 @@ export {
   contentNoSecrets,
   depsDeny,
   depsMax,
+  exprCel,
   guardExternal,
   manifestMaxArtifacts,
   manifestMaxTotalBytes,
@@ -54,4 +66,5 @@ export const BUILTIN_PREDICATES: readonly AnyPredicate[] = [
   repoNoOverwriteOf,
   repoRequireCompanion,
   guardExternal,
+  exprCel,
 ];

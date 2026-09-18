@@ -46,6 +46,7 @@
   "dependencies": {
     "@codai/axiom-canon": "workspace:*",
     "@codai/axiom-schema": "workspace:*",
+    "@marcbachmann/cel-js": "catalog:",
     "picomatch": "catalog:",
     "zod": "catalog:"
   },

@@ -116,6 +116,8 @@ export const PREDICATES: Readonly<Record<string, string>> = {
   "repo.noOverwriteOf": "Existing files matching `globs` may not be overwritten.",
   "repo.requireCompanion": "When a path matches `when`, a companion matching `expect` must exist.",
   "guard.external": "Run an allow-listed external guard script (JSON stdout contract).",
+  "expr.cel":
+    "A boolean CEL `expression` over `manifest`, `artifacts`, `content`, `repo` (pure, allow-listed).",
 };
 
 export const PREDICATE_IDS: readonly string[] = Object.keys(PREDICATES).sort();

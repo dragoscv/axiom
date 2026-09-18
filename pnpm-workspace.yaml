@@ -21,6 +21,7 @@ catalog:
   "@types/node": 26.6.1
   tsx: 4.23.13
   chevrotain: 13.2.0
+  "@marcbachmann/cel-js": 8.0.0
   vscode-languageserver: 10.1.1
   vscode-languageserver-textdocument: 1.0.14
   vscode-languageclient: 10.1.1

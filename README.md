@@ -146,7 +146,7 @@ is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on 
 ## Status and roadmap
 
 **v2.0 (this release).** `schema`, `canon`, `plan` (inline + CAS), `checks`
-(15 built-in predicates, three profiles, no external guards), `apply` (fs +
+(15 built-in predicates — 16 with `expr.cel` in v2.2, three profiles, no external guards), `apply` (fs +
 dry-run + journal/rollback + idempotency; no git PR mode), `mcp` (stdio, 9
 tools, `axiom://` resources), CLI verbs, repo guards, CI on three OSes.
 

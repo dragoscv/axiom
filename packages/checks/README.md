@@ -19,7 +19,10 @@ const report = await runChecks({ bundle, profile, root: realRoot, checks: plan.c
    or an allowlisted absolute executable, no shell; needs profile `facts.allowGuards` **and**
    `runChecks({ allowGuards: true, guardAllowlist })` — the CLI/server `--allow-guards` /
    `--guard-allowlist <abs>` flags; stdout must be `GuardOutput` JSON; guard checks run in a pool
-   of `min(4, cpus)`; see `docs/checks.md`).
+   of `min(4, cpus)`; see `docs/checks.md`), `expr.cel` (boolean CEL `expression` over
+   `manifest`/`artifacts`/`content`/`repo` via `@marcbachmann/cel-js`, lazily imported; closed
+   function allowlist — no `timestamp`/`duration`/`now` — literal RE2-safe `matches()`, AST depth
+   ≤ 24, 100 ms budget; parse/type/runtime errors and non-bool results → `error`, never pass).
 - **Profiles**: `default`, `strict` (extends default), `permissive`; files `<dir>/<name>.json` shadow
   builtins; `extends` chains are resolved parent-first, child checks override by `id`; cycles →
   `ERR_INVALID_PROFILE`.
