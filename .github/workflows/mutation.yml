@@ -52,6 +52,8 @@ jobs:
         run: pnpm build
 
       - name: Stryker
+        # Informational until stryker-js#6210 (Vitest 5 support) lands; see stryker.config.mjs.
+        continue-on-error: true
         run: pnpm exec stryker run
 
       - name: Upload mutation report

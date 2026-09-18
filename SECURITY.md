@@ -1,118 +1,99 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-| Version | Support Status | Security Patches |
-|---------|---------------|------------------|
-| 1.x     | ✅ Active LTS | Until Oct 2026   |
-| 0.x     | ❌ End of Life | No patches       |
+| Version | Status |
+|---------|--------|
+| 2.x | Supported; security fixes released as patch versions of the fixed group |
+| 1.0.x | Deprecated, no fixes. Known issues: manifest hash not content-bound, `git` spawned with `shell: true` and user strings, no rollback. Upgrade — see `MIGRATION.md` |
 
-## Security Model
+## Reporting a vulnerability
 
-### Capability Sandbox
+Do not open a public issue. Use GitHub private vulnerability reporting on
+<https://github.com/dragoscv/axiom/security/advisories/new>. Include the
+package and version, a minimal `Plan`/bundle or command sequence that
+reproduces the problem, and the observed vs expected behaviour.
 
-AXIOM enforces a **strict capability model** at validation time:
+Target response times: acknowledgement within 72 hours; a fix or mitigation for
+containment, TOCTOU or integrity bypasses within 7 days; other issues in the
+next release. Coordinated disclosure after a fixed version is on npm; credit in
+`CHANGELOG.md` unless you prefer otherwise.
 
-- **`http.*` effects** (e.g., `http.healthy()`) require explicit `net("http")` or `net("https")` capability
-- **`scan.artifacts.*` effects** require explicit `fs("./path")` capability  
-- **`ai.*` effects** require explicit `ai("provider")` capability
+## Threat model
 
-**Without declared capabilities**, validation returns `ok: false` with clear diagnostics.
+AXIOM is a write gate that runs **on the developer's machine with the
+developer's privileges**, driven by a coding agent whose output is untrusted.
+The assets it protects are the files under the allowlisted roots and the
+integrity of the record of what was written.
 
-**Example rejection:**
-```json
-{
-  "ok": false,
-  "diagnostics": [{
-    "message": "Check 'api' uses http.* but capability net(...) is missing"
-  }]
-}
-```
+Adversaries considered:
 
-### Evaluation Sandbox
+- **A compromised or confused agent** producing a `Plan`/bundle designed to
+  write outside the root, overwrite protected files, smuggle secrets, or apply
+  something other than what was reviewed.
+- **A concurrent writer** (another agent, an editor, a watcher) modifying the
+  tree between check and commit.
+- **A tampered bundle** whose content does not match its manifest.
 
-- Check evaluators run **without `eval()`** or dynamic code execution
-- Strict allowlist for effects: `http.healthy`, `scan.artifacts.no_personal_data`, etc.
-- No network access by default in emitters; profiles must explicitly enable via capabilities
+Out of scope: a malicious user of the machine, a compromised Node runtime or
+npm supply chain, malicious code *inside* the files being written (AXIOM writes
+bytes; it does not execute or evaluate them), and any client-side trust in MCP
+`roots/list`.
 
-### Deterministic Generation
+## What `apply` guarantees
 
-- **buildId** = SHA256(normalized IR + profile) - no time-based oracle attacks
-- **createdAt** = `deterministic-{hash}` - eliminates timing side-channels
-- **Artifact integrity** = SHA256 hashes enable tamper detection
+- **Containment.** No write outside the realpath'd root: schema path rules,
+  reserved-name rejection on every OS, case-collision detection, `lstat` walk
+  rejecting symlinks/junctions in the ancestry, realpath comparison of the
+  target directory, target-type check. Property-tested with fast-check.
+- **Integrity.** Every blob is re-hashed on resolution and after write; the
+  manifest digest is recomputed from the JCS body; `confirmDigest` must equal
+  it. A bundle whose bytes do not match its manifest is rejected before any write.
+- **Atomicity from the tree's perspective.** Staging under `.axiom/`, journal
+  fsynced before phase 2, rename per file, reverse-order rollback on any error,
+  crash recovery at next apply.
+- **TOCTOU narrowing.** Each target's pre-image is re-hashed immediately before
+  its rename; a change since staging aborts and rolls back
+  (`ERR_PREIMAGE_CHANGED`).
+- **Single writer per root** via `.axiom/lock`.
+- **Roots are an explicit allowlist** (`--root`); there is no `cwd`, env-var or
+  client-supplied fallback. Requested roots are realpath'd and must lie inside
+  an allowlisted one.
+- **No shell.** Child processes (none in the v2.0 hot path) are spawned with an
+  argument array; `shell: true`, `exec`, `execSync` are banned by a repo guard.
+- **Fail-closed checks.** A predicate that cannot evaluate yields
+  `verdict: error`, which blocks apply.
+- **Quiet transport.** MCP stdout carries only JSON-RPC; logs go to stderr and
+  never include blob content.
 
-### Threat Model
+## What `apply` does not guarantee
 
-| Threat | Mitigation | Status |
-|--------|-----------|--------|
-| Capability bypass | Validator enforces before generation | ✅ Mitigated |
-| Time-based oracle attacks | Deterministic manifest fields | ✅ Mitigated |
-| Artifact tampering | SHA256 hashes + golden snapshots | ✅ Detectable |
-| Profile constraint bypass | Real measurements from artifacts | ✅ Mitigated |
-| Code injection via IR | No eval(), strict effect allowlist | ✅ Mitigated |
+- Protection against a writer that ignores `.axiom/lock`; the pre-image check
+  reduces but cannot eliminate the race on POSIX/NTFS.
+- Authenticity of a bundle. DSSE signing and `manifest.requireSigned`
+  enforcement are v2.2; in v2.0 any well-formed bundle is accepted if its
+  digests are internally consistent.
+- Secrecy of content: staging, backups and the CAS under `.axiom/` are plain
+  files with the user's default permissions. Add `.axiom/` to `.gitignore`.
+- Durability on Windows across power loss in the window after a rename
+  (directory fsync is a no-op there).
+- Anything about what the written files *do* when executed.
+- `content.noSecrets` is a regex scan with a fixed pattern set; it reduces
+  accidental leaks and is not a DLP system.
 
-## Reporting Vulnerabilities
+## Hardening in the repository
 
-**DO NOT** open public GitHub issues for security vulnerabilities.
+Enforced on every CI run by `scripts/run-guards.mjs`: package boundary graph,
+closed error-code enum, no stdout outside the CLI entry, no shell spawn, no v1
+imports, pinned GitHub Action SHAs, golden digest cross-OS comparison, bundle
+size and cold-start budgets. Mutation testing (Stryker) runs weekly on `canon`,
+`apply/contain` and `checks/predicates`. Releases use npm trusted publishing
+with provenance.
 
-**Contact:** security@axiom-lang.org (or open a private security advisory)
+## Roadmap items with security impact
 
-**Response SLA:**
-- **Triage:** 72 hours
-- **Critical fix:** 7 days
-- **High fix:** 14 days
-- **Medium/Low fix:** Next minor release
-
-**Disclosure Policy:**
-- Coordinated disclosure after patch is available
-- CVE assignment for High/Critical vulnerabilities
-- Public acknowledgment in CHANGELOG and Security Advisories
-
-## Security Hardening Roadmap
-
-### Planned for 1.1.0
-- [ ] Signed manifests with detached signatures
-- [ ] Policy signatures for profile constraints
-- [ ] Emitter allowlist with hash pinning
-- [ ] `profile.lock` for reproducible builds
-
-### Planned for 1.2.0
-- [ ] Runtime capability enforcement (not just validation-time)
-- [ ] Audit trail for `/apply(mode:"pr")` operations
-- [ ] Rate limiting for `http.*` effects in check runners
-- [ ] SBOM generation as part of `/generate` output
-
-### Planned for 2.0.0
-- [ ] WebAssembly sandbox for custom check evaluators
-- [ ] Signed emitter registry with trust anchors
-- [ ] Verifiable build attestations (SLSA Level 4)
-
-## Best Practices
-
-### For IR Authors
-1. **Minimize capabilities** - Only request `net/fs/ai` when absolutely necessary
-2. **Validate constraints** - Use profile `checks` to enforce security properties
-3. **Avoid PII** - Use `scan.artifacts.no_personal_data()` policy check
-4. **Pin emitter versions** - Future: use `profile.lock` for reproducibility
-
-### For Emitter Developers
-1. **No network by default** - Require explicit `net()` capability grant
-2. **Validate inputs** - Never trust IR content without validation
-3. **Audit file writes** - Only write to declared `target` paths
-4. **Document side effects** - Clearly specify what capabilities your emitter requires
-
-### For Profile Maintainers
-1. **Real measurements** - Don't hardcode constraint values, measure artifacts
-2. **Conservative defaults** - BUDGET profile as baseline, EDGE for advanced features
-3. **Test enforcement** - Verify profile checks reject violations (negative tests)
-
-## Security Contact
-
-- **Email:** security@axiom-lang.org
-- **PGP Key:** Available at https://axiom-lang.org/.well-known/pgp-key.txt
-- **GitHub Security Advisories:** https://github.com/axiom-lang/axiom/security/advisories
-
----
-
-**Last Updated:** October 20, 2025  
-**Version:** 1.0.0
+- v2.1: `guard.external` (spawn with allowlist, timeout, JSON contract), git PR
+  mode (args array, `-F -` message, branch-name validation), `axiom gate --stdin`
+  hook, HTTP transport bound to loopback with bearer token.
+- v2.2: DSSE signing, key pinning, anti-rollback, `ref` sources behind
+  `--allow-net`.

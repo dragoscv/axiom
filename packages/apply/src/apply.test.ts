@@ -440,6 +440,58 @@ describe("TOCTOU and rollback", () => {
     expect(r2.status).toBe("applied");
     expect(await readText(root, "a.txt")).toBe("a1");
   });
+
+  // skip reason: chmod is advisory on NTFS (a 0o555 dir stays writable); the ubuntu/macos CI jobs run it.
+  it.skipIf(process.platform === "win32")(
+    "IO failure at commit (target dir made read-only) → rolled-back with error.path, tree byte-identical",
+    async () => {
+      const root = await mkRoot();
+      await fs.mkdir(path.join(root, "ro"));
+      await writeTree(root, { "keep.txt": "keep" });
+      const before = await snapshot(root);
+      const bundle = makeBundle([
+        { path: "keep.txt", content: "changed", op: "overwrite" },
+        { path: "ro/new.txt", content: "x" },
+      ]);
+      await fs.chmod(path.join(root, "ro"), 0o555);
+      try {
+        const r = await fsApply(bundle, root);
+        expect(r.status).toBe("rolled-back");
+        // EACCES on the commit rename goes through renameRetry → ERR_EBUSY (never ERR_INTERNAL).
+        expect(r.error?.code).toBe("ERR_EBUSY");
+        expect(r.error?.path).toBe("ro/new.txt");
+        expect(await readText(root, "keep.txt")).toBe("keep");
+        expect(await exists(root, "ro/new.txt")).toBe(false);
+        expect(await snapshot(root)).toEqual(before);
+      } finally {
+        await fs.chmod(path.join(root, "ro"), 0o755);
+      }
+    },
+  );
+});
+
+describe("long paths", () => {
+  it("writes, re-reads and deletes three targets whose absolute path exceeds 260 chars", async () => {
+    const root = await mkRoot();
+    const deep = Array.from({ length: 12 }, (_, i) => `segment-${i}-${"x".repeat(20)}`).join("/");
+    const paths = [`${deep}/a.txt`, `${deep}/b.txt`, `${deep}/c/${"y".repeat(60)}.txt`];
+    for (const p of paths) expect(path.join(root, p).length).toBeGreaterThan(260);
+    const bundle = makeBundle(paths.map((p, i) => ({ path: p, content: `v${i}` })));
+    const r = await fsApply(bundle, root);
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe("applied");
+    expect(r.files.map((f) => f.path).sort()).toEqual([...paths].sort());
+    expect(await readText(root, paths[2]!)).toBe("v2");
+    expect(await readText(root, paths[0]!)).toBe("v0");
+    const del = makeBundle(
+      paths.map((p) => ({ path: p, op: "delete" as const })),
+      { name: "del" },
+    );
+    const r2 = await fsApply(del, root);
+    expect(r2.status).toBe("applied");
+    expect(r2.files.every((f) => f.status === "deleted")).toBe(true);
+    for (const p of paths) expect(await exists(root, p)).toBe(false);
+  });
 });
 
 describe("lock", () => {

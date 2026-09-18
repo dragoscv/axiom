@@ -1,116 +1,90 @@
-# AXIOM Versioning & Compatibility
+# Versioning and compatibility (v2)
 
-## Schema Version: 1.0.0
+## SemVer via Changesets
 
-**Release Date:** October 20, 2025  
-**Status:** Production Ready
+All `@codai/axiom-*` packages are released together as a **fixed group**
+(`.changeset/config.json`: `"fixed": [["@codai/axiom-*"]]`), so every published
+package carries the same version. `@codai/axiom-testkit` is private and ignored.
 
-### IR Schema Versioning
+- Any change under `packages/*/src` (except `testkit`) needs a `.changeset/*.md`;
+  `scripts/check-changeset-present.mjs` fails CI without one.
+- `pnpm changeset` records the bump level; `changeset version` writes versions
+  and `CHANGELOG.md`; `changeset publish` runs from CI via npm trusted publishing
+  (OIDC, provenance attached). See `.github/skills/release-axiom`.
+- Pre-release tags (`alpha`, `beta`, `rc`) are not used unless the changeset
+  says why.
 
-The AXIOM Intermediate Representation (IR) follows semantic versioning:
+## Two version numbers
 
-```typescript
-{
-  "ir": {
-    "version": "1.0.0",  // MAJOR.MINOR.PATCH
-    "agents": [...]
-  }
-}
-```
+| Number | Where | Changes when |
+|--------|-------|--------------|
+| Package version (`2.x.y`) | `package.json`, npm | every release, per SemVer below |
+| Wire `apiVersion` (`axiom.dev/v2`) | `Plan`, `Manifest`, `CheckReport`, `ApplyResult`, `Profile` | only on a **major** — every object produced by any 2.x carries `axiom.dev/v2` |
 
-**Version Policy:**
-- **MAJOR** (1.x.x): Breaking changes to IR structure, capability model, or profile contracts
-- **MINOR** (x.1.x): Backward-compatible additions (new emit types, capabilities, checks)
-- **PATCH** (x.x.1): Bug fixes, documentation updates, non-functional changes
+A 2.x consumer must accept any 2.y document, y ≥ x, that validates against its
+own schema **after** unknown optional fields are considered — but all schemas
+are `.strict()`, so in practice: fields are only ever **added as optional** in
+a minor, and a consumer on an older minor that meets a new optional field
+rejects the document. Upgrade consumers before producers.
 
-### 1.0.0 Guarantees
+## What counts as breaking (major)
 
-#### Deterministic Generation
-- **buildId** = SHA256(normalized IR + profile)
-- **createdAt** = `deterministic-${buildId.substring(0,16)}`
-- **ALL artifacts** (including manifest.json) have identical hashes across identical inputs
+- Changing or removing `apiVersion: "axiom.dev/v2"`.
+- Removing or renaming a field of any wire type; making an optional field
+  required; tightening a constraint so that a previously valid document fails
+  (e.g. a stricter `RelPath` rule, a smaller size limit).
+- Changing the canonicalisation or hashing of `ManifestBody` — anything that
+  makes the same `Plan` compile to a different `manifestDigest`. Golden fixtures
+  in `packages/testkit/golden/*.expected.json` pin this; re-pinning them is a
+  major unless the change is a bug fix in a case that could never have been
+  applied.
+- **Removing** an error code from `ERROR_CODES`, or changing which code a given
+  failure produces.
+- Changing an MCP tool's **input shape** in a non-additive way, removing a tool,
+  renaming a tool, or changing its `annotations` from read-only to destructive.
+- Changing the CLI exit-code contract (`0` ok, `1` verdict fail / apply failed,
+  `2` usage or error).
+- Changing the `.axiom/` layout in a way that an older version cannot read
+  (journal, applied marker, lock).
+- Raising the minimum Node version.
+- Removing a built-in predicate or changing its `params` non-additively;
+  changing a built-in profile so that a manifest that passed now fails.
 
-#### Capability Sandbox
-- **http.\*** effects require `net("http")` or `net("https")` capability
-- **scan.artifacts.\*** effects require `fs("./path")` capability
-- **ai.\*** effects require `ai("provider")` capability
-- Violations are REJECTED during validation with clear diagnostics
+## Minor
 
-#### Profile Enforcement
-- **manifest.evidence[]** contains real measurements:
-  - `max_dependencies` (Int64): Counted from package.json artifacts
-  - `frontend_bundle_kb` (Int64): Sum of bytes from ./out/web/** artifacts
-  - `no_analytics` (Boolean): Denylist scan for @vercel/analytics, analytics, ga-lite
-  - `no_fs_heavy` (Boolean): Denylist scan for fs.readFileSync, fs.writeFileSync
-  - `no_telemetry` (Boolean): Denylist scan for pino, winston, @opentelemetry
+- New optional fields on wire types, new error codes, new tools, new predicates,
+  new resources, new CLI verbs or flags.
+- New built-in checks in a profile **only** if they are `warn`/`info`; a new
+  `error`-severity check in `default` is breaking for anyone applying through it.
+- Loosening a constraint (accepting more).
 
-#### MCP Endpoints
-- **POST /parse** - Parse .axm source to IR
-- **POST /validate** - Validate IR against capability model
-- **POST /generate** - Generate artifacts from IR + profile
-- **POST /check** - Verify profile constraints with evidence
-- **POST /reverse** - Reconstruct IR from ./out/** structure
-- **POST /diff** - Generate JSON-Patch between two IRs
-- **POST /apply** - Apply manifest to filesystem (mode: fs) or git PR (mode: pr)
+## Patch
 
-### Migration Policy (Future)
+Bug fixes that do not change any accepted/rejected document set or any digest,
+performance, documentation, dependency bumps without API impact.
 
-When 2.0.0 is released, a codemod will be provided:
+## JSON Schemas
 
-```bash
-# Upgrade IR schema from 1.x to 2.x
-npx @axiom/codemod migrate-ir --from=1.0.0 --to=2.0.0 ./examples/**/*.ir.json
-```
+`packages/schema/schemas/*.json` are generated from the Zod sources with
+`pnpm --filter @codai/axiom-schema build:jsonschema` and committed;
+`check-schema-json-fresh` fails CI when they drift. They are served by the MCP
+server as `axiom://schema/<Kind>` and are versioned with the package.
 
-**Deprecation Timeline:**
-- 1.x support: **Minimum 12 months** after 2.0.0 release
-- Security patches: **Minimum 24 months** after 2.0.0 release
+## Runtime support
 
-### Compatibility Matrix
+| AXIOM | Node | MCP SDK |
+|-------|------|---------|
+| 2.x | ≥ 22.14 | `@modelcontextprotocol/sdk` 1.30+ (bundled) |
 
-| AXIOM Core | IR Version | Node.js | TypeScript |
-|------------|------------|---------|------------|
-| 1.0.0      | 1.0.0      | >=18.0  | >=5.0      |
+## Deprecation policy for 1.x
 
-### Breaking Changes (from 0.x to 1.0.0)
+`1.0.x` is **deprecated, not supported**. There is no LTS window and no security
+patch commitment: the 1.x manifest hash was not content-bound and apply had no
+rollback, so a security patch would be a rewrite (which is 2.0). After 2.0.0
+ships, every `@codai/axiom-*` version `< 2.0.0` is marked deprecated on npm with
+a pointer to `MIGRATION.md`. The 1.x tree is frozen under `packages/_v1/` in git
+for reference only; nothing may import from it (`check-no-v1-imports`).
 
-1. **Deterministic Manifest**: `buildId` and `createdAt` are now hash-based (not time-based)
-2. **Real Measurements**: Profile enforcement uses actual artifact scanning (not mock values)
-3. **Capability Validation**: Strict enforcement of capability requirements (no bypass)
-4. **MCP Response Structure**: All endpoints return `{result, diagnostics}` pattern
-
-### Upgrade Guide (0.x → 1.0.0)
-
-```diff
-// Old (0.x): Time-based manifest
-{
--  "buildId": "1729394556123",
--  "createdAt": "2025-10-20T01:42:36.123Z"
-}
-
-// New (1.0.0): Hash-based manifest
-{
-+  "buildId": "65b952edba8015c1ce61bda1b4935a35a7d40e90...",
-+  "createdAt": "deterministic-65b952edba8015c1"
-}
-```
-
-No code changes required - manifests are automatically migrated during generation.
-
-### Security Model
-
-**Threat Model:**
-- **Capability Bypass**: MITIGATED - Validator enforces capability requirements before generation
-- **Time-based Oracle Attacks**: MITIGATED - Deterministic buildId/createdAt eliminate timing side-channels
-- **Artifact Tampering**: DETECTABLE - Golden snapshots + SHA256 hashes enable integrity verification
-- **Profile Constraint Bypass**: MITIGATED - Real measurements from artifacts, not user-supplied values
-
-### Provenance & SBOM
-
-All 1.0.0 releases include:
-- **SBOM** (Software Bill of Materials) in SPDX format
-- **SLSA Level 3** provenance via GitHub Actions
-- **Signed** manifest.json with detached signature
-- **SHA256** hashes for all published artifacts
-
-See `SECURITY.md` for vulnerability disclosure policy.
+Earlier revisions of this file promised a 1.x→2.x codemod and a 12-month
+support window. Neither applies; `axiom migrate v1` is a v2.2 convenience
+(S-305), not a compatibility layer.

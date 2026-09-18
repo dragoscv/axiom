@@ -1,0 +1,250 @@
+{
+  "version": "2.0.0",
+  "description": "AXIOM MCP tools in the shape of codai packages/agent-core/spec/tools-v2.json entries. GENERATED from packages/mcp/src/tools.ts by `pnpm --filter @codai/axiom-mcp build:spec` — do not edit. `risk` is derived from the MCP annotations (readOnlyHint → READ, destructiveHint → SENSITIVE, else ACT). Serve via `npx @codai/axiom-mcp mcp --root <dir>`; see docs/integration/codai.md.",
+  "tools": [
+    {
+      "name": "axiom_plan_validate",
+      "risk": "READ",
+      "description": "Validate a Plan against PlanSchema and, when all sources are inline, compute its planDigest. Read-only; touches no files.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Plan document (apiVersion axiom.dev/v2, kind Plan)"
+          }
+        },
+        "required": [
+          "plan"
+        ]
+      }
+    },
+    {
+      "name": "axiom_plan_compile",
+      "risk": "ACT",
+      "description": "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Plan document"
+          },
+          "store": {
+            "description": "Blob transport; default inline",
+            "type": "string",
+            "enum": [
+              "inline",
+              "cas"
+            ]
+          },
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan"
+        ]
+      }
+    },
+    {
+      "name": "axiom_manifest_verify",
+      "risk": "READ",
+      "description": "Structural and content-address verification: schema, recomputed manifestDigest, every inline blob hashes to its key, attestation subject matches. Never writes.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bundle": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "ManifestBundle"
+          }
+        },
+        "required": [
+          "bundle"
+        ]
+      }
+    },
+    {
+      "name": "axiom_check",
+      "risk": "READ",
+      "description": "Evaluate the profile's predicates (plus the manifest's own checks) against the bundle. Repo facts are read from the root when one is available and the profile allows it. Verdict `error` means a provider could not run — never a silent pass.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bundle": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "ManifestBundle"
+          },
+          "profile": {
+            "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+            "type": "string"
+          },
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
+        ]
+      }
+    },
+    {
+      "name": "axiom_apply_dry_run",
+      "risk": "READ",
+      "description": "Stage the bundle under <root>/.axiom/staging, run pre-apply checks and produce a unified diff against the current tree. Nothing outside .axiom/ is touched. Echo the returned manifestDigest as `confirmDigest` to axiom_apply.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bundle": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "ManifestBundle"
+          },
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          },
+          "profile": {
+            "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
+        ]
+      }
+    },
+    {
+      "name": "axiom_apply",
+      "risk": "SENSITIVE",
+      "description": "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run). Idempotent: re-applying an applied digest is a no-op.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bundle": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "ManifestBundle"
+          },
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          },
+          "profile": {
+            "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+            "type": "string"
+          },
+          "confirmDigest": {
+            "description": "Must equal bundle.manifestDigest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
+        ]
+      }
+    },
+    {
+      "name": "axiom_rollback",
+      "risk": "SENSITIVE",
+      "description": "Replay the journal of a committed/committing manifest in reverse: restore backups, remove created files, drop the applied marker.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          },
+          "manifestDigest": {
+            "type": "string",
+            "description": "`sha256:<hex>` (or bare hex) of the manifest to roll back"
+          }
+        },
+        "required": [
+          "manifestDigest"
+        ]
+      }
+    },
+    {
+      "name": "axiom_manifest_diff",
+      "risk": "READ",
+      "description": "Compare two manifests by artifact path and digest. Each side is a ManifestBundle or a `sha256:<hex>` reference to a bundle stored under an allowlisted root.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "sha256:<64 lowercase hex>"
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests"
+          },
+          "b": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "sha256:<64 lowercase hex>"
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "name": "axiom_roots_list",
+      "risk": "READ",
+      "description": "The frozen set of roots this server may read and write, as given by --root at startup.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

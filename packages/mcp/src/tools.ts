@@ -63,6 +63,13 @@ const READ: ToolAnnotations = {
   idempotentHint: true,
   openWorldHint: false,
 };
+/** Writes only under `<root>/.axiom/` (CAS blobs, stored manifests) — never the working tree. */
+const ACT: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 const WRITE: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: true,
@@ -282,7 +289,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       root: RootArg,
     },
     outputSchema: ManifestBundleSchema,
-    annotations: READ,
+    annotations: ACT,
     async handler(ctx, { plan, store, root }) {
       guardPayloadSize("plan", plan);
       const wantsRoot = root !== undefined || store === "cas";

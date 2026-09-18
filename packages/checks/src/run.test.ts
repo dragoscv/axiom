@@ -122,6 +122,13 @@ describe("runChecks verdict matrix", () => {
     expect(r.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
     expect(r.verdict).toBe("pass");
   });
+  it("empty check set → pass with no findings (vacuous truth), factsDigest still set", async () => {
+    const r = await runChecks({ bundle: b, profile: profileWith([]) });
+    expect(r.verdict).toBe("pass");
+    expect(r.findings).toEqual([]);
+    expect(r.manifestDigest).toBe(b.manifestDigest);
+    expect(r.factsDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
 });
 
 describe("report shape", () => {

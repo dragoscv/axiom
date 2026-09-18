@@ -43,7 +43,7 @@ root it is the default. There is **no** env-var or `cwd` fallback (`ERR_ROOT_REQ
 | tool | risk | input | output |
 |---|---|---|---|
 | `axiom_plan_validate` | READ | `{ plan }` | `{ ok, planDigest?, errors[] }` |
-| `axiom_plan_compile` | READ | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (stored under `<root>/.axiom/manifests/` when a root is given) |
+| `axiom_plan_compile` | ACT | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (writes only under `<root>/.axiom/` — CAS blobs and the stored manifest — when a root is given) |
 | `axiom_manifest_verify` | READ | `{ bundle }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[] }` |
 | `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`) |
 | `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
@@ -56,7 +56,9 @@ Every tool carries MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempo
 and an `outputSchema`; `structuredContent` is the full result, `content[0].text` a small summary (digest,
 verdict, counts, first 20 findings). Errors come back as `isError: true` with `{ code, message, path? }`
 from the closed `ERROR_CODES` enum — a handler never throws. `spec/tools.json` is generated from the same
-registry (`pnpm build:spec`) and guarded by a parity test.
+registry (`pnpm build:spec`) and guarded by a parity test. `spec/codai-tools.json` is the same registry in
+codai's `packages/agent-core/spec/tools-v2.json` entry shape (`{ name, risk, description, parameters }`) —
+see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
 `axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal}`.

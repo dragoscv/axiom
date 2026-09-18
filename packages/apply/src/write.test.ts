@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { unifiedDiff } from "./diff.js";
 import { mkRoot } from "./test-helpers.js";
 import { writeAtomic } from "./write.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("writeAtomic", () => {
   it("writes, re-hashes, leaves no tmp file, creates parent dirs", async () => {
@@ -24,6 +28,36 @@ describe("writeAtomic", () => {
     await fs.writeFile(target, "old");
     await writeAtomic(target, new TextEncoder().encode("new"));
     expect(await fs.readFile(target, "utf8")).toBe("new");
+  });
+
+  it("200 parallel writeAtomic into one dir: distinct tmp names, all committed, no tmp left", async () => {
+    const root = await mkRoot();
+    const seen = new Set<string>();
+    let duplicates = 0;
+    const origOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (p, flags, mode) => {
+      const s = String(p);
+      if (path.basename(s).startsWith(".axiom-tmp-")) {
+        if (seen.has(s)) duplicates++;
+        seen.add(s);
+      }
+      return origOpen(p, flags as string, mode as number);
+    });
+    try {
+      await Promise.all(
+        Array.from({ length: 200 }, (_, i) =>
+          writeAtomic(path.join(root, `f${i}.txt`), new TextEncoder().encode(`v${i}`)),
+        ),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(duplicates).toBe(0);
+    expect(seen.size).toBe(200);
+    const names = await fs.readdir(root);
+    expect(names.filter((n) => n.startsWith(".axiom-tmp-"))).toEqual([]);
+    expect(names.filter((n) => /^f\d+\.txt$/.test(n))).toHaveLength(200);
+    expect(await fs.readFile(path.join(root, "f137.txt"), "utf8")).toBe("v137");
   });
 });
 

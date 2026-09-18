@@ -115,6 +115,17 @@ describe("compilePlan — happy path", () => {
     expect(Object.keys(bundle.blobs)).toHaveLength(1);
     expect(bundle.attestation?.subject).toHaveLength(1);
   });
+
+  it("100-level nesting compiles; the input plan object is not mutated", async () => {
+    const p = `${Array.from({ length: 100 }, (_, i) => `d${i}`).join("/")}/leaf.ts`;
+    const input = plan([inline(p, "x")]);
+    const frozen = structuredClone(input);
+    const { bundle } = await compilePlan(input);
+    expect(bundle.manifest.artifacts).toHaveLength(1);
+    expect(bundle.manifest.artifacts[0]?.path).toBe(p);
+    expect(bundle.manifest.artifacts[0]?.digest?.sha256).toBe(sha256Hex("x"));
+    expect(input).toEqual(frozen);
+  });
 });
 
 describe("compilePlan — determinism", () => {

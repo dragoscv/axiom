@@ -1,4 +1,49 @@
-# AXIOM Changelog - Production-Ready Release
+# Changelog
+
+## 2.0.0 (unreleased)
+
+Rewrite. All `@codai/axiom-*` packages move to a fixed version group and ship
+together. v1 documents, manifests and clients are not accepted; see `MIGRATION.md`.
+
+### Breaking
+
+- Input is a JSON `Plan` (`apiVersion: "axiom.dev/v2"`); the `.axm` DSL and IR are gone (DSL returns in v2.1 compiling 1:1 to `Plan`).
+- Output is a `ManifestBundle`: JCS-canonical (RFC 8785) `manifest` holding digests only, `manifestDigest = sha256(JCS(manifest))`, content in `blobs` / CAS / `ref`. v1 `irHash`, `buildId`, `createdAt` and content-in-manifest are gone.
+- Transport is MCP **stdio** (`npx @codai/axiom-mcp mcp --root <dir>`); the `node:http` server on `:3411` is removed.
+- Roots are an explicit `--root` allowlist; `AXIOM_REPO_ROOT`, `.git` walk-up and `cwd` fallback are removed.
+- `axiom_apply` requires `confirmDigest === manifestDigest`; `op: create` fails on existing files (`ERR_EXISTS`).
+- `axiom_generate` → `axiom_plan_compile`; `axiom_diff` (IR JSON-Patch) → `axiom_manifest_diff`; `axiom_reverse` removed.
+- Profiles are lists of typed predicates (`CheckRef`), not `constraints` expressions; `CheckReport.verdict` is `pass | fail | error`.
+- Error codes are a closed enum (`ERROR_CODES`); message text is not a contract.
+- Node ≥ 22.14; ESM only.
+
+### Added
+
+- `@codai/axiom-schema`: Zod v4 schemas for Plan, Manifest, ManifestBundle, CheckReport, ApplyResult, Profile, Journal; `RelPath` rules (NFC, reserved names, invalid chars); JSON Schema export.
+- `@codai/axiom-canon`: JCS, sha256, in-toto Statement v1 builder.
+- `@codai/axiom-plan`: `compilePlan` (inline + CAS), `verifyBundle`, `diffManifests`, CAS store; cross-OS golden digests.
+- `@codai/axiom-checks`: 15 predicates (`path.allow/deny/reservedNames`, `content.noSecrets/maxBytes/encodingUtf8`, `manifest.maxArtifacts/maxTotalBytes/requireSigned/noDeletes`, `deps.max/deny`, `repo.noOverwriteOf/requireCompanion`, `guard.external` stub), profiles `default` / `strict` / `permissive` with `extends`, fail-closed runner.
+- `@codai/axiom-apply`: containment, staging, two-phase commit, fsynced journal, reverse rollback, crash recovery, pre-image TOCTOU check, `.axiom/lock`, idempotent noop, dry-run unified diff, Windows long paths and rename retry.
+- `@codai/axiom-mcp`: 9 tools with annotations and `outputSchema`, `axiom://` resources, stderr-only logging, CLI verbs `compile verify check apply rollback diff schema`, `spec/tools.json` with risk classes.
+- Repo guards (`scripts/check-*.mjs`), CI on ubuntu/windows/macos × Node 22/24, Changesets fixed group, Stryker config, `.github/instructions` and skills.
+- Docs: `docs/plan-format.md`, `docs/checks.md`, `docs/apply.md`, `docs/mcp_api.md`, `MIGRATION.md`.
+
+### Removed
+
+- Emitters (`webapp`, `apiservice`, `docker`, `batch`), `webapp-pii`, `vscode-bridge`, `reverse-ir`, `axpatch`, `postinstall` MCP registration, HTTP server, v1 profiles and JSON schemas. The v1 tree is frozen under `packages/_v1/` and is not built, published or importable.
+- Root report/summary markdown files (archived under `docs/archive/v1/`).
+
+### Security
+
+- `git` is no longer spawned with `shell: true`; no shell spawn anywhere in `packages/*/src` (guarded).
+- Manifest digest is content-bound; blobs re-hashed on resolution and after write.
+- Writes cannot escape the root: symlink/junction walk, realpath containment, reserved names on every OS, case-collision detection.
+- Set-level `content.noSecrets` scan in the default profile; `.git/**`, `.axiom/**`, lockfiles and `.env*` protected from overwrite by default.
+- MCP stdout is JSON-RPC only; roots allowlist; payloads over 4 MiB rejected.
+
+---
+
+# AXIOM Changelog - Production-Ready Release (v1, superseded)
 
 ## [1.0.24] - 2025-10-21
 
