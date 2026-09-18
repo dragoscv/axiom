@@ -1,0 +1,38 @@
+{
+  "version": "1.0.0",
+  "buildId": "b313589029b2330bc3625d1ad3f90895ccc7824d0202def52a9f9275510de8eb",
+  "irHash": "f09ad9422c1e66569409a6fbe9a9fd3251d7e7fbce2881153c71f61f88827903",
+  "profile": "edge",
+  "artifacts": [
+    {
+      "path": "sanity/README.md",
+      "kind": "file",
+      "sha256": "061e9d93ded01c21d701799f906d3c36128f37ecc94eb8bd4dbbfa4d8cbde3f7",
+      "bytes": 44
+    }
+  ],
+  "evidence": [
+    {
+      "checkName": "test",
+      "kind": "sla",
+      "passed": true,
+      "details": {
+        "expression": "cold_start_ms<=50",
+        "evaluated": true,
+        "message": "Check passed",
+        "measurements": {
+          "cold_start_ms": 50,
+          "max_dependencies": 0,
+          "frontend_bundle_kb": 0,
+          "no_analytics": true,
+          "no_telemetry": true,
+          "no_fs_heavy": true,
+          "no_pii_in_artifacts": true,
+          "size_under_5mb": true,
+          "response_under_500ms": true
+        }
+      }
+    }
+  ],
+  "createdAt": "deterministic-b313589029b2330b"
+}

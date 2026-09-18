@@ -6,6 +6,7 @@ import {
   ManifestBundleSchema,
   PlanSchema,
   ProfileSchema,
+  RepoSnapshotSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
 
@@ -17,6 +18,7 @@ export const SCHEMA_KINDS = [
   "ApplyResult",
   "Profile",
   "Journal",
+  "RepoSnapshot",
 ] as const;
 export type SchemaKind = (typeof SCHEMA_KINDS)[number];
 
@@ -28,6 +30,7 @@ const BY_KIND: Record<SchemaKind, z.ZodType> = {
   ApplyResult: ApplyResultSchema,
   Profile: ProfileSchema,
   Journal: JournalSchema,
+  RepoSnapshot: RepoSnapshotSchema,
 };
 
 export function isSchemaKind(v: unknown): v is SchemaKind {

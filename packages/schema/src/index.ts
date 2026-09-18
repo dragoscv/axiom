@@ -6,3 +6,4 @@ export * from "./manifest.js";
 export * from "./path.js";
 export * from "./plan.js";
 export * from "./profile.js";
+export * from "./snapshot.js";

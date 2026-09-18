@@ -257,7 +257,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     await client.connect(transport);
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(10);
+      expect(tools).toHaveLength(11);
       const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
       expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
       const v = await client.callTool({
@@ -268,5 +268,49 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("snapshot writes a RepoSnapshot; snapshot-diff reports changes; schema RepoSnapshot works", async () => {
+    await mkdir(join(repo.root, "src"), { recursive: true });
+    await writeFile(join(repo.root, "src", "a.ts"), "1");
+    await writeFile(join(repo.root, ".gitignore"), "*.log\n");
+    await writeFile(join(repo.root, "x.log"), "skip");
+    const a = join(repo.root, "a.json");
+    const b = join(repo.root, "b.json");
+    const r1 = await run(["snapshot", "--root", repo.root, "-o", a, "--exclude", "*.json"]);
+    expect(r1.code).toBe(0);
+    const s1 = JSON.parse(r1.stdout) as {
+      snapshotDigest: string;
+      files: number;
+      truncated: boolean;
+    };
+    expect(s1.files).toBe(2);
+    expect(s1.truncated).toBe(false);
+    const snapA = JSON.parse(await readFile(a, "utf8")) as {
+      snapshotDigest: string;
+      body: { files: { path: string }[] };
+    };
+    expect(snapA.snapshotDigest).toBe(s1.snapshotDigest);
+    expect(snapA.body.files.map((f) => f.path)).toEqual([".gitignore", "src/a.ts"]);
+    await writeFile(join(repo.root, "src", "a.ts"), "2");
+    await writeFile(join(repo.root, "src", "b.ts"), "3");
+    const r2 = await run(["snapshot", "--root", repo.root, "-o", b, "--exclude", "*.json"]);
+    expect(r2.code).toBe(0);
+    const d = await run(["snapshot-diff", a, b]);
+    expect(d.code).toBe(0);
+    const diff = JSON.parse(d.stdout) as {
+      added: string[];
+      removed: string[];
+      changed: { path: string }[];
+    };
+    expect(diff.added).toEqual(["src/b.ts"]);
+    expect(diff.removed).toEqual([]);
+    expect(diff.changed.map((c) => c.path)).toEqual(["src/a.ts"]);
+    const bad = await run(["snapshot", "--root", repo.root, "--include", "../x"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("ERR_CONTAINMENT");
+    const sch = await run(["schema", "RepoSnapshot"]);
+    expect(sch.code).toBe(0);
+    expect((JSON.parse(sch.stdout) as { title: string }).title).toBe("RepoSnapshot");
   });
 });

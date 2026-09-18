@@ -1,0 +1,121 @@
+{
+  "$id": "https://axiom.dev/schemas/v2/RepoSnapshot.schema.json",
+  "title": "RepoSnapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "axiom.dev/v2"
+    },
+    "kind": {
+      "type": "string",
+      "const": "RepoSnapshot"
+    },
+    "root": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "relative"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "sha256:<64 lowercase hex>"
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Relative POSIX path, NFC, no reserved names"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "Lowercase hex-encoded sha256"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "0644",
+                  "0755"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "file",
+                  "symlink"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "bytes",
+              "mode",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "files",
+        "truncated",
+        "counts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "root",
+    "snapshotDigest",
+    "body"
+  ],
+  "additionalProperties": false
+}

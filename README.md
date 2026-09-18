@@ -102,6 +102,7 @@ Full field reference: [docs/plan-format.md](docs/plan-format.md).
 | `axiom_manifest_diff` | read | Added / removed / changed between two manifests |
 | `axiom_axm_parse` | read | `.axm` DSL text → `Plan` with `{line, column}` diagnostics |
 | `axiom_roots_list` | read | The allowlisted roots |
+| `axiom_repo_snapshot` | read | Deterministic content-addressed inventory of a root (`snapshotDigest`) — [docs/snapshot.md](docs/snapshot.md) |
 
 Inputs, outputs, resources and the error contract: [docs/mcp_api.md](docs/mcp_api.md).
 
@@ -157,7 +158,9 @@ mode, streamable HTTP transport, optional template emitters.
 **v2.2.** CEL predicates (`expr.cel`, done), DSSE/Ed25519 signing with
 `manifest.requireSigned` + key pinning + anti-rollback (done — see
 [docs/signing.md](docs/signing.md); `axiom keygen | sign | trust | verify --root`),
-`ref` sources with `--allow-net`, CAS GC, `axiom migrate v1`.
+`ref` sources with `--allow-net` + `axiom gc` for the CAS (done — see
+[docs/cas.md](docs/cas.md)), `axiom migrate v1` (done — v1 manifest → Plan, lossless
+paths/bytes, dropped fields recorded in `metadata.migration`; [docs/migrate.md](docs/migrate.md)).
 
 Decisions and stories live in [PLAN.md](PLAN.md) and [TRACKER.csv](TRACKER.csv).
 

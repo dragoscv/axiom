@@ -9,6 +9,16 @@ export {
 } from "./compile.js";
 export { diffManifests, type ManifestChange, type ManifestDiff } from "./diff.js";
 export {
+  hostAllowed,
+  REF_BYTES_MAX,
+  REF_TIMEOUT_MS,
+  type RefNetOptions,
+  type RefSource,
+  type ResolveRefOptions,
+  redactUri,
+  resolveRef,
+} from "./ref.js";
+export {
   createEmitterRegistry,
   type EmitterRegistry,
   type ParamsSchema,

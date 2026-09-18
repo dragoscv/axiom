@@ -56,6 +56,7 @@ describe("spec/tools.json parity", () => {
       "axiom_manifest_verify",
       "axiom_plan_compile",
       "axiom_plan_validate",
+      "axiom_repo_snapshot",
       "axiom_rollback",
       "axiom_roots_list",
     ]);

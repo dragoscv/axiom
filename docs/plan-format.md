@@ -89,8 +89,43 @@ Op semantics at apply time:
 |--------|--------|----------------|
 | `inline` | `content: string`, `encoding: "utf8" \| "base64"` (default `utf8`) | `content` ≤ 262 144 chars (`INLINE_CONTENT_MAX`, 256 KiB). Decoded bytes ≈ 192 KiB when base64. Compiled into `bundle.blobs`. |
 | `cas` | `digest: DigestRef` | Bytes must already be at `<root>/.axiom/cas/sha256/<aa>/<hex>`; missing → `ERR_BLOB_MISSING`. |
-| `ref` | `uri: url` (`file:` or `https:` only), `digest: DigestRef` | Accepted by the schema; **not fetched in v2.0** → `ERR_REF_OFFLINE`. Network refs are v2.2. |
+| `ref` | `uri: url` (`file:` or `https:` only), `digest: DigestRef` | Pinned external content. Resolved from the CAS when the digest is already there; otherwise fetched **only** with `--allow-net` (see [Ref sources](#ref-sources)). Needs a `root`; without one → `ERR_REF_OFFLINE`. |
 | `template` | `emitter: string`, `template: string`, `params: record` (default `{}`) | Rendered at compile time by an emitter from the caller-supplied `EmitterRegistry` (see [Template sources](#template-sources)); the rendered bytes then follow the `inline` path. No registry / unknown emitter → `ERR_EMITTER_UNKNOWN`; unknown template → `ERR_TEMPLATE_UNKNOWN`; bad params → `ERR_TEMPLATE_PARAMS`. |
+
+### Ref sources
+
+`{ type: "ref", uri, digest }` names bytes that live outside the plan — a vendored binary, a
+release asset. The digest is the **pin**: whatever the URI serves, the artifact is accepted only
+if `sha256(bytes) === digest`, so a URI that changes content later fails loudly instead of
+silently shipping different bytes. The manifest records `origin: "ref"` and the digest; the bytes
+never travel inline in the bundle (invariant 2) — they are stored in `<root>/.axiom/cas` and
+`apply` reads them from there like any `cas` source.
+
+Resolution order in `compilePlan(plan, { root, net })` (`packages/plan/src/ref.ts`):
+
+1. **CAS hit** — `<root>/.axiom/cas/sha256/<aa>/<hex>` exists → return it. No network, no
+  policy check; a ref that was fetched once compiles offline forever after.
+2. **Offline default** — `net.allowNet` is `false` (the default, and the default of every MCP
+  tool) → `ERR_NET_DISABLED { host, uri, digest }`. The URI in every error is redacted to
+  origin + path: query strings and fragments (which may carry tokens) are never logged.
+3. **Policy** (`ERR_NET_DENIED`) — scheme must be `https:`; `http:` is refused. `file:` is
+  accepted only with `net.allowFile` (`--allow-file`). Credentials in the URI are refused. With
+  `net.allowlist` (`--net-allow host[,host]`) the hostname must match an entry exactly or a
+  `*.example.com` wildcard (proper subdomains only, case-insensitive); an empty allowlist denies
+  everything, an absent one allows every https host.
+4. **Fetch** — `GET` with `redirect: "error"` (no redirects are followed), an `AbortController`
+  timeout (`timeoutMs`, default 30 s → `ERR_NET_FAILED { reason: "timeout" }`), non-2xx →
+  `ERR_NET_FAILED { status }`. The body is streamed to a temp file next to its CAS slot with a
+  running sha256 and a hard cap (`maxBytes`, default 32 MiB, also checked against
+  `content-length`) → `ERR_BLOB_TOO_LARGE`, stream cancelled.
+5. **Pin check** — digest mismatch → `ERR_DIGEST_MISMATCH { expected, actual, bytes }` and the
+  temp file is deleted; **nothing is stored**. Match → fsync + atomic rename into the CAS.
+
+CLI: `axiom compile plan.json --root . --allow-net [--net-allow cdn.example.com,*.github.com]
+[--allow-file]`. `axiom apply` never fetches: a ref whose blob is not in the CAS fails with
+`ERR_REF_OFFLINE` before any write, so run `compile --allow-net` on the same root first. The
+MCP `axiom_plan_compile` tool has no network switch — agents cannot enable fetching; an operator
+does it from the CLI. Blob lifecycle (`axiom gc`) is in [cas.md](cas.md).
 
 ### Template sources
 
@@ -264,7 +299,10 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_EMITTER_UNKNOWN` | `template` source names an emitter that is not in the compile-time registry (or no registry was given) |
 | `ERR_TEMPLATE_UNKNOWN` | the emitter exists but has no template with that name |
 | `ERR_TEMPLATE_PARAMS` | `template.params` fail the template's Zod schema (details carry `issues`) |
-| `ERR_REF_OFFLINE` | `ref` source in v2.0 (no network) |
+| `ERR_REF_OFFLINE` | `ref` source compiled without a root, or applied while its blob is not in the CAS |
+| `ERR_NET_DISABLED` | `ref` not in the CAS and `--allow-net` not given (details: `host`, redacted `uri`) |
+| `ERR_NET_DENIED` | `ref` refused by policy: not `https:` (`file:` without `--allow-file`), credentials in the URI, host not in `--net-allow` |
+| `ERR_NET_FAILED` | `ref` fetch failed: timeout, redirect, network error, non-2xx (`status`) |
 | `ERR_NOT_CANONICAL` | manifest not sorted/unique, or `manifestDigest` does not match the recomputed hash |
 | `ERR_UNSUPPORTED_OP` | v2.1+ feature used without its gate (`guard.external` without `--allow-guards`) |
 | `ERR_INTERNAL` | invariant violation inside AXIOM; please report |

@@ -169,6 +169,9 @@
             "ERR_GIT_BRANCH_INVALID",
             "ERR_GIT_FAILED",
             "ERR_REF_OFFLINE",
+            "ERR_NET_DISABLED",
+            "ERR_NET_DENIED",
+            "ERR_NET_FAILED",
             "ERR_NOT_CANONICAL",
             "ERR_UNSUPPORTED_OP",
             "ERR_INTERNAL"

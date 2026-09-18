@@ -78,6 +78,7 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 | `axiom_manifest_diff` | READ | `{ a: bundle\|"sha256:…", b }` | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | READ | `{ source }` (`.axm` text) | `{ plan?, diagnostics: [{ severity, code, message, range: { start: {line, column}, end } }] }` |
 | `axiom_roots_list` | READ | `{}` | `{ roots: [{ path, writable, hasGit }] }` |
+| `axiom_repo_snapshot` | READ | `{ root?, include?[], exclude?[], maxFiles? (20000, cap 50000), maxBytes? (64 MiB), respectGitignore? (true), withContentDigest? (true) }` | `RepoSnapshot { snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind }], truncated, counts } }` — sorted, no timestamps/absolute paths; `.git/`, `.axiom/` always skipped; symlinks recorded, never followed (`docs/snapshot.md`) |
 
 Every tool carries MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
 and an `outputSchema`; `structuredContent` is the full result, `content[0].text` a small summary (digest,
@@ -88,7 +89,7 @@ codai's `packages/agent-core/spec/tools-v2.json` entry shape (`{ name, risk, des
 see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
-`axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal}`,
+`axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot}`,
 `axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/emitters.md`).
 
 ## Trust model
@@ -117,21 +118,34 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 ```
 axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
               [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
-axiom compile <plan.json> [-o out.json] [--store cas --root .]
+axiom compile <plan.json> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
 axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
 axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
+axiom gc      --root . [--dry-run] [--older-than 30d] [--keep all-manifests|journal]   (CAS garbage collection; CLI only, no MCP tool)
 axiom diff    <a.json> <b.json>
-axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal>
+axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot>
 axiom emitters [--json]
 axiom keygen  [--out <dir>] [--name <label>]     (ed25519; private key → <dir>/axiom-signing-<id>.key 0600, public entry → stdout)
 axiom sign    <bundle.json> [--key-file <path>] [-o out.json]   (key from --key-file or $AXIOM_SIGNING_KEY)
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root .
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level warn]
+axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
+                                               (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/migrate.md)
+axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>]... [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]
+axiom snapshot-diff <a.json> <b.json>          (RepoSnapshot → { added, removed, changed })
 ```
 
 Exit codes: `0` ok · `1` verdict fail / apply failed · `2` usage or error. Non-`mcp` verbs print JSON to stdout.
+
+`ref` sources (`{ type: "ref", uri, digest }`) are offline by default: a digest already in
+`<root>/.axiom/cas` resolves without network, anything else is `ERR_NET_DISABLED`. `--allow-net`
+fetches `https:` only (no redirects, 30 s timeout, 32 MiB cap), optionally restricted to
+`--net-allow` hosts (`*.example.com` wildcards), verifies the pinned digest and stores the blob in
+the CAS — a mismatch stores nothing (`ERR_DIGEST_MISMATCH`). `apply` never fetches. The MCP
+`axiom_plan_compile` tool has no network switch. See [docs/plan-format.md](../../docs/plan-format.md#ref-sources)
+and [docs/cas.md](../../docs/cas.md).
 
 ## Hook mode — `axiom gate --stdin`
 

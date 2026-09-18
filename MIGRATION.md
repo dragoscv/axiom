@@ -43,13 +43,25 @@ choice. There is nothing in a v1 manifest whose integrity v2 could vouch for.
 | `postinstall` writing `~/.mcp/servers/axiom.json` | Removed. No install-time side effects. |
 | `vscode-bridge` | Removed. A Langium LSP + VS Code extension is v2.1 (S-205). |
 
-## Doing by hand what `axiom migrate v1` will do
+## Tooling — `axiom migrate v1`
 
-`axiom migrate v1 <manifest.json>` — a tool that lifts v1
-`artifacts[].{path, contentUtf8 | contentBase64}` into a v2 `Plan` with inline
-sources — is scheduled for **v2.2 (S-305)** and **is not available yet**.
+```text
+axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
+```
 
-Until then the transformation is mechanical:
+Lifts a v1 `manifest.json` into a v2 `Plan`: paths become POSIX `RelPath`s,
+`contentUtf8`/`contentBase64` become `inline` sources, hash-only artifacts are
+read from the v1 output tree next to the manifest (or `--content <dir>`) and
+re-verified against their `sha256`; `--cas <root>` stores the bytes under
+`<root>/.axiom/cas` and emits `cas` sources instead. Known policy evidence and
+the built-in `budget`/`edge` profile constraints map to v2 predicates
+(`content.noSecrets`, `deps.max`, `manifest.maxTotalBytes`, `content.maxBytes`);
+`buildId`, `irHash`, `createdAt`, `sha256`, `bytes`, `kind`, runtime SLA/unit
+evidence and unknown fields are listed in `metadata.migration.dropped` with a
+reason. Exit `0` clean, `1` migrated with warnings (still written), `2` not a
+v1 manifest. Full field table: [docs/migrate.md](docs/migrate.md).
+
+The manual transformation, for reference, is:
 
 1. For every v1 artifact with `contentUtf8`, emit
    `{ "path": <path>, "source": { "type": "inline", "content": <contentUtf8> } }`.

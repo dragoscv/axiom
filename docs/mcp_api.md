@@ -16,7 +16,7 @@ fails CI when this table, `packages/mcp/README.md` and that file disagree.
 | Tool | Risk | Purpose | Input (summary) | Output (summary) |
 |------|------|---------|-----------------|------------------|
 | `axiom_plan_validate` | read | Validate a `Plan` against the Zod schema; report `ERR_*` codes with JSON pointers | `{ plan }` | `{ ok, planDigest?, errors[] }` |
-| `axiom_plan_compile` | act | Compile `Plan` → `ManifestBundle` (JCS manifest, sha256 per artifact, inline/CAS blobs); writes only under `<root>/.axiom/` when a root is given | `{ plan, store?, root? }` | `ManifestBundle { manifest, manifestDigest, attestation?, envelope?, blobs }` |
+| `axiom_plan_compile` | act | Compile `Plan` → `ManifestBundle` (JCS manifest, sha256 per artifact, inline/CAS blobs); writes only under `<root>/.axiom/` when a root is given. `ref` sources resolve from the root's CAS only — the tool has no network switch (`ERR_NET_DISABLED`; fetch with the CLI `compile --allow-net`) | `{ plan, store?, root? }` | `ManifestBundle { manifest, manifestDigest, attestation?, envelope?, blobs }` |
 | `axiom_manifest_verify` | read | Re-verify a bundle: canonical form, digest, every blob hash; with `root`, also the detached DSSE signatures against `<root>/.axiom/trust/keys.json` ([signing.md](signing.md)) | `{ bundle, root? }` | `{ ok, manifestDigest?, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok } }` — `signatures` present only when the root has a trust store; `ok` is `false` when it fails |
 | `axiom_check` | read | Run a `Profile` of predicates over a bundle against a root; fails closed on provider errors | `{ bundle, profile?, root? }` | `CheckReport` |
 | `axiom_apply_dry_run` | read | Containment + pre-image check + staging + unified diff, no user files touched | `{ bundle, root, profile? }` | `ApplyResult { mode: "dry-run", diff, files[] }` |
@@ -25,11 +25,21 @@ fails CI when this table, `packages/mcp/README.md` and that file disagree.
 | `axiom_manifest_diff` | read | Structural diff between two manifests (added/removed/changed artifacts) | `{ a, b }` (bundle or `sha256:` ref) | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | read | Parse `.axm` v2 DSL text into a `Plan`; diagnostics carry 1-based `{line, column}` ranges and `ERR_*` codes; `plan` present only when error-free (parser loaded lazily) | `{ source }` | `{ plan?, diagnostics[] }` |
 | `axiom_roots_list` | read | List the allowlisted roots the server may touch | `{}` | `{ roots[] }` |
+| `axiom_repo_snapshot` | read | Deterministic, content-addressed inventory of a root ([snapshot.md](snapshot.md)): regular files and symlinks as `{ path, bytes, sha256?, mode, kind }` sorted by code point, `snapshotDigest = sha256(JCS(body))`; honours the root `.gitignore`, always skips `.git/` and `.axiom/`, never follows symlinks or leaves the root; globs containing `..` → `ERR_CONTAINMENT` | `{ root?, include?[], exclude?[], maxFiles?, maxBytes?, respectGitignore?, withContentDigest? }` | `RepoSnapshot { apiVersion, kind, root: { kind: "relative" }, snapshotDigest, body: { files[], truncated, counts: { files, bytes } } }` — text summary is `{ snapshotDigest, counts, truncated, paths[≤20] }` |
 
 Risk classes are derived from the MCP annotations (`readOnlyHint` → READ, `destructiveHint` →
 SENSITIVE, otherwise ACT). `packages/mcp/spec/codai-tools.json` re-emits the same registry in the
 entry shape of codai's `packages/agent-core/spec/tools-v2.json` so codai agents can gate these
 tools under their `APPROVAL_MATRIX` — see `docs/integration/codai.md`.
+
+CLI-only verbs (no MCP tool): `axiom migrate v1 <manifest.json>` lifts an AXIOM 1.0.x manifest
+into a v2 `Plan` ([migrate.md](migrate.md)) — a one-off maintenance step that belongs to the
+operator, not to an agent's tool surface. Its code is a lazy chunk (`dist/migrate-lazy.js`).
+
+**Deliberately not tools.** `axiom gc` (CAS garbage collection, [cas.md](cas.md)) and network
+fetching of `ref` sources (`compile --allow-net`, [plan-format.md](plan-format.md#ref-sources)) are
+CLI-only: both are operator decisions (disk reclamation, egress), so an agent cannot trigger them
+through the server.
 
 ## Resources
 

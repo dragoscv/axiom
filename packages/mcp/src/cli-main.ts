@@ -4,9 +4,15 @@ import { parseArgs } from "node:util";
 import { apply, rollback } from "@codai/axiom-apply";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
-import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
+import {
+  AxiomError,
+  isAxiomError,
+  ManifestBundleSchema,
+  RepoSnapshotSchema,
+} from "@codai/axiom-schema";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EMITTERS, emitterCatalogue } from "./emitters.js";
+import { collectGarbage, type GcOptions, parseDuration } from "./gc.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import {
   advanceTrustState,
@@ -23,6 +29,7 @@ import {
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
 import { createServer } from "./server.js";
+import { diffSnapshots, snapshotRoot } from "./snapshot.js";
 import { saveManifest, saveReport, toDigestRef } from "./store.js";
 
 const EXIT_OK = 0;
@@ -35,12 +42,14 @@ Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
             [--http <host:port>] [--http-token-env <NAME>]
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
+                                     [--allow-net [--net-allow <host>[,host]]] [--allow-file]   (ref sources; offline by default)
   axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
   axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
   axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
                                          [--allow-guards] [--guard-allowlist <abs>]...
 	axiom rollback <digest> --root <dir>
+  axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal]   (CAS garbage collection; CLI only)
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
   axiom emitters [--json]                  (template emitters available to \`compile\`)
@@ -48,6 +57,10 @@ Usage:
   axiom sign <bundle.json> [--key-file <path>] [-o <out.json>]   (private key from --key-file or $${SIGNING_KEY_ENV})
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
   axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level ...]   (PreToolUse hook; exit 0 allow / 2 deny)
+    axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
+                                           (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
+  axiom snapshot --root <dir> [-o <out.json>] [--include <glob>]... [--exclude <glob>]... [--max-files <n>] [--no-gitignore] [--no-digest]
+  axiom snapshot-diff <a.json> <b.json>       (RepoSnapshot files → { added, removed, changed })
 	axiom --version | --help
 
 Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
@@ -185,14 +198,25 @@ async function cmdCompile(argv: string[]): Promise<number> {
     out: { type: "string", short: "o" },
     store: { type: "string" },
     root: { type: "string" },
+    "allow-net": { type: "boolean" },
+    "net-allow": { type: "string", multiple: true },
+    "allow-file": { type: "boolean" },
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("compile: <plan.json|plan.axm> is required");
   const store = values.store ?? "inline";
   if (store !== "inline" && store !== "cas") throw new UsageError("--store must be inline|cas");
-  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters: EMITTERS };
+  const allowNet = values["allow-net"] === true;
+  const allowlist = (values["net-allow"] ?? [])
+    .flatMap((s) => s.split(","))
+    .filter((s) => s !== "");
+  if (!allowNet && allowlist.length > 0) throw new UsageError("--net-allow requires --allow-net");
+  const net: NonNullable<Parameters<typeof compilePlan>[1]>["net"] = { allowNet };
+  if (allowlist.length > 0) net.allowlist = allowlist;
+  if (values["allow-file"] === true) net.allowFile = true;
+  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters: EMITTERS, net };
   let rootReal: string | undefined;
-  if (values.root !== undefined || store === "cas") {
+  if (values.root !== undefined || store === "cas" || allowNet || net.allowFile === true) {
     rootReal = await realRootArg(values.root ?? ".");
     compileOpts.root = rootReal;
   }
@@ -341,6 +365,28 @@ async function cmdRollback(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
+async function cmdGc(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    "dry-run": { type: "boolean" },
+    "older-than": { type: "string" },
+    keep: { type: "string" },
+  });
+  const rootReal = await realRootArg(values.root);
+  const keep = values.keep ?? "all-manifests";
+  if (keep !== "all-manifests" && keep !== "journal") {
+    throw new UsageError("--keep must be all-manifests|journal");
+  }
+  const gcOpts: GcOptions = { keep, dryRun: values["dry-run"] === true };
+  if (values["older-than"] !== undefined) {
+    const ms = parseDuration(values["older-than"]);
+    if (ms === undefined) throw new UsageError("--older-than must be <n>(ms|s|m|h|d)");
+    gcOpts.olderThanMs = ms;
+  }
+  out(await collectGarbage(rootReal, gcOpts));
+  return EXIT_OK;
+}
+
 async function cmdDiff(argv: string[]): Promise<number> {
   const { positionals } = opts(argv, {});
   const [a, b] = positionals;
@@ -440,6 +486,115 @@ async function cmdGate(argv: string[]): Promise<number> {
   return r.exitCode;
 }
 
+async function cmdMigrate(argv: string[]): Promise<number> {
+  const [from, ...rest] = argv;
+  if (from !== "v1") throw new UsageError("migrate: source format must be v1");
+  const { values, positionals } = opts(rest, {
+    out: { type: "string", short: "o" },
+    profile: { type: "string" },
+    cas: { type: "string" },
+    content: { type: "string" },
+    name: { type: "string" },
+    overwrite: { type: "boolean" },
+  });
+  const file = positionals[0];
+  if (file === undefined) throw new UsageError("migrate v1: <manifest.json> is required");
+  const { migrateV1 } = await import("./migrate-lazy.js");
+  const contentDir = path.resolve(values.content ?? path.dirname(path.resolve(file)));
+  const migrateOpts: Parameters<typeof migrateV1>[1] = {
+    version: MIGRATE_VERSION,
+    resolveContent: async (rel) => {
+      try {
+        return new Uint8Array(await readFile(path.join(contentDir, rel)));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw err;
+      }
+    },
+  };
+  if (values.profile !== undefined) migrateOpts.profile = values.profile;
+  if (values.name !== undefined) migrateOpts.name = values.name;
+  if (values.overwrite === true) migrateOpts.overwrite = true;
+  if (values.cas !== undefined) migrateOpts.casRoot = await realRootArg(values.cas);
+  const { plan, report } = await migrateV1(await readJson(file), migrateOpts);
+  if (values.out !== undefined) {
+    await writeFile(path.resolve(values.out), `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    out({ ...report, out: values.out });
+  } else {
+    out({ plan, report });
+  }
+  return report.ok ? EXIT_OK : EXIT_FAIL;
+}
+
+/** Set by `main()` so lazily-loaded verbs can record the CLI version without importing package.json. */
+let MIGRATE_VERSION = "0.0.0";
+
+async function cmdSnapshot(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    out: { type: "string", short: "o" },
+    include: { type: "string", multiple: true },
+    exclude: { type: "string", multiple: true },
+    "max-files": { type: "string" },
+    "max-bytes": { type: "string" },
+    "no-gitignore": { type: "boolean" },
+    "no-digest": { type: "boolean" },
+  });
+  const rootReal = await realRootArg(values.root);
+  const snapOpts: Parameters<typeof snapshotRoot>[1] = {
+    respectGitignore: values["no-gitignore"] !== true,
+    withContentDigest: values["no-digest"] !== true,
+  };
+  if (values.include !== undefined) snapOpts.include = values.include;
+  if (values.exclude !== undefined) snapOpts.exclude = values.exclude;
+  for (const [flag, key] of [
+    ["max-files", "maxFiles"],
+    ["max-bytes", "maxBytes"],
+  ] as const) {
+    const raw = values[flag];
+    if (raw === undefined) continue;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0)
+      throw new UsageError(`--${flag} must be a non-negative integer`);
+    snapOpts[key] = n;
+  }
+  const snap = await snapshotRoot(rootReal, snapOpts);
+  if (values.out !== undefined) {
+    await writeFile(path.resolve(values.out), `${JSON.stringify(snap, null, 2)}\n`, "utf8");
+    out({
+      snapshotDigest: snap.snapshotDigest,
+      ...snap.body.counts,
+      truncated: snap.body.truncated,
+      out: values.out,
+    });
+  } else {
+    out(snap);
+  }
+  return EXIT_OK;
+}
+
+function parseSnapshotFile(raw: unknown, label: string) {
+  const parsed = RepoSnapshotSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AxiomError("ERR_INVALID_MANIFEST", `${label} does not match RepoSnapshotSchema`, {
+      details: {
+        issues: parsed.error.issues.slice(0, 20).map((i) => `${i.path.join(".")}: ${i.message}`),
+      },
+    });
+  }
+  return parsed.data;
+}
+
+async function cmdSnapshotDiff(argv: string[]): Promise<number> {
+  const { positionals } = opts(argv, {});
+  const [a, b] = positionals;
+  if (a === undefined || b === undefined)
+    throw new UsageError("snapshot-diff: <a.json> <b.json> are required");
+  const [sa, sb] = await Promise.all([readJson(a), readJson(b)]);
+  out(diffSnapshots(parseSnapshotFile(sa, a), parseSnapshotFile(sb, b)));
+  return EXIT_OK;
+}
+
 const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   mcp: cmdMcp,
   compile: cmdCompile,
@@ -447,6 +602,7 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   check: cmdCheck,
   apply: cmdApply,
   rollback: cmdRollback,
+  gc: cmdGc,
   diff: cmdDiff,
   schema: cmdSchema,
   emitters: cmdEmitters,
@@ -454,10 +610,14 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   sign: cmdSign,
   trust: cmdTrust,
   gate: cmdGate,
+  migrate: cmdMigrate,
+  snapshot: cmdSnapshot,
+  "snapshot-diff": cmdSnapshotDiff,
 };
 
 export async function main(argv: readonly string[], version: string): Promise<number> {
   const HELP = help(version);
+  MIGRATE_VERSION = version;
   const [verb, ...rest] = argv;
   if (verb === undefined || verb === "--help" || verb === "-h" || verb === "help") {
     process.stdout.write(HELP);
@@ -483,7 +643,8 @@ export async function main(argv: readonly string[], version: string): Promise<nu
       console.error(`error: ${err.message}\n\n${HELP}`);
       return EXIT_USAGE;
     }
-    if (err instanceof AxiomError) {
+    // Duck-typed: lazy chunks (`migrate-lazy`, …) carry their own bundled AxiomError class.
+    if (isAxiomError(err)) {
       console.error(JSON.stringify(err.toJSON()));
       return EXIT_USAGE;
     }

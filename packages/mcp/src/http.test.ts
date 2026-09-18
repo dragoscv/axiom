@@ -83,12 +83,12 @@ afterEach(async () => {
 });
 
 describe("startHttp — MCP over Streamable HTTP", () => {
-  it("initialize + tools/list (10 tools) + a tool call, through the SDK client", async () => {
+  it("initialize + tools/list (11 tools) + a tool call, through the SDK client", async () => {
     await start();
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(10);
+    expect(tools).toHaveLength(11);
     expect(tools.map((t) => t.name).sort()).toEqual(TOOL_DEFS.map((t) => t.name).sort());
     const r = (await client.callTool({
       name: "axiom_plan_validate",
@@ -118,7 +118,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     });
     expect(res.status).toBe(404);
     // b still works
-    expect((await b.client.listTools()).tools).toHaveLength(10);
+    expect((await b.client.listTools()).tools).toHaveLength(11);
   });
 
   it("rejects a non-initialize request without a session id (400) and an unknown id (404)", async () => {
@@ -190,7 +190,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(unauth.status).toBe(401);
     expect(unauth.headers.get("www-authenticate")).toContain("Bearer");
     const { client } = await connect({ token: "0123456789abcdef-secret" });
-    expect((await client.listTools()).tools).toHaveLength(10);
+    expect((await client.listTools()).tools).toHaveLength(11);
   });
 
   it("DNS-rebinding protection: a foreign Host header is rejected on a loopback bind", async () => {

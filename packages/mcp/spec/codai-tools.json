@@ -282,6 +282,65 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "name": "axiom_repo_snapshot",
+      "risk": "READ",
+      "description": "Deterministic, content-addressed inventory of a root: every regular file (and symlink) as { path, bytes, sha256, mode, kind }, sorted by code point, with snapshotDigest = sha256(JCS(body)). No timestamps, no absolute paths — the same tree gives the same digest on every machine. Honours the root .gitignore, always skips .git/ and .axiom/, never follows symlinks, never leaves the root. Use it to build Plans against real pre-image digests, or diff two snapshots with `axiom snapshot-diff`.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          },
+          "include": {
+            "description": "Relative globs (*, **, ?) to keep; default everything",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "exclude": {
+            "description": "Relative globs to drop",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "maxFiles": {
+            "default": 20000,
+            "description": "Stop after this many files (cap 50000); sets truncated",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50000
+          },
+          "maxBytes": {
+            "default": 67108864,
+            "description": "Stop once the summed size would exceed this; sets truncated",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "followSymlinks": {
+            "default": false,
+            "description": "Always false; symlinks are recorded, never followed",
+            "type": "boolean",
+            "const": false
+          },
+          "respectGitignore": {
+            "default": true,
+            "type": "boolean"
+          },
+          "withContentDigest": {
+            "default": true,
+            "description": "false → sizes only, no sha256",
+            "type": "boolean"
+          }
+        }
+      }
     }
   ]
 }

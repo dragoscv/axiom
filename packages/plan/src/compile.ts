@@ -23,6 +23,7 @@ import {
 } from "@codai/axiom-schema";
 import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
 import { casGet, casPut } from "./cas.js";
+import { type RefNetOptions, resolveRef } from "./ref.js";
 import type { EmitterRegistry } from "./template.js";
 
 /** Decoded byte budget for a base64 inline source (§2.5). */
@@ -42,6 +43,11 @@ export interface CompileOptions {
   invocationId?: string;
   /** Emitters available to `template` sources; absent → every template source fails `ERR_EMITTER_UNKNOWN`. */
   emitters?: EmitterRegistry;
+  /**
+   * Network policy for `ref` sources. Default `{ allowNet: false }`: a ref already in the CAS
+   * resolves offline, anything else is `ERR_NET_DISABLED`. Needs `root`.
+   */
+  net?: RefNetOptions;
 }
 
 export interface CompileResult {
@@ -183,11 +189,20 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Sou
       }
       return { bytes };
     }
-    case "ref":
-      throw new AxiomError("ERR_REF_OFFLINE", "ref sources are not fetched in v2.0", {
+    case "ref": {
+      if (opts.root === undefined) {
+        throw new AxiomError("ERR_REF_OFFLINE", "ref source needs a root (its CAS)", {
+          path: a.path,
+          details: { digest: src.digest },
+        });
+      }
+      const bytes = await resolveRef(src, {
+        ...(opts.net ?? { allowNet: false }),
+        root: opts.root,
         path: a.path,
-        details: { uri: src.uri, digest: src.digest },
       });
+      return { bytes };
+    }
     case "template":
       return renderTemplate(a, src, opts);
   }
@@ -328,6 +343,8 @@ export async function compilePlan(
   let total = 0;
   for (const r of resolved) {
     if (r.bytes === undefined || r.artifact.digest === undefined) continue;
+    // Invariant 2: ref bytes never travel inline — resolveRef already stored them in the CAS.
+    if (r.artifact.origin === "ref") continue;
     if (useCas) {
       await casPut(opts.root as string, r.bytes);
       continue;

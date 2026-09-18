@@ -15,12 +15,19 @@ import {
   type ManifestBundle,
   ManifestBundleSchema,
   PlanSchema,
+  RepoSnapshotSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
 import { EMITTERS } from "./emitters.js";
 import { advanceTrustState, profileWantsAntiRollback, verifyBundleAgainstRoot } from "./keys.js";
 import type { Logger } from "./log.js";
 import { type RootsPolicy, resolveRoot } from "./roots.js";
+import {
+  SNAPSHOT_MAX_BYTES_DEFAULT,
+  SNAPSHOT_MAX_FILES_CAP,
+  SNAPSHOT_MAX_FILES_DEFAULT,
+  snapshotRoot,
+} from "./snapshot.js";
 import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
 
 /** Hard cap on any single `bundle`/`plan` argument, measured as UTF-8 JSON bytes (§(f) payload size). */
@@ -617,6 +624,59 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       return { roots };
     },
     summarize: (o) => o,
+  }),
+  defineTool({
+    name: "axiom_repo_snapshot",
+    title: "Snapshot a root",
+    description:
+      "Deterministic, content-addressed inventory of a root: every regular file (and symlink) as { path, bytes, sha256, mode, kind }, sorted by code point, with snapshotDigest = sha256(JCS(body)). No timestamps, no absolute paths — the same tree gives the same digest on every machine. Honours the root .gitignore, always skips .git/ and .axiom/, never follows symlinks, never leaves the root. Use it to build Plans against real pre-image digests, or diff two snapshots with `axiom snapshot-diff`.",
+    inputSchema: {
+      root: RootArg,
+      include: z
+        .array(z.string().min(1))
+        .optional()
+        .describe("Relative globs (*, **, ?) to keep; default everything"),
+      exclude: z.array(z.string().min(1)).optional().describe("Relative globs to drop"),
+      maxFiles: z
+        .int()
+        .min(1)
+        .max(SNAPSHOT_MAX_FILES_CAP)
+        .default(SNAPSHOT_MAX_FILES_DEFAULT)
+        .describe(`Stop after this many files (cap ${SNAPSHOT_MAX_FILES_CAP}); sets truncated`),
+      maxBytes: z
+        .int()
+        .nonnegative()
+        .default(SNAPSHOT_MAX_BYTES_DEFAULT)
+        .describe("Stop once the summed size would exceed this; sets truncated"),
+      followSymlinks: z
+        .literal(false)
+        .default(false)
+        .describe("Always false; symlinks are recorded, never followed"),
+      respectGitignore: z.boolean().default(true),
+      withContentDigest: z.boolean().default(true).describe("false → sizes only, no sha256"),
+    },
+    outputSchema: RepoSnapshotSchema,
+    annotations: READ,
+    async handler(ctx, input) {
+      const { rootReal } = await resolveRoot(ctx.policy, input.root);
+      const opts: Parameters<typeof snapshotRoot>[1] = {
+        maxFiles: input.maxFiles,
+        maxBytes: input.maxBytes,
+        respectGitignore: input.respectGitignore,
+        withContentDigest: input.withContentDigest,
+      };
+      if (input.include !== undefined) opts.include = input.include;
+      if (input.exclude !== undefined) opts.exclude = input.exclude;
+      const snap = await snapshotRoot(rootReal, opts);
+      ctx.log.debug("snapshot", { root: rootReal, files: snap.body.counts.files });
+      return snap;
+    },
+    summarize: (o) => ({
+      snapshotDigest: o.snapshotDigest,
+      counts: o.body.counts,
+      truncated: o.body.truncated,
+      paths: o.body.files.slice(0, SUMMARY_LIST_MAX).map((f) => f.path),
+    }),
   }),
 ];
 

@@ -15,6 +15,7 @@ import {
   ManifestBundleSchema,
   PlanSchema,
   ProfileSchema,
+  RepoSnapshotSchema,
 } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,7 @@ const targets: ReadonlyArray<readonly [string, z.ZodType]> = [
   ["ApplyResult", ApplyResultSchema],
   ["Profile", ProfileSchema],
   ["Journal", JournalSchema],
+  ["RepoSnapshot", RepoSnapshotSchema],
 ];
 
 for (const [name, schema] of targets) {

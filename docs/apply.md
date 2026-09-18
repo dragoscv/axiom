@@ -69,8 +69,8 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
 - **Backups are not version control.** `.axiom/backup/` keeps pre-images for the
   last `keepBackups` manifests (default 3), then prunes.
 - **No network.** `mode: pr` never pushes or opens a pull request (see below).
-- **`ref` sources are not fetched** (`ERR_REF_OFFLINE`); only inline blobs and the
-  local CAS.
+- **`ref` sources are never fetched by apply** (`ERR_REF_OFFLINE` when the blob is not in the
+  local CAS); `axiom compile --allow-net` on the same root fetches and pins them first.
 - **Directory `fsync` is skipped on Windows**; a power loss in the milliseconds
   after a rename can lose the rename on NTFS. Journal and marker files are still
   fsynced.
