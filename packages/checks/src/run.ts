@@ -1,3 +1,4 @@
+import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
 import { canonicalDigestRef } from "@codai/axiom-canon";
 import {
@@ -15,9 +16,9 @@ import { deriveManifestFacts } from "./facts/manifest.js";
 import { createRepoFacts } from "./facts/repo.js";
 import { mergeChecks } from "./profile.js";
 import { builtinRegistry, type PredicateRegistry } from "./registry.js";
-import type { AnyPredicate, FactContext } from "./types.js";
+import type { AnyPredicate, FactContext, GuardOptions } from "./types.js";
 
-export interface RunChecksOptions {
+export interface RunChecksOptions extends GuardOptions {
   bundle: ManifestBundle;
   /** Already resolved (no `extends`) — see `loadProfile`. */
   profile: Profile;
@@ -69,6 +70,18 @@ function ms(start: number): number {
   return Math.max(0, Math.round(performance.now() - start));
 }
 
+/** §3.2: external guards run in a pool of `min(4, cpus)`. */
+export const GUARD_POOL_SIZE = Math.max(1, Math.min(4, cpus().length));
+
+async function runPool<T>(items: readonly T[], size: number, fn: (t: T) => Promise<void>) {
+  const queue = [...items];
+  await Promise.all(
+    Array.from({ length: Math.min(size, queue.length) }, async () => {
+      for (let next = queue.shift(); next !== undefined; next = queue.shift()) await fn(next);
+    }),
+  );
+}
+
 export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
   const t0 = performance.now();
   const { bundle, profile } = opts;
@@ -112,11 +125,56 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
   } else {
     providers.push({ name: "repo", status: "skipped", ms: 0 });
   }
-  providers.push({ name: "guard", status: "skipped", ms: 0 });
+  const guardsEnabled =
+    opts.allowGuards === true && profile.facts.allowGuards && opts.root !== undefined;
+  if (guardsEnabled && opts.root !== undefined) {
+    const guard: NonNullable<FactContext["facts"]["guard"]> = {
+      enabled: true,
+      root: opts.root,
+      allowlist: [...(opts.guardAllowlist ?? [])],
+    };
+    if (opts.stagingDir !== undefined) guard.stagingDir = opts.stagingDir;
+    ctx.facts.guard = guard;
+  }
   Object.freeze(ctx.facts);
   Object.freeze(ctx);
 
-  // --- predicates, sequential in check order --------------------------------
+  // --- predicates: sequential in check order; guard.external in a pool ------
+  const guardChecks: { check: CheckRef; predicate: AnyPredicate; params: unknown }[] = [];
+  let guardFailed = false;
+
+  const collect = (check: CheckRef, predicate: AnyPredicate, result: Finding[]) => {
+    for (const f of result) {
+      if (isProviderFailure(f)) {
+        providerFailed = true;
+        if (predicate.requires.includes("guard")) guardFailed = true;
+        findings.push({ ...f, id: f.id === predicate.id ? check.id : f.id });
+      } else {
+        findings.push({ ...f, severity: check.severity });
+      }
+    }
+  };
+
+  const execute = async (check: CheckRef, predicate: AnyPredicate, params: unknown) => {
+    let result: Finding[];
+    try {
+      result = await predicate.run(ctx, params);
+    } catch (e) {
+      providerFailed = true;
+      if (predicate.requires.includes("guard")) guardFailed = true;
+      findings.push(
+        providerFinding(
+          check,
+          predicate.id,
+          "ERR_PROVIDER_FAILED",
+          `predicate threw: ${errorMessage(e)}`,
+        ),
+      );
+      return;
+    }
+    collect(check, predicate, result);
+  };
+
   for (const check of checks) {
     let predicate: AnyPredicate;
     try {
@@ -140,6 +198,7 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
     }
     if (predicate.requires.includes("guard") && !profile.facts.allowGuards) {
       providerFailed = true;
+      guardFailed = true;
       findings.push(
         providerFinding(
           check,
@@ -158,29 +217,23 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
       continue;
     }
 
-    let result: Finding[];
-    try {
-      result = await predicate.run(ctx, params.params);
-    } catch (e) {
-      providerFailed = true;
-      findings.push(
-        providerFinding(
-          check,
-          predicate.id,
-          "ERR_PROVIDER_FAILED",
-          `predicate threw: ${errorMessage(e)}`,
-        ),
-      );
+    if (predicate.requires.includes("guard")) {
+      guardChecks.push({ check, predicate, params: params.params });
       continue;
     }
-    for (const f of result) {
-      if (isProviderFailure(f)) {
-        providerFailed = true;
-        findings.push({ ...f, id: f.id === predicate.id ? check.id : f.id });
-      } else {
-        findings.push({ ...f, severity: check.severity });
-      }
-    }
+    await execute(check, predicate, params.params);
+  }
+
+  const tg = performance.now();
+  if (guardChecks.length > 0 || guardFailed) {
+    await runPool(guardChecks, GUARD_POOL_SIZE, (g) => execute(g.check, g.predicate, g.params));
+    providers.push({
+      name: "guard",
+      status: !guardsEnabled || guardFailed ? "error" : "ok",
+      ms: ms(tg),
+    });
+  } else {
+    providers.push({ name: "guard", status: "skipped", ms: 0 });
   }
 
   const sorted = sortFindings(findings);

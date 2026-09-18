@@ -1,7 +1,7 @@
 import { access, constants, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { apply, rollback } from "@codai/axiom-apply";
-import { loadProfile, runChecks } from "@codai/axiom-checks";
+import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import {
   ApplyResultSchema,
@@ -40,6 +40,8 @@ export interface ToolContext {
   log: Logger;
   /** Roots that received a stored manifest/report during this process (for DigestRef lookups). */
   seenRoots: Set<string>;
+  /** `--allow-guards` / `--guard-allowlist` from startup (§3.2); absent = guards disabled. */
+  guards?: GuardOptions;
 }
 
 export interface ToolDef<I extends z.ZodRawShape = z.ZodRawShape, O extends z.ZodType = z.ZodType> {
@@ -154,6 +156,7 @@ async function checkBundle(
     bundle,
     profile,
     checks: bundle.manifest.checks,
+    ...ctx.guards,
   };
   if (rootReal !== undefined) {
     opts.root = rootReal;

@@ -248,7 +248,7 @@ describe("repo.*", () => {
 
 describe("guard.external", () => {
   const b = makeBundle([{ path: "a", content: "x" }]);
-  it("is registered but yields an error verdict in v2.0", async () => {
+  it("errors when the server did not pass --allow-guards", async () => {
     const r = await runChecks({
       bundle: b,
       profile: profileWith(
@@ -264,7 +264,8 @@ describe("guard.external", () => {
       ),
     });
     expect(r.verdict).toBe("error");
-    expect(r.findings[0]?.message).toMatch(/not enabled in v2\.0/);
+    expect(r.findings[0]?.facts.code).toBe("ERR_UNSUPPORTED_OP");
+    expect(r.findings[0]?.message).toMatch(/disabled/);
   });
   it("errors when the profile forbids guards", async () => {
     const r = await ids(b, "guard.external", { command: "x" });

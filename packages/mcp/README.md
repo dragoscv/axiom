@@ -74,14 +74,20 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 - Payloads over 4 MiB are rejected up front (`ERR_BUNDLE_TOO_LARGE`).
 - `.axiom/lock` makes apply single-writer per root; the journal makes it crash-safe and reversible.
 - stdout carries only JSON-RPC. Logs are JSON lines on stderr (`--log-level error|warn|info|debug`, default `warn`).
+- External guards (`guard.external`) are **off** unless the process is started with `--allow-guards`
+  *and* the profile sets `facts.allowGuards: true`. Relative commands must live under `<root>/scripts/`;
+  absolute ones must be listed exactly via `--guard-allowlist <abs>` (repeatable). Guards are spawned
+  with an args array (never a shell), a scrubbed environment, a wall-clock timeout, and must print
+  `GuardOutput` JSON — see `docs/checks.md`.
 
 ## CLI
 
 ```
+axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
 axiom compile <plan.json> [-o out.json] [--store cas --root .]
 axiom verify  <bundle.json>
-axiom check   <bundle.json> --root . [--profile p] [--json]
-axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>]
+axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
+axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
 axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal>

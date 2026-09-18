@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { apply, rollback } from "@codai/axiom-apply";
-import { loadProfile, runChecks } from "@codai/axiom-checks";
+import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -19,12 +19,13 @@ const EXIT_USAGE = 2;
 const help = (version: string) => `axiom ${version} — transactional write gate for AI agents
 
 Usage:
-	axiom mcp [--root <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
+  axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
 	axiom verify <bundle.json>
-	axiom check <bundle.json> --root <dir> [--profile <name>] [--json]
-	axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
+  axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
+  axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
+                                         [--allow-guards] [--guard-allowlist <abs>]...
 	axiom rollback <digest> --root <dir>
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
@@ -34,6 +35,8 @@ Usage:
 Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
 The \`mcp\` verb speaks JSON-RPC on stdout and logs JSON lines on stderr; every other verb prints JSON to stdout.
 A \`.axm\` plan with errors prints its diagnostics as JSON and exits 2.
+\`guard.external\` checks run only with --allow-guards AND a profile that sets facts.allowGuards; absolute
+commands must additionally appear in --guard-allowlist (relative ones must live under <root>/scripts/).
 `;
 
 function out(value: unknown): void {
@@ -91,10 +94,27 @@ async function realRootArg(root: string | undefined): Promise<string> {
 
 class UsageError extends Error {}
 
+const GUARD_FLAGS = {
+  "allow-guards": { type: "boolean" },
+  "guard-allowlist": { type: "string", multiple: true },
+} as const;
+
+function guardOptions(values: {
+  "allow-guards"?: boolean;
+  "guard-allowlist"?: string[];
+}): GuardOptions {
+  const allowlist = (values["guard-allowlist"] ?? []).map((p) => {
+    if (!path.isAbsolute(p)) throw new UsageError(`--guard-allowlist must be absolute: ${p}`);
+    return path.resolve(p);
+  });
+  return { allowGuards: values["allow-guards"] === true, guardAllowlist: allowlist };
+}
+
 async function cmdMcp(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string", multiple: true },
     "log-level": { type: "string" },
+    ...GUARD_FLAGS,
   });
   const level = values["log-level"] ?? "warn";
   if (!isLogLevel(level))
@@ -104,7 +124,10 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const policy = await createRootsPolicy(rootArgs);
   if (policy.roots.size === 0)
     log.warn("no --root given; every root-taking tool will fail with ERR_ROOT_REQUIRED");
-  const server = createServer(policy, { log });
+  const guards = guardOptions(values);
+  if (guards.allowGuards)
+    log.warn("external guards ENABLED (--allow-guards)", { allowlist: guards.guardAllowlist });
+  const server = createServer(policy, { log, guards });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log.info("mcp stdio ready", { roots: [...policy.roots] });
@@ -164,6 +187,7 @@ async function cmdCheck(argv: string[]): Promise<number> {
     root: { type: "string" },
     profile: { type: "string" },
     json: { type: "boolean" },
+    ...GUARD_FLAGS,
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("check: <bundle.json> is required");
@@ -176,6 +200,7 @@ async function cmdCheck(argv: string[]): Promise<number> {
     checks: bundle.manifest.checks,
     root: rootReal,
     casDir: path.join(rootReal, ".axiom", "cas"),
+    ...guardOptions(values),
   });
   await saveReport(rootReal, report);
   if (values.json) {
@@ -202,6 +227,7 @@ async function cmdApply(argv: string[]): Promise<number> {
     pr: { type: "boolean" },
     branch: { type: "string" },
     message: { type: "string" },
+    ...GUARD_FLAGS,
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("apply: <bundle.json> is required");
@@ -218,6 +244,7 @@ async function cmdApply(argv: string[]): Promise<number> {
     );
   }
   const profile = await loadProfileFor(rootReal, values.profile ?? bundle.manifest.profile);
+  const guards = guardOptions(values);
   const applyOpts: Parameters<typeof apply>[0] = {
     bundle,
     root: rootReal,
@@ -229,6 +256,7 @@ async function cmdApply(argv: string[]): Promise<number> {
         checks: bundle.manifest.checks,
         root: rootReal,
         casDir: path.join(rootReal, ".axiom", "cas"),
+        ...guards,
       });
       await saveReport(rootReal, report);
       return report;

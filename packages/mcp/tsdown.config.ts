@@ -12,11 +12,18 @@ const shared = {
  * Rolldown writes a `//#region <file>` / `//#endregion` comment pair around every bundled
  * module (~19 KB across the CLI bundle). They are comments only, so dropping them changes no
  * behaviour and keeps the eager `cli.js + cli-main.js` inside the 950 KB budget.
+ * Whole-line JSDoc blocks (`/** … *​/`, ~95 KB in the CLI bundle, mostly from bundled deps) are
+ * dropped for the same reason; `/*!` license banners are untouched.
  */
 const stripRegionMarkers = {
   name: "axiom-strip-region-markers",
   renderChunk(code: string) {
-    return { code: code.replace(/^\/\/#(?:end)?region\b[^\n]*\n/gm, ""), map: null };
+    return {
+      code: code
+        .replace(/^\/\/#(?:end)?region\b[^\n]*\n/gm, "")
+        .replace(/^[ \t]*\/\*\*(?:[^*]|\*(?!\/))*\*\/[ \t]*\r?\n/gm, ""),
+      map: null,
+    };
   },
 };
 

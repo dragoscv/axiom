@@ -31,6 +31,25 @@ export interface RepoFacts {
   gitDirty?: boolean;
 }
 
+/** Runner-provided guard settings (§3.2); present iff the server enabled guards. */
+export interface GuardFacts {
+  /** `--allow-guards` was given at startup. */
+  enabled: boolean;
+  /** realpath'd authorised root; relative commands resolve under `<root>/scripts/`. */
+  root: string;
+  /** Absolute executables allowed as `command` (`--guard-allowlist`). */
+  allowlist: readonly string[];
+  /** Apply staging dir, when the runner has one (`cwd: "staging"`). */
+  stagingDir?: string;
+}
+
+/** Options threaded from the server flags into `runChecks` (§3.2). */
+export interface GuardOptions {
+  allowGuards?: boolean;
+  guardAllowlist?: readonly string[];
+  stagingDir?: string;
+}
+
 /** Everything a predicate may read. Frozen before predicates run. */
 export interface FactContext {
   manifest: ManifestBody;
@@ -40,6 +59,7 @@ export interface FactContext {
     /** From blobs/CAS only; never network. */
     content: ContentReader;
     repo?: RepoFacts;
+    guard?: GuardFacts;
     profile: ProfileFacts;
   };
 }

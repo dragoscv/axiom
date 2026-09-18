@@ -12,7 +12,14 @@ import { pathAllow, pathDeny, pathReservedNames } from "./path.js";
 import { repoNoOverwriteOf, repoRequireCompanion } from "./repo.js";
 
 export { SECRET_PATTERN_NAMES, SECRET_PATTERNS } from "./content.js";
-export { GuardExternalParams } from "./guard.js";
+export {
+  GuardExternalParams,
+  type GuardExternalParamsT,
+  type GuardOutput,
+  GuardOutputSchema,
+  parseLegacyText,
+  resolveGuardCommand,
+} from "./guard.js";
 export {
   contentEncodingUtf8,
   contentMaxBytes,

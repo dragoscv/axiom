@@ -15,7 +15,11 @@ const report = await runChecks({ bundle, profile, root: realRoot, checks: plan.c
   `.git/HEAD` read directly — no spawn; `gitDirty` is `undefined` in 2.0).
 - **Built-ins**: `path.allow|deny|reservedNames`, `content.noSecrets|maxBytes|encodingUtf8`,
   `manifest.maxArtifacts|maxTotalBytes|requireSigned|noDeletes`, `deps.max|deny`,
-  `repo.noOverwriteOf|requireCompanion`, `guard.external` (registered, always `error` until 2.1).
+   `repo.noOverwriteOf|requireCompanion`, `guard.external` (spawns a repo-owned `scripts/*.mjs|.ps1`
+   or an allowlisted absolute executable, no shell; needs profile `facts.allowGuards` **and**
+   `runChecks({ allowGuards: true, guardAllowlist })` — the CLI/server `--allow-guards` /
+   `--guard-allowlist <abs>` flags; stdout must be `GuardOutput` JSON; guard checks run in a pool
+   of `min(4, cpus)`; see `docs/checks.md`).
 - **Profiles**: `default`, `strict` (extends default), `permissive`; files `<dir>/<name>.json` shadow
   builtins; `extends` chains are resolved parent-first, child checks override by `id`; cycles →
   `ERR_INVALID_PROFILE`.

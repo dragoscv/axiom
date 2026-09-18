@@ -10,11 +10,13 @@ export {
   mergeChecks,
 } from "./profile.js";
 export { builtinRegistry, type ParamsResult, PredicateRegistry } from "./registry.js";
-export { type RunChecksOptions, runChecks, sortFindings } from "./run.js";
+export { GUARD_POOL_SIZE, type RunChecksOptions, runChecks, sortFindings } from "./run.js";
 export type {
   AnyPredicate,
   ContentReader,
   FactContext,
+  GuardFacts,
+  GuardOptions,
   ManifestFacts,
   Predicate,
   PredicateId,

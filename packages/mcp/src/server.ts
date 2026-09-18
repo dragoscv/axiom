@@ -19,6 +19,8 @@ export const SERVER_VERSION: string = pkg.version;
 export interface CreateServerOptions {
   log?: Logger;
   tools?: readonly AnyToolDef[];
+  /** `--allow-guards` / `--guard-allowlist` (§3.2). Omit to keep guards disabled. */
+  guards?: ToolContext["guards"];
 }
 
 export interface StructuredError {
@@ -83,6 +85,7 @@ function notFound(uri: string): never {
 export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}): McpServer {
   const log = opts.log ?? silentLogger;
   const ctx: ToolContext = { policy, log, seenRoots: new Set() };
+  if (opts.guards !== undefined) ctx.guards = opts.guards;
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, resources: {} } },

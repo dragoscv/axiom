@@ -233,19 +233,82 @@ Finding id `repo.requireCompanion.<name>`.
 
 ### `guard.external`
 
-**v2.1.** Params are accepted so profiles written for v2.1 validate today, but
-in v2.0 the predicate never spawns anything and always returns a provider
-failure (`ERR_UNSUPPORTED_OP`) → `verdict: error`. It is additionally blocked by
-the runner unless the profile sets `facts.allowGuards: true`. `requires: guard`.
+Runs a repository-owned guard script (design §3.2) and maps its output to
+findings. `requires: guard`. **Disabled by default, twice**: the predicate runs
+only when the profile sets `facts.allowGuards: true` **and** the server/CLI was
+started with `--allow-guards`. Otherwise it returns one `error` finding
+(`code: ERR_UNSUPPORTED_OP`, "external guards disabled") → `verdict: error`.
 
 | Param | Type | Default |
 |-------|------|---------|
-| `command` | string | required |
+| `command` | string | required — relative: resolved under `<root>/scripts/`; absolute: must be in `--guard-allowlist` |
 | `args` | string[] | `[]` |
-| `cwd` | `"root" \| "staging"` | — |
+| `cwd` | `"root" \| "staging"` | `"root"` |
 | `timeoutMs` | int 1–60000 | `30000` |
-| `env` | record<string,string> | — |
+| `env` | record<string,string> | — (added to the scrubbed env) |
 | `stdin` | `"bundle" \| "manifest" \| "none"` | `"bundle"` |
+| `legacyText` | boolean | `false` — accept brivio-style `OK    name` / `FAIL  name: reason` stdout |
+
+**Command resolution.** No shell is ever involved (`spawn` with an args array,
+`windowsHide: true`). A relative `command` (with or without a `scripts/`
+prefix) must realpath to a file strictly inside `<root>/scripts/`; any `..`
+segment is rejected. An absolute `command` must realpath-match an entry of
+`--guard-allowlist` exactly. `.mjs/.js/.cjs` run via the current `node`
+(`process.execPath`), `.ps1` via `pwsh -NoProfile -ExecutionPolicy Bypass -File`;
+any other extension is only allowed as an allowlisted absolute executable.
+Violations produce an `error` finding with `code: ERR_PREDICATE_PARAMS`.
+
+**Process environment.** The child gets a whitelist only (`PATH`, `HOME`,
+`USERPROFILE`, `SYSTEMROOT`, `SYSTEMDRIVE`, `PATHEXT`, `COMSPEC`, `TEMP`,
+`TMP`, `TMPDIR`, `LANG`, `LC_ALL`), plus `params.env`, plus
+`AXIOM_MANIFEST_DIGEST` and `AXIOM_ROOT`. `NODE_OPTIONS` is cleared. `cwd` is
+the realpath'd root, or the apply staging directory when `cwd: "staging"` and
+the runner supplied one (otherwise `ERR_PREDICATE_PARAMS`).
+
+**Stdin.** `bundle` → `JCS(ManifestBundle)`; `manifest` → `JCS(ManifestBody)`;
+`none` → closed immediately.
+
+**Output contract.** stdout must be one JSON object:
+
+```ts
+type GuardOutput = {
+  ok: boolean;
+  findings?: Array<{
+    id: string;                       // finding id, e.g. "lint.todo"
+    severity?: "error" | "warn" | "info"; // default: "error" when ok:false, "info" when ok:true
+    message: string;
+    path?: string;                    // RelPath; non-conforming values are kept in facts.rawPath
+    facts?: Record<string, unknown>;
+  }>;
+};
+```
+
+| Guard behaviour | Result |
+|-----------------|--------|
+| exit 0, valid JSON | findings mapped (none → `[]`) |
+| exit ≠ 0, valid JSON | same mapping |
+| `ok: false` with no findings | one `error` finding "guard reported ok:false without findings" |
+| exit 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` (fail closed) |
+| exit ≠ 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT`, `facts.stderr` = last 4 KiB |
+| wall clock > `timeoutMs` | process tree killed, one `error` finding, `code: ERR_GUARD_TIMEOUT` |
+| spawn failure (ENOENT etc.) | one `error` finding, `code: ERR_GUARD_OUTPUT` |
+| `legacyText: true` and no JSON | `FAIL  name: reason` lines → `error` findings `{id: name, message: reason}`; only `OK` lines → `[]` |
+
+Non-provider findings are re-labelled with the CheckRef `severity` like every
+other predicate; provider failures (`code` above) stay `error` and force
+`verdict: error`.
+
+**Concurrency.** `runChecks` runs every `guard.external` check in a pool of
+`min(4, os.cpus().length)` after the sequential predicates. The `guard`
+provider status is `ok`, `error` (disabled, resolution failure, timeout, bad
+output) or `skipped` (no guard checks in the set).
+
+```json
+{ "id": "repo-guards", "predicate": "guard.external",
+  "params": { "command": "scripts/axiom-guard-adapter.mjs", "timeoutMs": 60000 } }
+```
+
+See `docs/integration/brivio.md` for wiring brivio's `run-guards.mjs`.
 
 ## Built-in profiles
 
