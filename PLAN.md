@@ -142,6 +142,20 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 - 2026-09-18 R1: code inventory, build/test run, sibling-repo integration scan, web landscape (SDD tools, MCP 2026-07-28 spec, parser tech, provenance, policy langs, versions), red-team critique, architecture design. Reports archived in `docs/research/2026-09-18-*.md`.
 
 ## 6. Q&A log (owner answers)
+- 2026-09-18 round 3: push main + tags → yes (done, CI on 3 OS live); publish 2.0.0 only after CI green on all OS, owner triggers `release.yml` via tag `v2.0.0`; deprecate all 1.x after 2.0.0 live (needs owner `npm login`); v2.1 order = S-204 → S-203 → S-201 → S-202 → S-205 → S-206 → S-207.
 - 2026-09-18 round 2: D-01 "Rebuild DSL-first + Transactional write gate"; D-02 defer DSL to v2.1; D-03 predicates→CEL v2.2; D-04/05/10/13 all deferred as recommended; D-06 toolchain accepted; D-09/11 gates+budgets accepted; "începe Faza 0 + Faza 1 imediat".
 - 2026-09-18: "Curata, dar arhiveaza nu sterge" → D-08 archive.
 - 2026-09-18: wants best-in-class stack even beyond golden stack; deep research; parallel subagents; single canonical md + csv tracker; instructions/skills/hooks so errors are caught later; askQuestions before/after research and at every "done".
+
+## 7. CI findings log (what only the matrix caught)
+- Run #1 (`04ec4ab`): **apply delete was a no-op on POSIX** — backup via hardlink, then `rename(target, backup)` onto its own hardlink succeeds without unlinking. Windows never showed it. Fix `f258a6e` (`unlinkRetry`). Verified in `docker node:22 -u 1000`.
+- Run #2 (`f258a6e`): **Windows runners (pwsh) passed `--filter './packages/**'` literally** → `Scope: 0 of 9`, build did nothing, tests failed to resolve `@codai/axiom-*`. Fix `7ac1732` (filter by name `"@codai/axiom-*"`).
+- Run #3 (`7ac1732`): axm roundtrip property generated host `08` → WHATWG parses all-digit hosts as IPv4, `z.url()` rejects. Fix `1d8c350`.
+- Golden digests identical on ubuntu/windows/macos from run #1 onward (determinism invariant holds).
+
+## 8. Release runbook (2.0.0) — owner steps
+1. Wait for CI green on all 9 jobs for the commit to release.
+2. One-time on npmjs.com for **each** of `@codai/axiom-schema|canon|plan|checks|apply|axm|mcp`: package → Settings → Publishing access → *Trusted publisher: GitHub Actions* → repo `dragoscv/axiom`, workflow `release.yml`. (New packages must exist first: publish 2.0.0 once manually with `pnpm publish --access public` from a logged-in terminal, then enable trusted publishing.)
+3. `pnpm changeset version` → commit → tag `v2.0.0` → push tag → `release.yml` publishes with provenance.
+4. Verify live: `npm view @codai/axiom-mcp@2.0.0 dist.attestations` shows provenance; `npx @codai/axiom-mcp@2.0.0 --version`.
+5. S-005: `npm deprecate "@codai/axiom-mcp@<2.0.0" "v1 superseded by 2.x: manifest hash was not content-bound, apply had no rollback; see MIGRATION.md"` and the same for `@codai/axiom-core`, `-engine`, `-policies`, `@codai/axiom-emitter-*`.

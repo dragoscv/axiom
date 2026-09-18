@@ -24,7 +24,7 @@ S-105,story,1,checks registry + built-in predicates + profiles,done,agent,S-102,
 S-106,story,1,apply engine (containment 2PC journal rollback idempotency dry-run lock),done,agent,S-102;S-103,fast-check containment/noop/rollback properties,
 S-107,story,1,mcp server + CLI (8 tools annotations outputSchema resources roots),done,agent,S-104;S-105;S-106,in-process client smoke; no stdout logs,
 S-108,story,1,repo guards scripts/check-*.mjs + run-guards,done,agent,S-101,pnpm guards green pre-commit + CI,
-S-109,story,1,CI matrix + trusted publishing,done,agent,S-108,provenance visible on npm,workflows in place (ci/release/mutation; actions SHA-pinned); provenance verifiable only after first publish
+S-109,story,1,CI matrix + trusted publishing,done,agent,S-108,provenance visible on npm,CI run 35301058082 green 9/9 on 1d8c350 (3 OS x node 22/24 + golden cross-OS); provenance verifiable after first publish
 S-110,story,1,Stryker mutation on canon/contain/predicates >=85%,blocked,agent,S-103;S-105;S-106,report in CI,upstream: @stryker-mutator/vitest-runner 10.0.0 not Vitest-5 aware (stryker-js#6210) -> perTest crashes and per-test filter matches nothing; config runnable with coverageAnalysis off and break null; mutation.yml continue-on-error
 S-111,story,1,Docs + .github/instructions + skills,done,agent,S-107,check-tool-parity green,
 S-112,story,1,Port/delete v1 tests,done,agent,S-106,0 failing 0 unexplained skips,audit docs/research/2026-09-18-v1-test-audit.md: 71 covered 14 differently 41 dropped 8 gaps -> G1-G5 added; 1 skip (G3 win32 chmod advisory) verified on linux
