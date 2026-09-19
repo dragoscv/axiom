@@ -40,7 +40,20 @@ const CompanionParams = z
           .object({
             when: z.string().min(1),
             expect: z
-              .array(z.object({ name: z.string().min(1), match: z.string().min(1) }).strict())
+              .array(
+                z
+                  .object({
+                    name: z.string().min(1),
+                    match: z.string().min(1),
+                    /**
+                     * S-408 (A15): the companion must be *in this plan*, not merely exist in
+                     * the repo. Use for "if you touch the schema you must touch the migration"
+                     * rules, where a stale existing file is exactly the bug being guarded.
+                     */
+                    mustChange: z.boolean().default(false),
+                  })
+                  .strict(),
+              )
               .min(1),
           })
           .strict(),
@@ -51,7 +64,8 @@ const CompanionParams = z
 
 /**
  * brivio `check-ripple` shape: when any artifact matches `when`, every `expect`
- * must be satisfied by at least one artifact path OR one existing repo file.
+ * must be satisfied by at least one artifact path OR (unless `mustChange`) one
+ * existing repo file.
  */
 export const repoRequireCompanion = definePredicate<z.infer<typeof CompanionParams>>({
   id: "repo.requireCompanion",
@@ -67,14 +81,24 @@ export const repoRequireCompanion = definePredicate<z.infer<typeof CompanionPara
       for (const exp of rule.expect) {
         const match = globMatcher([exp.match], false);
         if (paths.some(match)) continue;
-        const inRepo = ctx.facts.repo ? await ctx.facts.repo.glob(exp.match) : [];
-        if (inRepo.length > 0) continue;
+        if (!exp.mustChange) {
+          const inRepo = ctx.facts.repo ? await ctx.facts.repo.glob(exp.match) : [];
+          if (inRepo.length > 0) continue;
+        }
         out.push(
           finding({
             id: `repo.requireCompanion.${exp.name}`,
             predicate: "repo.requireCompanion",
-            message: `"${rule.when}" changed but no companion matches "${exp.match}" (${exp.name})`,
-            facts: { when: rule.when, expect: exp.match, name: exp.name, triggers },
+            message: exp.mustChange
+              ? `"${rule.when}" changed but the plan does not also change "${exp.match}" (${exp.name})`
+              : `"${rule.when}" changed but no companion matches "${exp.match}" (${exp.name})`,
+            facts: {
+              when: rule.when,
+              expect: exp.match,
+              name: exp.name,
+              mustChange: exp.mustChange,
+              triggers,
+            },
           }),
         );
       }

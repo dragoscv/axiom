@@ -115,7 +115,8 @@ export const PREDICATES: Readonly<Record<string, string>> = {
   "deps.max": "A dependency manifest may declare at most `max` dependencies.",
   "deps.deny": "Reject dependencies matching `patterns`.",
   "repo.noOverwriteOf": "Existing files matching `globs` may not be overwritten.",
-  "repo.requireCompanion": "When a path matches `when`, a companion matching `expect` must exist.",
+  "repo.requireCompanion":
+    "When a path matches `when`, a companion matching `expect` must exist (in the plan or the repo; `mustChange: true` = in the plan).",
   "guard.external": "Run an allow-listed external guard script (JSON stdout contract).",
   "expr.cel":
     "A boolean CEL `expression` over `manifest`, `artifacts`, `content`, `repo` (pure, allow-listed).",

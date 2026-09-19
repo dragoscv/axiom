@@ -96,10 +96,24 @@ Pattern names (`SECRET_PATTERN_NAMES`): `cnp`, `email`, `phoneRo`, `card`,
 `slackToken`. One finding per (artifact, pattern) with id
 `content.noSecrets.<name>` and `facts.pattern`.
 
+`card` is not a bare digit-run regex: a 13–16-digit run (optional single space /
+hyphen separators) counts only if it passes the **Luhn** checksum, is not a single
+repeated digit (`0000 0000 0000 0000`), and is not part of a UUID
+(`00000000-0000-0000-0000-000000000000`). Epoch-millisecond timestamps, zero
+UUIDs and sequential placeholders therefore pass; every real test PAN (Visa
+`4111 1111 1111 1111`, Amex `378282246310005`, …) is still caught.
+
 ```json
 { "id": "content.noSecrets", "predicate": "content.noSecrets",
   "params": { "disable": ["email"], "allowPaths": ["docs/**", "**/*.test.ts"] } }
 ```
+
+**Globs and Next.js route groups.** Every glob parameter (`path.*`, `allowPaths`,
+`repo.*`, `content.maxBytes.globs`, …) goes through one matcher (picomatch, `dot:
+true`). A parenthesised segment with no glob metacharacters — `app/(app)/**`,
+`(marketing)` — is escaped automatically so it matches the literal directory;
+real extglobs (`@(a|b)`, `!(x)`, `+(y)`) and already-escaped `\(app\)` are left
+as written.
 
 ### `content.maxBytes`
 
@@ -236,13 +250,18 @@ already exists** in the repo. `create` ops are ignored (they fail at apply with
 
 The brivio `check-ripple` shape. For each rule, when any artifact path matches
 `when`, every `expect[].match` must be satisfied by at least one artifact path
-**or** one existing repo file. `requires: manifest, repo`.
+**or** (unless `mustChange`) one existing repo file. `requires: manifest, repo`.
 
 | Param | Type |
 |-------|------|
-| `rules` | `{ when: glob, expect: { name: string, match: glob }[] (min 1) }[]` (min 1) |
+| `rules` | `{ when: glob, expect: { name: string, match: glob, mustChange?: boolean = false }[] (min 1) }[]` (min 1) |
 
-Finding id `repo.requireCompanion.<name>`.
+`mustChange: true` demands that the companion be **in this plan** — an existing
+repo file no longer satisfies it. Use it for "touch the schema ⇒ touch a
+migration" rules, where a stale existing companion is exactly the bug being
+guarded; singleton companions (`client.ts`, `proxy.ts`, `en.json`) otherwise only
+bite on a fresh clone. Finding id `repo.requireCompanion.<name>`,
+`facts.mustChange` echoes the flag.
 
 ```json
 { "id": "ripple", "predicate": "repo.requireCompanion", "params": { "rules": [
@@ -310,10 +329,16 @@ type GuardOutput = {
 | exit ≠ 0, valid JSON | same mapping |
 | `ok: false` with no findings | one `error` finding "guard reported ok:false without findings" |
 | exit 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` (fail closed) |
-| exit ≠ 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT`, `facts.stderr` = last 4 KiB |
+| exit ≠ 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` |
 | wall clock > `timeoutMs` | process tree killed, one `error` finding, `code: ERR_GUARD_TIMEOUT` |
 | spawn failure (ENOENT etc.) | one `error` finding, `code: ERR_GUARD_OUTPUT` |
 | `legacyText: true` and no JSON | `FAIL  name: reason` lines → `error` findings `{id: name, message: reason}`; only `OK` lines → `[]` |
+
+**Evidence.** Every finding the guard produces — mapped findings, the
+"ok:false without findings" fallback, `ERR_GUARD_OUTPUT` and `ERR_GUARD_TIMEOUT`
+— carries `facts.evidence = { exitCode, stdout, stderr }` (each stream the last
+2 KiB) so a `FAIL lint` is auditable from the report alone, without re-running
+the guard. `facts.command` names the guard.
 
 Non-provider findings are re-labelled with the CheckRef `severity` like every
 other predicate; provider failures (`code` above) stay `error` and force

@@ -312,12 +312,33 @@ export function parseLegacyText(stdout: string): GuardOutput | undefined {
   return { ok: findings.length === 0, findings };
 }
 
-function mapOutput(out: GuardOutput, command: string): Finding[] {
+/**
+ * Raw process evidence attached to every guard finding (S-408, red-team B8): a
+ * finding that only says "FAIL x" is unauditable; the operator needs the exit code
+ * and the tail of what the guard actually printed. Bounded so findings stay small.
+ */
+export interface GuardEvidence {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+const EVIDENCE_TAIL = 2048;
+
+function evidenceOf(r: { code: number | null; stdout: string; stderr: string }): GuardEvidence {
+  return {
+    exitCode: r.code,
+    stdout: r.stdout.slice(-EVIDENCE_TAIL),
+    stderr: r.stderr.slice(-EVIDENCE_TAIL),
+  };
+}
+
+function mapOutput(out: GuardOutput, command: string, evidence: GuardEvidence): Finding[] {
   const findings: Finding[] = [];
   for (const f of out.findings ?? []) {
     const severity = f.severity ?? (out.ok ? "info" : "error");
     const rel = f.path === undefined ? undefined : RelPathSchema.safeParse(f.path);
-    const facts: Record<string, unknown> = { ...(f.facts ?? {}), command };
+    const facts: Record<string, unknown> = { ...(f.facts ?? {}), command, evidence };
     if (rel !== undefined && !rel.success) facts.rawPath = f.path;
     const fi = finding({
       id: f.id,
@@ -335,7 +356,7 @@ function mapOutput(out: GuardOutput, command: string): Finding[] {
         id: PREDICATE,
         predicate: PREDICATE,
         message: `guard reported ok:false without findings: ${command}`,
-        facts: { command },
+        facts: { command, evidence },
       }),
     );
   }
@@ -384,7 +405,7 @@ export async function runGuard(ctx: FactContext, params: GuardExternalParamsT): 
       providerError("ERR_GUARD_TIMEOUT", `guard timed out after ${params.timeoutMs} ms`, {
         command: params.command,
         timeoutMs: params.timeoutMs,
-        stderr: r.stderr,
+        evidence: evidenceOf(r),
       }),
     ];
   }
@@ -404,14 +425,12 @@ export async function runGuard(ctx: FactContext, params: GuardExternalParamsT): 
         `guard stdout is not a GuardOutput JSON object (exit ${r.code ?? "null"})`,
         {
           command: params.command,
-          exitCode: r.code,
-          stdout: r.stdout.slice(-STDERR_TAIL),
-          stderr: r.stderr,
+          evidence: evidenceOf(r),
         },
       ),
     ];
   }
-  return mapOutput(out, params.command);
+  return mapOutput(out, params.command, evidenceOf(r));
 }
 
 export const guardExternal = definePredicate<GuardExternalParamsT>({

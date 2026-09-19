@@ -36,6 +36,23 @@ describe("path.*", () => {
     expect((await ids(b, "path.deny", { globs: ["**/*.md"] })).verdict).toBe("fail");
     expect((await ids(b, "path.deny", { globs: ["**/*.py"] })).verdict).toBe("pass");
   });
+  it("Next.js route groups `(app)` in globs match literally without manual escaping (S-408)", async () => {
+    const rg = makeBundle([
+      { path: "apps/web/src/app/(app)/dashboard/page.tsx", content: "" },
+      { path: "apps/web/src/app/(marketing)/page.tsx", content: "" },
+    ]);
+    const r = await ids(rg, "path.deny", { globs: ["apps/web/src/app/(app)/**"] });
+    expect(r.verdict).toBe("fail");
+    expect(r.findings.map((f) => f.path)).toEqual(["apps/web/src/app/(app)/dashboard/page.tsx"]);
+    // The old manual escape keeps working, and real extglobs are untouched.
+    expect((await ids(rg, "path.deny", { globs: ["apps/web/src/app/\\(app\\)/**"] })).verdict).toBe(
+      "fail",
+    );
+    const ext = await ids(rg, "path.allow", {
+      globs: ["apps/web/src/app/@(\\(app\\)|\\(marketing\\))/**"],
+    });
+    expect(ext.verdict).toBe("pass");
+  });
   it("reservedNames: passes on schema-valid paths", async () => {
     expect((await ids(b, "path.reservedNames", {})).verdict).toBe("pass");
   });
@@ -75,6 +92,46 @@ describe("content.noSecrets", () => {
   it("passes clean content", async () => {
     const b = makeBundle([{ path: "x.txt", content: "export const a = 1;\n" }]);
     expect((await ids(b, "content.noSecrets", {})).verdict).toBe("pass");
+  });
+  describe("card false positives (S-408, metu zero-UUID)", () => {
+    const clean = [
+      'const orgId = "00000000-0000-0000-0000-000000000000";',
+      'id: "11111111-2222-3333-4444-555555555555"',
+      "placeholder 0000 0000 0000 0000",
+      "placeholder 1111111111111111",
+      "const ts = 1726790400000; // 13-digit epoch ms, fails Luhn",
+      "seq 1234567890123456", // 16 digits, Luhn-invalid
+    ];
+    for (const text of clean) {
+      it(`does not flag ${JSON.stringify(text)}`, async () => {
+        const b = makeBundle([{ path: "x.ts", content: text }]);
+        const r = await ids(b, "content.noSecrets", {});
+        expect(r.ids).not.toContain("content.noSecrets.card");
+      });
+    }
+    const pans = [
+      "4111 1111 1111 1111", // Visa test
+      "4111-1111-1111-1111",
+      "5555555555554444", // Mastercard test
+      "378282246310005", // Amex 15
+      "4222222222222", // Visa 13
+    ];
+    for (const pan of pans) {
+      it(`still flags Luhn-valid PAN ${pan}`, async () => {
+        const b = makeBundle([{ path: "x.ts", content: `card ${pan} end` }]);
+        const r = await ids(b, "content.noSecrets", {});
+        expect(r.ids).toContain("content.noSecrets.card");
+      });
+    }
+    it("a Luhn-valid PAN embedded next to a UUID is still caught (UUID scrub is surgical)", async () => {
+      const b = makeBundle([
+        {
+          path: "x.ts",
+          content: "user 00000000-0000-0000-0000-000000000000 paid with 4111111111111111",
+        },
+      ]);
+      expect((await ids(b, "content.noSecrets", {})).ids).toContain("content.noSecrets.card");
+    });
   });
   it("respects disable", async () => {
     const b = makeBundle([{ path: "x.txt", content: samples.awsKey! }]);
@@ -227,6 +284,30 @@ describe("repo.*", () => {
     expect(r.ids).toEqual(["repo.requireCompanion.php"]);
     const untriggered = makeBundle([{ path: "docs/a.md", content: "" }]);
     expect((await ids(untriggered, "repo.requireCompanion", rules, root)).verdict).toBe("pass");
+  });
+  it("mustChange: an existing repo companion does not satisfy the rule; a planned one does (S-408 A15)", async () => {
+    const strict = {
+      rules: [
+        {
+          when: "apps/web/src/actions/**",
+          expect: [{ name: "sdk", match: "packages/sdk/src/**", mustChange: true }],
+        },
+      ],
+    };
+    // packages/sdk/src/y.ts exists in the repo fixture, so the non-strict rule passes...
+    const onlyAction = makeBundle([{ path: "apps/web/src/actions/x.ts", content: "" }]);
+    expect((await ids(onlyAction, "repo.requireCompanion", rules, root)).verdict).toBe("pass");
+    // ...but mustChange demands the companion be in THIS plan.
+    const r = await ids(onlyAction, "repo.requireCompanion", strict, root);
+    expect(r.verdict).toBe("fail");
+    expect(r.ids).toEqual(["repo.requireCompanion.sdk"]);
+    expect(r.findings[0]?.facts.mustChange).toBe(true);
+    expect(r.findings[0]?.message).toMatch(/does not also change/);
+    const both = makeBundle([
+      { path: "apps/web/src/actions/x.ts", content: "" },
+      { path: "packages/sdk/src/x.ts", content: "" },
+    ]);
+    expect((await ids(both, "repo.requireCompanion", strict, root)).verdict).toBe("pass");
   });
   it("repo glob respects .gitignore", async () => {
     const b = makeBundle([{ path: "apps/web/x.ts", content: "" }]);

@@ -4,9 +4,22 @@ import type { PredicateId } from "../types.js";
 
 export type Matcher = (path: string) => boolean;
 
+/**
+ * Next.js route groups `(app)` / `(marketing)` are literal directory names, but to
+ * picomatch an unescaped `(...)` is an extglob/regex group, so `app/(app)/x.tsx` would
+ * never match `app/(app)/**`. S-408: escape a parenthesised segment when it contains
+ * no glob metacharacters and is not a real extglob (`@(`, `!(`, `?(`, `*(`, `+(`, `|`).
+ * Explicitly escaped `\(` is left alone.
+ */
+export function escapeRouteGroups(glob: string): string {
+  return glob.replace(/(^|[^\\@!?*+])\(([^()|*?[\]{}\\]+)\)/g, (_m, pre: string, inner: string) => {
+    return `${pre}\\(${inner}\\)`;
+  });
+}
+
 export function globMatcher(globs: readonly string[] | undefined, whenEmpty: boolean): Matcher {
   if (globs === undefined || globs.length === 0) return () => whenEmpty;
-  const m = picomatch([...globs], { dot: true });
+  const m = picomatch(globs.map(escapeRouteGroups), { dot: true });
   return (p) => m(p);
 }
 

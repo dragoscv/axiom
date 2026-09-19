@@ -3,12 +3,55 @@ import { z } from "zod";
 import { definePredicate } from "../types.js";
 import { finding, globMatcher, isUtf8 } from "./util.js";
 
+/** Luhn checksum over a digit string (ISO/IEC 7812-1); every real PAN passes it. */
+export function luhnValid(digits: string): boolean {
+  let sum = 0;
+  let double = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (d < 0 || d > 9) return false;
+    if (double) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    double = !double;
+  }
+  return digits.length > 0 && sum % 10 === 0;
+}
+
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const CARD_RE = /(?<![\w-])(?:\d[ -]?){12,15}\d(?![\w-])/g;
+
+/**
+ * Payment-card numbers (13–16 digits, optional single space/hyphen separators).
+ * S-408: a 16-digit run is only a PAN when it passes Luhn and is not a single
+ * repeated digit (`0000…`, `1111…` — placeholders, some of which are Luhn-valid),
+ * and digit runs that are part of a UUID (`00000000-0000-0000-0000-000000000000`)
+ * are never PANs. Metu's zero-UUID test ids tripped the old bare regex.
+ */
+export function findCardNumber(text: string): boolean {
+  const scrubbed = text.replace(UUID_RE, (m) => " ".repeat(m.length));
+  CARD_RE.lastIndex = 0;
+  for (let m = CARD_RE.exec(scrubbed); m !== null; m = CARD_RE.exec(scrubbed)) {
+    const digits = m[0].replace(/[ -]/g, "");
+    if (digits.length < 13 || digits.length > 16) continue;
+    if (/^(\d)\1+$/.test(digits)) continue;
+    if (luhnValid(digits)) return true;
+  }
+  return false;
+}
+
 /** Named secret/PII patterns. v1 policies regexes plus common credential shapes. */
-export const SECRET_PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
+export const SECRET_PATTERNS: ReadonlyArray<{
+  name: string;
+  re?: RegExp;
+  test?: (text: string) => boolean;
+}> = [
   { name: "cnp", re: /\b[1-9]\d{12}\b/ },
   { name: "email", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/ },
   { name: "phoneRo", re: /\b(\+4|0)7\d{8}\b/ },
-  { name: "card", re: /\b(?:\d[ -]?){13,16}\b/ },
+  { name: "card", test: findCardNumber },
   {
     name: "credentialAssignment",
     re: /\b(password|secret|token|api[_-]?key)\b\s*[:=]\s*["']?[^\s"']{4,}/i,
@@ -47,7 +90,8 @@ export const contentNoSecrets = definePredicate<z.infer<typeof NoSecretsParams>>
       if (bytes === undefined) continue;
       const text = decoder.decode(bytes.subarray(0, SCAN_LIMIT));
       for (const p of active) {
-        if (!p.re.test(text)) continue;
+        const hit = p.test !== undefined ? p.test(text) : (p.re?.test(text) ?? false);
+        if (!hit) continue;
         out.push(
           finding({
             id: `content.noSecrets.${p.name}`,

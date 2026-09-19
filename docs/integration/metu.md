@@ -31,12 +31,15 @@ repo's own skills.
 | `packages/db/src/schema/integrations.ts` | `packages/types/src/index.ts` · `packages/db/src/queries/integrations.ts` · `docs/integrations.md` | add-integration |
 | `apps/web/src/app/api/webhooks/**/route.ts` | `apps/web/src/proxy.ts` | add-integration §6 |
 
-The `(app)` route group is escaped as `\(app\)` because picomatch treats bare
-parentheses as an extglob group. Existing repo files satisfy an `expect`
-(design: "at least one artifact **or** one existing repo file"), so rules whose
-companions are stable singletons (`client.ts`, `proxy.ts`, `_journal.json`)
-effectively only fire on a fresh clone; the per-feature test globs are what
-bite in practice.
+The `(app)` route group was written as `\(app\)` because picomatch treats bare
+parentheses as an extglob group; since 2.2.0 (S-408) the matcher escapes plain
+route groups itself, so `app/(app)/**` works as written and the manual escape
+remains valid. Existing repo files satisfy an `expect` (design: "at least one
+artifact **or** one existing repo file"), so rules whose companions are stable
+singletons (`client.ts`, `proxy.ts`, `_journal.json`) effectively only fire on a
+fresh clone; the per-feature test globs are what bite in practice. For
+schema → migration style rules set `mustChange: true` on the `expect` (2.2.0) so
+the companion has to be in the plan.
 
 ## End-to-end proof (VERIFIED 2026-09-18, metu tree untouched — dry-run only)
 
@@ -109,8 +112,8 @@ own colocated test.
 flagged it as `content.noSecrets.card` (a 16+-digit run looks like a PAN), so
 check → `fail` and apply → `status: "failed", error.code: "ERR_CHECKS_FAILED"`
 with nothing written. Changing the fixture to `'ws_fresh_test'` made it pass.
-The zero-UUID is a common test fixture in metu — expect this false positive and
-use a non-numeric id, or a `uuid` shaped one with letters in it.
+**Fixed in 2.2.0 (S-408):** `card` now requires a Luhn-valid, non-repeated digit
+run outside any UUID, so the zero-UUID fixture passes as-is.
 
 ## Next (owner)
 

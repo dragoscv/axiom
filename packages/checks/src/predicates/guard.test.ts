@@ -146,20 +146,32 @@ describe("guard.external output mapping", () => {
     ]);
     expect(r.findings[0]?.facts.n).toBe(1);
     expect(r.findings[1]?.predicate).toBe("guard.external");
+    // S-408: every guard finding carries the raw process evidence for audit.
+    const ev = r.findings[0]?.facts.evidence as {
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+    };
+    expect(ev.exitCode).toBe(1);
+    expect(ev.stdout).toContain('"lint.todo"');
+    expect(typeof ev.stderr).toBe("string");
+    expect(r.findings[1]?.facts.evidence).toEqual(ev);
   });
   it("bad-output.mjs (exit 0, non-JSON) → ERR_GUARD_OUTPUT, fail closed", async () => {
     const r = await run({ command: "bad-output.mjs" });
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_GUARD_OUTPUT");
-    expect(r.findings[0]?.facts.exitCode).toBe(0);
-    expect(r.findings[0]?.facts.stdout).toMatch(/hello/);
+    const ev = r.findings[0]?.facts.evidence as { exitCode: number; stdout: string };
+    expect(ev.exitCode).toBe(0);
+    expect(ev.stdout).toMatch(/hello/);
   });
   it("exit1-nojson.mjs → ERR_GUARD_OUTPUT with stderr tail", async () => {
     const r = await run({ command: "exit1-nojson.mjs" });
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_GUARD_OUTPUT");
-    expect(r.findings[0]?.facts.exitCode).toBe(1);
-    expect(r.findings[0]?.facts.stderr).toMatch(/boom: something broke/);
+    const ev = r.findings[0]?.facts.evidence as { exitCode: number; stderr: string };
+    expect(ev.exitCode).toBe(1);
+    expect(ev.stderr).toMatch(/boom: something broke/);
   });
   it("hang.mjs with timeoutMs 500 → ERR_GUARD_TIMEOUT", async () => {
     const t0 = Date.now();
