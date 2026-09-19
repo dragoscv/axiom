@@ -30,27 +30,77 @@ For every write target extracted from the tool call:
 
 The predicates are the real `@codai/axiom-checks` implementations, run against a hand-built
 single-bundle `FactContext` (no digests, no JCS — the four predicates never read them). Tool calls
-that are not writes (`Read`, `Bash`, `grep_search`, `list_dir`, `create_directory`, …) are allowed
-immediately without touching the filesystem.
+that are neither writes nor shell commands (`Read`, `grep_search`, `list_dir`, `create_directory`, …)
+are allowed immediately without touching the filesystem.
+
+### Tool classes (Gate v2, D-18)
+
+| class | how recognised | what happens |
+|---|---|---|
+| **write** | name contains `write`, `edit`, `create_file`, `create`, `replace_string`, `insert_edit`, `apply_patch`, `notebook` (and is not `read`/`list`/`search`/`grep`/`glob`/`view`/`directory`) | targets extracted from the recognised path keys / V4A headers and checked. **A write tool whose target cannot be determined is denied** (`ERR_UNSUPPORTED_OP`, "no recognised path key") — an unrecognised write is exactly what the gate exists to stop. `--fail-open` allows it with a warning instead. |
+| **shell** | name contains `bash`, `shell`, `terminal`, `run_in_terminal`, `execute_command`, `run_command`, `powershell`, `cmd` | the command string (`command`, `cmd`, `script`, `commandLine`) is scanned for **write primitives**; every path they would write or delete becomes a target. No command string → allow. `--no-shell-scan` allows every shell call. |
+| **other** | everything else | allow, < 1 ms |
+
+**Shell scan** (a documented heuristic, not a shell parser — the Plan→apply path is the
+guarantee, the gate is the seatbelt): redirections `>`, `>>`, `&>`, `N>` (not `/dev/*`, not
+`2>&1`); `tee`, `rm`, `rmdir`, `unlink`, `mv`/`cp`/`ln`/`install` (destination = last operand),
+`touch`, `truncate`, `mkdir`, `chmod`, `dd of=`, `sed -i` (files after the script);
+`git checkout|restore|reset|rm|mv|stash` operands, `git clean` and `git reset --hard` (the whole
+tree → denied whenever the profile has a `deny` list); PowerShell `Remove-Item`, `Set-Content`,
+`Add-Content`, `Out-File`, `Move-Item`, `Copy-Item`, `New-Item` (`-Path`/`-LiteralPath`/
+`-Destination`), `del`/`erase`/`move`/`copy`. Segments are split on `;`, `&&`, `||`, `|`;
+`VAR=x`, `sudo`, `exec`, `nohup`, `time` prefixes are skipped; `$(…)`, `` `…` `` and `$VAR`
+operands are opaque and produce no target. Operands that are not paths (URLs, globs, options)
+are skipped rather than denied; an operand that *escapes the root* is still `ERR_CONTAINMENT`
+(`cd` is not tracked, so `cd src && echo x >> ../.env` lands there too).
+
+### Root discovery
+
+The payload `cwd` is where the agent runs, not necessarily the repository root: VS Code and
+Copilot start sub-agents in `apps/web`, and then `.git/**` or `.env` in the profile would never
+match. Gate v2 walks up from `cwd` to the nearest ancestor holding `.git` (directory or worktree
+file) or a *repository* `.axiom/` (one with `journal|cas|applied|profiles|trust|lock|backup` —
+not `~/.axiom/`, which only carries a gate profile), never reaching the home directory or above.
+Relative targets stay relative to `cwd`; the profile is loaded from the discovered root.
+`--no-root-discovery` restores the 2.1 behaviour (`cwd` is the root).
 
 ## Exit-code and output contract
 
 | outcome | exit | stdout | stderr |
 |---|---|---|---|
-| allow / unknown tool | `0` | nothing | nothing |
-| deny | `2` | `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"AXIOM GATE DENY …"}}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
-| malformed JSON, empty stdin, stdin > 4 MiB, stdin timeout (2 s), profile unreadable, any internal error | `0` — **fail open** | nothing | `AXIOM GATE WARN: <why> — failing open` |
-| same, with `--strict` | `2` | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: …` |
+| allow / non-write tool / payload without a tool name | `0` | nothing | nothing (`--log-level debug` explains) |
+| deny | `2` | one JSON object, see below | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
+| write tool with no recognised target | `2` | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: … no recognised path key …` |
+| malformed JSON, empty stdin, stdin > 4 MiB, stdin timeout (2 s), profile unreadable, any internal error | `2` — **fail closed** (D-18) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: <why> (fail-closed; pass --fail-open to allow)` |
+| same, with `--fail-open` | `0` | nothing | `AXIOM GATE WARN: <why> — failing open (--fail-open)` |
 | bad arguments / missing `--stdin` | `2` | nothing | `AXIOM GATE ERROR: …` + usage |
 
-**Why fail open?** A broken gate must never lock the user out of their editor. Both harnesses
-already fail open on a *timeout* (verified below), so a gate that failed closed on its own bugs would
-be stricter than the platform around it while still being trivially bypassed by a hang. Use
-`--strict` in CI-like or policy deployments where a non-answer should block.
+The deny document is **one** object that every consumer can read:
+
+```json
+{
+  "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "AXIOM GATE DENY path.deny: … (.env)" },
+  "permissionDecision": "deny",
+  "permissionDecisionReason": "AXIOM GATE DENY path.deny: … (.env)",
+  "axiom": { "verdict": "deny", "code": "path.deny", "path": ".env", "toolClass": "write", "standard": "owasp-acs/0.1" }
+}
+```
+
+Claude Code reads `hookSpecificOutput` (the top-level `decision`/`reason` shape is deprecated
+there); Copilot CLI and VS Code read the flat `permissionDecision` pair and merge it into their
+own deny; `axiom.verdict` uses the OWASP Agent Control Standard v0.1 Guardian vocabulary
+(`allow | deny | modify | ask | defer` — the gate emits only `allow`/`deny`) so logs and policy
+tooling can consume it without knowing AXIOM. Unknown keys are ignored by every harness.
+
+**Why fail closed?** (D-18) A gate that answers "allow" when it could not evaluate the call is not
+a gate. Copilot CLI already treats a hook crash as a deny, so on that harness fail-closed costs
+nothing; on Claude Code it turns an internal error into a visible block with a reason instead of a
+silent pass. Harness *timeouts* still fail open — that is the harness's decision, and the reason
+`npx` is banned in hooks (below). Use `--fail-open` where an editor must never be blocked by the
+gate's own bugs; `--strict` (2.1) is accepted and ignored.
 
 The exit code is what both harnesses act on; the stdout JSON is additionally read by Claude Code
-(and by Copilot, which merges it into its own deny). The stderr line is what the model sees as the
-reason.
+and Copilot. The stderr line is what the model sees as the reason.
 
 ### Verified harness facts (2026-09-18)
 
@@ -141,14 +191,17 @@ answers `allow` for non-write tools in < 1 ms, so either is fine.
 |---|---|
 | `--stdin` | required; read one JSON payload from stdin |
 | `--root <dir>` | root when the payload has no `cwd` (Copilot's `cwd` is always present; Claude's too) |
-| `--profile <file>` | explicit profile; missing or invalid file is an error (fail open unless `--strict`) |
-| `--strict` | internal errors deny instead of failing open |
-| `--log-level error\|warn\|info\|debug` | stderr verbosity (default `warn`; `debug` prints root/profile/targets) |
+| `--profile <file>` | explicit profile; missing or invalid file is an internal error (deny, or allow with `--fail-open`) |
+| `--fail-open` | internal errors, malformed payloads and undetermined write targets are allowed with a warning (2.1 behaviour) |
+| `--no-shell-scan` | do not scan shell commands for write primitives |
+| `--no-root-discovery` | treat the payload `cwd` as the root (do not walk up to `.git`/`.axiom`) |
+| `--strict` | accepted for 2.1 hook configs; a no-op (fail-closed is the default) |
+| `--log-level error\|warn\|info\|debug` | stderr verbosity (default `warn`; `debug` prints root/profile/class/targets) |
 
-Root resolution order: payload `cwd` → `--root` → `process.cwd()`. **This is the one place in AXIOM
-where the process cwd is acceptable**: both harnesses spawn the hook in the project directory and
-put the same directory in the payload, so it is the harness's declared root, not an accident of
-where the MCP server happened to be launched (the §(f) red-team pitfall).
+Root resolution order: payload `cwd` → root discovery (above) → `--root` → `process.cwd()`. **This
+is the one place in AXIOM where the process cwd is acceptable**: both harnesses spawn the hook in
+the project directory and put the same directory in the payload, so it is the harness's declared
+root, not an accident of where the MCP server happened to be launched (the §(f) red-team pitfall).
 
 ## Profile file
 
@@ -171,7 +224,7 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 | `noSecrets` | `boolean` | `true` | run `content.noSecrets` on supplied content → `content.noSecrets.<pattern>` |
 | `maxBytes` | `number?` | — | run `content.maxBytes` on supplied content → `content.maxBytes` |
 
-The object is strict (unknown keys are a schema error → warn + fail open, or deny with `--strict`).
+The object is strict (unknown keys are a schema error → deny `ERR_INTERNAL`, or warn + allow with `--fail-open`).
 Deny codes in the stderr line are either an `ERR_*` from the closed `ERROR_CODES` enum
 (containment / path rules) or the predicate finding id (`path.deny`, `content.noSecrets.awsKey`, …).
 
@@ -184,6 +237,12 @@ Measured 2026-09-18 on the reference Windows box (Node 26.1): in-process p50 1.8
 max 54 ms over 1000 mixed payloads; end-to-end p50 150–194 ms / p95 191–342 ms over 30 spawns
 (node startup dominates; `--version` cold start on the same box is ~100 ms).
 
+Re-measured 2026-09-20 after Gate v2 (shell scan + root discovery + fail-closed), same box:
+`node scripts/check-gate-latency.mjs` end-to-end **p50 89 ms / p95 104 ms / max 104 ms** over
+15 spawns (allowed Write); `dist/gate-lazy.js` 283 KB, still without the MCP SDK. The shell scan
+is regex over the command string and root discovery is at most a handful of `lstat`s, so neither
+shows up above node startup.
+
 Why the budget matters: both harnesses fail **open** on a hook timeout, so a slow gate is not a
 strict gate — it is a gate that is silently skipped whenever the machine is busy. That is why the
 hook runs no repo index, no guards and no git, and why `gate` is its own lazy chunk
@@ -192,12 +251,16 @@ the server code would add the SDK + zod + all engines (~950 KB) to every tool ca
 
 ## Limitations
 
-- The gate sees what the harness sends. A tool whose write path is not in a recognised key
-  (`file_path`, `filePath`, `path`, `notebook_path`, `target_file`, `uri`, …) is allowed — add the
-  tool to `PATH_KEYS`/`WRITE_TOOL_HINTS` in `gate.ts` rather than widening the profile.
+- The gate sees what the harness sends. A write tool whose path is not in a recognised key
+  (`file_path`, `filePath`, `path`, `notebook_path`, `target_file`, `uri`, …) is **denied**
+  (`ERR_UNSUPPORTED_OP`) — add the key to `PATH_KEYS`/`WRITE_TOOL_HINTS` in `gate.ts`, or run with
+  `--fail-open`, rather than widening the profile. A tool whose *name* does not look like a write
+  or a shell at all is still allowed.
 - `Edit`/`replace_string_in_file` carry only the replacement text, so `noSecrets` scans the new
   string, not the resulting file.
-- Shell tools (`Bash`, `run_in_terminal`) are out of scope: a command can write anywhere and the
-  gate does not parse shell. Pair it with a command guard (the house `guard-tooluse.ps1`).
-- `path.deny` matches the path relative to the resolved root; a `cwd` that is a sub-directory of
-  the repo makes `.git/**` in the profile miss `../.git` — those land on `ERR_CONTAINMENT` instead.
+- The shell scan is a heuristic over the command text: it does not follow `cd`, aliases,
+  functions, scripts it invokes, `xargs`, `find -delete`, `python -c "open(…,'w')"`, or paths
+  produced by substitution. Pair it with a command guard (the house `guard-tooluse.ps1`) where
+  shell writes matter, and rely on `Plan → check → apply` for the guarantee.
+- Root discovery stops at `.git`/repo-`.axiom`; a repository without either uses `cwd` as root, so
+  `.git/**`-style globs cannot match anything there anyway.

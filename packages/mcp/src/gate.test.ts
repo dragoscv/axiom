@@ -6,7 +6,9 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  classifyTool,
   DEFAULT_GATE_PROFILE,
+  extractShellWriteTargets,
   extractTargets,
   GATE_EXIT_ALLOW,
   GATE_EXIT_DENY,
@@ -83,6 +85,44 @@ describe("gate: payload normalisation", () => {
     expect(isWriteTool(name)).toBe(expected);
   });
 
+  it.each([
+    ["Bash", "shell"],
+    ["run_in_terminal", "shell"],
+    ["execute_command", "shell"],
+    ["Write", "write"],
+    ["apply_patch", "write"],
+    ["Read", "other"],
+    ["list_dir", "other"],
+  ])("classifyTool(%s) = %s", (name, cls) => {
+    expect(classifyTool(name)).toBe(cls);
+  });
+
+  it("extractShellWriteTargets: redirections, write commands, git write subcommands; flags/substitutions/devices skipped", () => {
+    const paths = (cmd: string) => extractShellWriteTargets(cmd).map((t) => `${t.op}:${t.rawPath}`);
+    expect(paths("echo a > out.txt")).toEqual(["write:out.txt"]);
+    expect(paths("echo a >> 'my file.txt'")).toEqual(["write:my file.txt"]);
+    expect(paths('cmd 2>&1 > "q.log"')).toEqual(["write:q.log"]);
+    expect(paths("echo a > /dev/null")).toEqual([]);
+    expect(paths("rm -rf a b")).toEqual(["delete:a", "delete:b"]);
+    expect(paths("mv -f src dst")).toEqual(["write:dst"]);
+    expect(paths("cp -r a/ b/")).toEqual(["write:b/"]);
+    expect(paths("tee -a x.log y.log")).toEqual(["write:x.log", "write:y.log"]);
+    expect(paths("sed -i 's/a/b/g' f.txt")).toEqual(["write:f.txt"]);
+    expect(paths("sed 's/a/b/g' f.txt")).toEqual([]);
+    expect(paths("sed -i.bak -e 's/a/b/' f.txt")).toEqual(["write:f.txt"]);
+    expect(paths("dd if=/dev/zero of=big.bin")).toEqual(["write:big.bin"]);
+    expect(paths("git checkout -- a.ts b.ts")).toEqual(["write:a.ts", "write:b.ts"]);
+    expect(paths("git rm cached.txt")).toEqual(["delete:cached.txt"]);
+    expect(paths("git clean -fd")).toEqual(["delete:."]);
+    expect(paths("git reset --hard")).toEqual(["delete:."]);
+    expect(paths("git status && git log")).toEqual([]);
+    expect(paths("FOO=1 sudo rm x")).toEqual(["delete:x"]);
+    expect(paths("echo $X > $(mktemp)")).toEqual([]);
+    expect(paths("ls; pwd | grep x")).toEqual([]);
+    expect(paths("Remove-Item -Recurse .git")).toEqual(["delete:.git"]);
+    expect(paths('Set-Content -Path ".env" -Value "x"')).toEqual(["write:.env"]);
+  });
+
   it("extracts Claude MultiEdit new_strings and Copilot multi_replace filePaths", () => {
     const multi = extractTargets({
       toolName: "MultiEdit",
@@ -95,7 +135,9 @@ describe("gate: payload normalisation", () => {
         ],
       },
     });
-    expect(multi).toStrictEqual([{ rawPath: "src/a.ts", op: "write", content: "y\nq" }]);
+    expect(multi.targets).toStrictEqual([{ rawPath: "src/a.ts", op: "write", content: "y\nq" }]);
+    expect(multi.cls).toBe("write");
+    expect(multi.undetermined).toBe(false);
     const mr = extractTargets({
       toolName: "multi_replace_string_in_file",
       cwd: undefined,
@@ -107,8 +149,8 @@ describe("gate: payload normalisation", () => {
         ],
       },
     });
-    expect(mr.map((t) => t.rawPath)).toStrictEqual(["a.ts", "b.ts"]);
-    expect(mr[0]?.content).toBe("2\n5");
+    expect(mr.targets.map((t) => t.rawPath)).toStrictEqual(["a.ts", "b.ts"]);
+    expect(mr.targets[0]?.content).toBe("2\n5");
   });
 
   it("parses apply_patch headers and collects + lines as content", () => {
@@ -298,30 +340,159 @@ describe("gate: decisions", () => {
     expect(ads.code).toBe("ERR_PATH_INVALID_CHAR");
   });
 
-  it("unknown / read-only tool → allow without touching the filesystem", async () => {
+  it("read-only tool → allow without touching the filesystem", async () => {
     const r = await runGate(
-      claude("Bash", { command: "rm -rf /" }, "/definitely/not/a/dir"),
+      claude("Read", { file_path: "/etc/passwd" }, "/definitely/not/a/dir"),
       opts(),
     );
     expect(r.decision).toBe("allow");
+    expect(r.verdict).toBe("allow");
+    expect(r.toolClass).toBe("other");
     expect(r.exitCode).toBe(GATE_EXIT_ALLOW);
   });
 
-  it("malformed JSON → fail open (allow) with a warn; --strict → deny ERR_INTERNAL", async () => {
-    const open = await runGate("{not json", opts());
+  it("D-18 fail-closed: malformed JSON → deny ERR_INTERNAL; --fail-open → allow with a warn; legacy --strict is a no-op", async () => {
+    const closed = await runGate("{not json", opts());
+    expect(closed.decision).toBe("deny");
+    expect(closed.exitCode).toBe(GATE_EXIT_DENY);
+    expect(closed.code).toBe("ERR_INTERNAL");
+    expect(closed.reason).toMatch(/--fail-open/);
+    const open = await runGate("{not json", { ...opts(), failOpen: true });
     expect(open.decision).toBe("allow");
     expect(open.exitCode).toBe(GATE_EXIT_ALLOW);
-    expect(open.stderr.some((l) => l.startsWith("AXIOM GATE WARN"))).toBe(true);
+    expect(open.stderr.some((l) => l.startsWith("AXIOM GATE WARN") && /--fail-open/.test(l))).toBe(
+      true,
+    );
     const strict = await runGate("{not json", { ...opts(), strict: true });
     expect(strict.decision).toBe("deny");
-    expect(strict.exitCode).toBe(GATE_EXIT_DENY);
-    expect(strict.code).toBe("ERR_INTERNAL");
   });
 
-  it("missing payload (stdin timeout) → fail open", async () => {
+  it("missing payload (stdin timeout) → deny by default, allow with --fail-open", async () => {
     const r = await runGate(undefined, opts());
-    expect(r.decision).toBe("allow");
+    expect(r.decision).toBe("deny");
+    expect(r.code).toBe("ERR_INTERNAL");
     expect(r.stderr.some((l) => /timeout or empty/.test(l))).toBe(true);
+    const open = await runGate(undefined, { ...opts(), failOpen: true });
+    expect(open.decision).toBe("allow");
+  });
+
+  it("D-18: a write-class tool with no recognised path key is denied ERR_UNSUPPORTED_OP (unknown write → deny), allowed with --fail-open", async () => {
+    const payload = claude("Write", { destination: "src/a.ts", content: "x" }, repo.root);
+    const r = await runGate(payload, opts());
+    expect(r.decision).toBe("deny");
+    expect(r.code).toBe("ERR_UNSUPPORTED_OP");
+    expect(r.reason).toMatch(/no recognised path key/);
+    expect(r.toolClass).toBe("write");
+    const open = await runGate(payload, { ...opts(), failOpen: true });
+    expect(open.decision).toBe("allow");
+  });
+
+  it("deny stdout is ONE document readable by Claude (hookSpecificOutput), Copilot (flat) and log consumers (axiom.verdict, OWASP ACS)", async () => {
+    const r = await runGate(
+      claude("Write", { file_path: ".env", content: "X=1" }, repo.root),
+      opts(),
+    );
+    const json = JSON.parse(r.stdout ?? "{}") as Record<string, unknown>;
+    expect(json.hookSpecificOutput).toMatchObject({
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+    });
+    expect(json.permissionDecision).toBe("deny");
+    expect(typeof json.permissionDecisionReason).toBe("string");
+    expect(json.axiom).toMatchObject({
+      verdict: "deny",
+      code: "path.deny",
+      path: ".env",
+      toolClass: "write",
+      standard: "owasp-acs/0.1",
+    });
+    expect(r.verdict).toBe("deny");
+  });
+
+  describe("shell scan (D-18 heuristic)", () => {
+    const sh = (command: string, cwd = repo.root) => claude("Bash", { command }, cwd);
+    it("echo x > .env → deny path.deny", async () => {
+      const r = await runGate(sh("echo SECRET=1 > .env"), opts());
+      expect(r.decision).toBe("deny");
+      expect(r.code).toBe("path.deny");
+      expect(r.path).toBe(".env");
+      expect(r.toolClass).toBe("shell");
+    });
+    it.each([
+      ["rm -rf .git", ".git"],
+      ["cat x | tee pnpm-lock.yaml", "pnpm-lock.yaml"],
+      ["sed -i 's/a/b/' .env.local", ".env.local"],
+      ["cp a.txt node_modules/x.js", "node_modules/x.js"],
+      ["mv src/a.ts .axiom/lock", ".axiom/lock"],
+      ["git checkout -- .env", ".env"],
+      ['Set-Content -Path ".env" -Value "x"', ".env"],
+    ])("%s → deny on %s", async (command, path) => {
+      const r = await runGate(sh(command), opts());
+      expect(r.decision).toBe("deny");
+      expect(r.path).toBe(path);
+    });
+    it.each([
+      "ls -la",
+      "git status",
+      "pnpm test",
+      "echo hi > src/out.txt",
+      "rm -rf dist",
+      "cat .env",
+      "grep -r TODO src",
+      "echo x 2>&1 | tee src/log.txt",
+      "curl https://example.com/.env",
+    ])("%s → allow", async (command) => {
+      const r = await runGate(sh(command), opts());
+      expect(r.decision).toBe("allow");
+      expect(r.toolClass).toBe("shell");
+    });
+    it("rm outside the root is ERR_CONTAINMENT (cd is not tracked, so `cd src && … ../.env` also lands there); a shell tool without a command string is allowed; --no-shell-scan allows everything", async () => {
+      const out = await runGate(sh("rm -rf ../../elsewhere"), opts());
+      expect(out.decision).toBe("deny");
+      expect(out.code).toBe("ERR_CONTAINMENT");
+      const cd = await runGate(sh("cd src && echo hi >> ../.env"), opts());
+      expect(cd.decision).toBe("deny");
+      expect(cd.code).toBe("ERR_CONTAINMENT");
+      const none = await runGate(claude("Bash", { description: "noop" }, repo.root), opts());
+      expect(none.decision).toBe("allow");
+      const off = await runGate(sh("echo x > .env"), { ...opts(), noShellScan: true });
+      expect(off.decision).toBe("allow");
+    });
+    it("git clean / reset --hard on the tree → deny with the built-in profile", async () => {
+      expect((await runGate(sh("git clean -fdx"), opts())).decision).toBe("deny");
+      expect((await runGate(sh("git reset --hard HEAD~1"), opts())).decision).toBe("deny");
+      expect((await runGate(sh("git reset --soft HEAD~1"), opts())).decision).toBe("allow");
+    });
+  });
+
+  describe("root discovery (sub-directory cwd)", () => {
+    it("cwd = <root>/apps/web still sees .git/** and .env at the repo root; --no-root-discovery does not", async () => {
+      await mkdir(join(repo.root, ".git"), { recursive: true });
+      await mkdir(join(repo.root, "apps", "web"), { recursive: true });
+      const sub = join(repo.root, "apps", "web");
+      const r = await runGate(
+        claude("Write", { file_path: "../../.env", content: "x" }, sub),
+        opts(),
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.code).toBe("path.deny");
+      expect(r.path).toBe(".env");
+      expect(r.root).toBe(await import("node:fs/promises").then((fs) => fs.realpath(repo.root)));
+      const legacy = await runGate(
+        claude("Write", { file_path: "../../.env", content: "x" }, sub),
+        { ...opts(), noRootDiscovery: true },
+      );
+      expect(legacy.code).toBe("ERR_CONTAINMENT");
+    });
+    it("without any .git/.axiom ancestor the cwd itself is the root", async () => {
+      await mkdir(join(repo.root, "plain"), { recursive: true });
+      const r = await runGate(
+        claude("Write", { file_path: "ok.ts", content: "x" }, join(repo.root, "plain")),
+        opts(),
+      );
+      expect(r.decision).toBe("allow");
+      expect(r.root?.endsWith("plain")).toBe(true);
+    });
   });
 
   it("profile file overrides the default (deny src/**, noSecrets off)", async () => {
@@ -374,7 +545,7 @@ describe("gate: decisions", () => {
     expect(r.code).toBe("path.deny");
   });
 
-  it("readStdin: times out (fail open) and caps size", async () => {
+  it("readStdin: times out and caps size; oversize stdin is a deny (fail-closed) with a warn", async () => {
     const never = new Readable({ read() {} });
     const t = await readStdin(never, { timeoutMs: 20 });
     expect(t).toStrictEqual({ text: undefined, timedOut: true, tooLarge: false });
@@ -385,8 +556,14 @@ describe("gate: decisions", () => {
       stdin: Readable.from([Buffer.alloc(GATE_STDIN_MAX_PLUS_ONE)]),
       home: home.root,
     });
-    expect(r.decision).toBe("allow");
+    expect(r.decision).toBe("deny");
+    expect(r.code).toBe("ERR_INTERNAL");
     expect(r.stderr[0]).toMatch(/exceeded/);
+    const open = await gateMain(["--stdin", "--fail-open"], {
+      stdin: Readable.from([Buffer.alloc(GATE_STDIN_MAX_PLUS_ONE)]),
+      home: home.root,
+    });
+    expect(open.decision).toBe("allow");
   });
 });
 
@@ -503,12 +680,25 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
     expect(r.stderr).toMatch(/^AXIOM GATE DENY path\.deny/m);
   });
 
-  it("malformed payload → exit 0 (fail open); --strict → exit 2", async () => {
-    const open = await run([], "{oops");
+  it("malformed payload → exit 2 (fail-closed) with deny JSON; --fail-open → exit 0 + warn", async () => {
+    const closed = await run([], "{oops");
+    expect(closed.code).toBe(2);
+    expect(closed.stderr).toMatch(/AXIOM GATE DENY ERR_INTERNAL/);
+    const json = JSON.parse(closed.stdout) as {
+      permissionDecision: string;
+      axiom: { verdict: string };
+    };
+    expect(json.permissionDecision).toBe("deny");
+    expect(json.axiom.verdict).toBe("deny");
+    const open = await run(["--fail-open"], "{oops");
     expect(open.code).toBe(0);
     expect(open.stderr).toMatch(/AXIOM GATE WARN/);
-    const strict = await run(["--strict"], "{oops");
-    expect(strict.code).toBe(2);
+  });
+
+  it("Bash echo > .env → exit 2 (shell scan) through the real binary", async () => {
+    const r = await run([], claude("Bash", { command: "echo x > .env" }, repo.root));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/path\.deny/);
   });
 
   it("dist/gate-lazy.js does not pull in the MCP SDK", async () => {

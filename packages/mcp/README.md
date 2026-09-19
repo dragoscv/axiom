@@ -130,7 +130,7 @@ axiom emitters [--json]
 axiom keygen  [--out <dir>] [--name <label>]     (ed25519; private key → <dir>/axiom-signing-<id>.key 0600, public entry → stdout)
 axiom sign    <bundle.json> [--key-file <path>] [-o out.json]   (key from --key-file or $AXIOM_SIGNING_KEY)
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root .
-axiom gate    --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level warn]
+axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level warn]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
                                                (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/migrate.md)
 axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>]... [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]
@@ -153,19 +153,25 @@ A PreToolUse hook for Claude Code, Copilot CLI and VS Code agent hooks. It reads
 payload from stdin (both `{tool_name, tool_input, cwd}` and `{toolName, toolArgs, cwd}` casings;
 `toolArgs` may be a JSON string), extracts the write target(s) of `Write|Edit|MultiEdit|NotebookEdit`,
 `create_file|replace_string_in_file|insert_edit_into_file|apply_patch|multi_replace_string_in_file|edit_notebook_file`
-and generic `write|edit`, and runs **only** the fast predicates: containment + `RelPath` rules
-(`..`, `CON`, NTFS ADS → `ERR_CONTAINMENT` / `ERR_PATH_*`), `path.deny`, `path.allow`,
-`content.noSecrets` and `content.maxBytes` on the new content when the payload carries it.
+and generic `write|edit`, scans **shell** tools (`Bash`, `run_in_terminal`, …) for write
+primitives (`>`, `>>`, `tee`, `rm`, `mv`, `cp`, `sed -i`, `git checkout|reset|clean`, PowerShell
+`Set-Content`/`Remove-Item`, … — a heuristic, documented in docs/hooks.md), and runs **only** the
+fast predicates: containment + `RelPath` rules (`..`, `CON`, NTFS ADS → `ERR_CONTAINMENT` /
+`ERR_PATH_*`), `path.deny`, `path.allow`, `content.noSecrets` and `content.maxBytes` on the new
+content when the payload carries it. **Fail-closed** (D-18): a non-answer is a deny.
 
 | outcome | exit | stdout | stderr |
 |---|---|---|---|
-| allow / unknown tool | `0` | — | — |
-| deny | `2` | `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
-| malformed payload, stdin timeout (2 s), internal error | `0` (**fail open**) | — | `AXIOM GATE WARN: …` |
-| same, with `--strict` | `2` | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: …` |
+| allow / non-write, non-shell tool | `0` | — | — |
+| deny | `2` | one object: `hookSpecificOutput{…}` (Claude) + flat `permissionDecision`/`permissionDecisionReason` (Copilot) + `axiom{verdict, code, path, toolClass, standard:"owasp-acs/0.1"}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
+| write tool with no recognised path key | `2` | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: …` |
+| malformed payload, stdin timeout (2 s), internal error | `2` (**fail closed**) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: … (fail-closed; pass --fail-open to allow)` |
+| same, with `--fail-open` | `0` | — | `AXIOM GATE WARN: … — failing open (--fail-open)` |
 
-Root = payload `cwd`, else `--root`, else the process cwd (the hook is the one place where cwd is
-acceptable: the harness spawns the hook in the project directory and owns that value).
+Root = payload `cwd`, walked up to the nearest `.git` / repository `.axiom/` ancestor (never the
+home dir; `--no-root-discovery` disables), else `--root`, else the process cwd (the hook is the
+one place where cwd is acceptable: the harness spawns the hook in the project directory and owns
+that value). Relative targets stay relative to `cwd`.
 Profile = `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.axiom/gate-profile.json` →
 built-in `{ deny: [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"], noSecrets: true }`.
 Schema: `{ deny: string[], allow?: string[], noSecrets: boolean, maxBytes?: number }` (strict).

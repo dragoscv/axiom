@@ -5,18 +5,27 @@
  * runs only the fast path/content predicates from `@codai/axiom-checks` against a small
  * gate profile. No repo index, no guards, no git — budget < 120 ms in-process.
  *
- * Contract (verified against Claude Code + Copilot CLI docs, see docs/hooks.md):
+ * Contract (verified against Claude Code + Copilot CLI docs, see docs/hooks.md) — Gate v2 (S-404, D-18):
  *   allow → exit 0, nothing on stdout.
- *   deny  → exit 2, one stderr line `AXIOM GATE DENY <code>: <reason> (<relpath>)` and the
- *           Claude `hookSpecificOutput` JSON on stdout.
- *   internal error / malformed payload / stdin timeout → fail OPEN (exit 0 + stderr warn);
- *           `--strict` turns internal errors into a deny.
+ *   deny  → exit 2, one stderr line `AXIOM GATE DENY <code>: <reason> (<relpath>)` and ONE JSON
+ *           object on stdout carrying both the Claude `hookSpecificOutput` shape and the flat
+ *           Copilot `{permissionDecision, permissionDecisionReason}` shape, plus an OWASP Agent
+ *           Control Standard `verdict` (`allow|deny|modify|ask|defer`; the gate only emits
+ *           `allow`/`deny`).
+ *   FAIL-CLOSED by default: an internal error, malformed payload, stdin timeout, or a
+ *           write-class tool whose target cannot be determined → deny with a reason.
+ *           `--fail-open` restores the 2.1 behaviour (exit 0 + stderr warn) for those cases.
+ *   Shell tools (`Bash`, `run_in_terminal`, …) are scanned for write primitives
+ *           (`>`, `>>`, `tee`, `rm`, `mv`, `cp`, `sed -i`, `git checkout|reset|clean`, …); a
+ *           protected path among their operands → deny. Heuristic, documented as such.
+ *   Root: payload `cwd` → walk up to the nearest ancestor holding `.axiom/` or `.git/`
+ *           (so a sub-directory cwd still sees `.git/**` in the profile) → `--root` → cwd.
  *
  * This module never writes to stdout/stderr itself: it returns a `GateResult` and the CLI
  * entries (`cli.ts`, `cli-main.ts`) do the writing (`check-no-stdout`).
  */
 import { realpath as realpathCb } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { parseArgs, promisify } from "node:util";
@@ -230,6 +239,213 @@ export function isWriteTool(toolName: string): boolean {
   return !NON_WRITE_HINTS.some((h) => n.includes(h));
 }
 
+/** Tools that execute a shell command; matched case-insensitively by substring. */
+const SHELL_TOOL_HINTS = [
+  "bash",
+  "shell",
+  "run_in_terminal",
+  "terminal",
+  "execute_command",
+  "exec_command",
+  "run_command",
+  "powershell",
+  "cmd",
+] as const;
+const SHELL_COMMAND_KEYS = ["command", "cmd", "script", "commandLine", "command_line"] as const;
+
+export function isShellTool(toolName: string): boolean {
+  const n = toolName.toLowerCase();
+  return SHELL_TOOL_HINTS.some((h) => n.includes(h));
+}
+
+export type ToolClass = "write" | "shell" | "other";
+
+export function classifyTool(toolName: string): ToolClass {
+  if (isWriteTool(toolName)) return "write";
+  if (isShellTool(toolName)) return "shell";
+  return "other";
+}
+
+// ------------------------------------------------------------ shell scan --
+
+/**
+ * Write primitives a shell command may contain. Each rule names the operand positions that
+ * are *paths being written*. This is a documented heuristic (D-18), not a shell parser: it
+ * catches the common agent idioms (`echo x > .env`, `rm -rf .git`, `sed -i … file`,
+ * `git checkout -- file`) and is bypassable by construction; the full Plan→apply path is the
+ * guarantee, the gate is the seatbelt.
+ */
+const REDIRECT_RE = /(?:^|[\s;&|])(?:\d?>{1,2}|&>)\s*("([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
+const SHELL_SPLIT_RE = /(?:^|[;&|]+|\|\||&&)\s*/;
+const WRITE_CMDS: Record<string, { skipFlags: boolean; operands: "all" | "last" | "afterI" }> = {
+  tee: { skipFlags: true, operands: "all" },
+  rm: { skipFlags: true, operands: "all" },
+  rmdir: { skipFlags: true, operands: "all" },
+  mv: { skipFlags: true, operands: "last" },
+  cp: { skipFlags: true, operands: "last" },
+  touch: { skipFlags: true, operands: "all" },
+  truncate: { skipFlags: true, operands: "all" },
+  mkdir: { skipFlags: true, operands: "all" },
+  ln: { skipFlags: true, operands: "last" },
+  chmod: { skipFlags: true, operands: "all" },
+  unlink: { skipFlags: true, operands: "all" },
+  install: { skipFlags: true, operands: "last" },
+  dd: { skipFlags: false, operands: "all" },
+  sed: { skipFlags: true, operands: "afterI" },
+  "remove-item": { skipFlags: true, operands: "all" },
+  "set-content": { skipFlags: true, operands: "all" },
+  "add-content": { skipFlags: true, operands: "all" },
+  "out-file": { skipFlags: true, operands: "all" },
+  "move-item": { skipFlags: true, operands: "all" },
+  "copy-item": { skipFlags: true, operands: "all" },
+  "new-item": { skipFlags: true, operands: "all" },
+  del: { skipFlags: true, operands: "all" },
+  erase: { skipFlags: true, operands: "all" },
+  move: { skipFlags: true, operands: "all" },
+  copy: { skipFlags: true, operands: "all" },
+};
+const GIT_WRITE_SUBCMDS = new Set(["checkout", "reset", "clean", "restore", "rm", "mv", "stash"]);
+
+function shellWords(segment: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (let m = re.exec(segment); m !== null; m = re.exec(segment)) {
+    out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  }
+  return out;
+}
+
+function looksLikePath(word: string): boolean {
+  if (word === "" || word === "-" || word === "--") return false;
+  if (word.startsWith("-") && !word.startsWith("./") && !word.startsWith("../")) return false;
+  if (/^\$\(|^`|^\$[A-Za-z_{]/.test(word)) return false; // substitutions: unknown target
+  return true;
+}
+
+/**
+ * Paths a shell command would write/delete, as written. Empty when the command has no
+ * recognised write primitive. Substitutions (`$(…)`, `$VAR`) are opaque and not returned.
+ */
+export function extractShellWriteTargets(command: string): GateTarget[] {
+  const out: GateTarget[] = [];
+  const seen = new Set<string>();
+  const push = (rawPath: string, op: "write" | "delete") => {
+    if (!looksLikePath(rawPath) || seen.has(rawPath)) return;
+    seen.add(rawPath);
+    out.push({ rawPath, op, content: undefined });
+  };
+  for (let m = REDIRECT_RE.exec(command); m !== null; m = REDIRECT_RE.exec(command)) {
+    const target = m[2] ?? m[3] ?? m[4] ?? "";
+    if (target !== "" && !/^&\d$/.test(target) && !/^\/dev\//.test(target)) push(target, "write");
+  }
+  REDIRECT_RE.lastIndex = 0;
+  for (const seg of command.split(SHELL_SPLIT_RE)) {
+    const words = shellWords(seg);
+    // skip env assignments and sudo/exec prefixes
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) i++;
+    while (
+      i < words.length &&
+      ["sudo", "exec", "command", "nohup", "time"].includes(words[i] ?? "")
+    )
+      i++;
+    const cmd = (words[i] ?? "").toLowerCase().replace(/^.*[\\/]/, "");
+    const rest = words.slice(i + 1);
+    if (cmd === "git") {
+      const sub = rest.find((w) => !w.startsWith("-"));
+      if (sub !== undefined && GIT_WRITE_SUBCMDS.has(sub)) {
+        const afterSub = rest.slice(rest.indexOf(sub) + 1);
+        const dd = afterSub.indexOf("--");
+        const operands =
+          dd === -1 ? afterSub.filter((w) => !w.startsWith("-")) : afterSub.slice(dd + 1);
+        if (sub === "clean" || (sub === "reset" && afterSub.includes("--hard")))
+          push(".", "delete");
+        for (const p of operands) push(p, sub === "rm" || sub === "clean" ? "delete" : "write");
+      }
+      continue;
+    }
+    const rule = WRITE_CMDS[cmd];
+    if (rule === undefined) continue;
+    if (cmd === "sed") {
+      if (
+        !rest.some(
+          (w) => /^-[a-zA-Z]*i/.test(w) || w === "--in-place" || w.startsWith("--in-place="),
+        )
+      )
+        continue;
+      const hasScriptFlag = rest.some(
+        (w) => /^-[a-zA-Z]*[ef]/.test(w) || /^--(expression|file)/.test(w),
+      );
+      const nonFlags: string[] = [];
+      for (let k = 0; k < rest.length; k++) {
+        const w = rest[k] ?? "";
+        if (w.startsWith("-")) {
+          // `-e SCRIPT` / `-f FILE` take a value
+          if (/^-[a-zA-Z]*[ef]$/.test(w) || w === "--expression" || w === "--file") k++;
+          continue;
+        }
+        nonFlags.push(w);
+      }
+      // Without -e/-f the first operand is the script; everything after it is a file.
+      const files = hasScriptFlag ? nonFlags : nonFlags.slice(1);
+      for (const w of files) push(w, "write");
+      continue;
+    }
+    if (cmd === "dd") {
+      for (const w of rest) if (w.startsWith("of=")) push(w.slice(3), "write");
+      continue;
+    }
+    let operands: string[];
+    if (cmd.includes("-")) {
+      // PowerShell cmdlet: named parameters. Path-bearing ones name the target; every other
+      // `-Name value` pair is skipped so `-Value "x"` is not mistaken for a file.
+      operands = [];
+      const PATH_PARAMS = ["path", "literalpath", "filepath", "destination", "newname", "target"];
+      const VALUE_PARAMS = new Set([
+        ...PATH_PARAMS,
+        "value",
+        "encoding",
+        "filter",
+        "include",
+        "exclude",
+        "itemtype",
+        "name",
+      ]);
+      for (let k = 0; k < rest.length; k++) {
+        const w = rest[k] ?? "";
+        if (w.startsWith("-")) {
+          const name = w.slice(1).toLowerCase();
+          const val = rest[k + 1];
+          if (PATH_PARAMS.includes(name) && val !== undefined) operands.push(val);
+          // Only parameters known to take a value consume the next token; `-Recurse`,
+          // `-Force`, `-WhatIf` are switches and the token after them is positional.
+          if (VALUE_PARAMS.has(name) && val !== undefined && !val.startsWith("-")) k++;
+          continue;
+        }
+        operands.push(w);
+      }
+    } else {
+      operands = rule.skipFlags ? rest.filter((w) => !w.startsWith("-") || w === "-") : rest;
+    }
+    const op: "write" | "delete" =
+      cmd === "rm" ||
+      cmd === "rmdir" ||
+      cmd === "unlink" ||
+      cmd === "del" ||
+      cmd === "erase" ||
+      cmd === "remove-item"
+        ? "delete"
+        : "write";
+    if (rule.operands === "last") {
+      const last = operands[operands.length - 1];
+      if (last !== undefined) push(last, op);
+    } else {
+      for (const w of operands) push(w, op);
+    }
+  }
+  return out;
+}
+
 const PATCH_HEADER = /^\*\*\* (Update|Add|Delete) File: (.+?)\s*$/;
 const PATCH_MOVE = /^\*\*\* Move to: (.+?)\s*$/;
 
@@ -274,9 +490,33 @@ function joinContent(parts: (string | undefined)[]): string | undefined {
   return present.length === 0 ? undefined : present.join("\n");
 }
 
-/** Extract every write target (+ new content) from a normalised payload. Unknown tool → `[]`. */
-export function extractTargets(p: NormalizedPayload): GateTarget[] {
-  if (!isWriteTool(p.toolName)) return [];
+export interface Extracted {
+  cls: ToolClass;
+  targets: GateTarget[];
+  /**
+   * Write-class tool whose target could not be determined (unknown path key, V4A body
+   * missing, …). Gate v2 denies this by default: an unrecognised write is exactly what the
+   * gate exists to stop (D-18).
+   */
+  undetermined: boolean;
+}
+
+/** Extract every write target (+ new content) from a normalised payload. */
+export function extractTargets(p: NormalizedPayload): Extracted {
+  const cls = classifyTool(p.toolName);
+  if (cls === "other") return { cls, targets: [], undetermined: false };
+  if (cls === "shell") {
+    const command = firstString(p.input, SHELL_COMMAND_KEYS);
+    // A shell tool without a recognisable command string carries nothing we can judge; it is
+    // not a write tool, so it is allowed (the scan is a heuristic seatbelt, not the gate).
+    if (command === undefined) return { cls, targets: [], undetermined: false };
+    return { cls, targets: extractShellWriteTargets(command), undetermined: false };
+  }
+  const targets = extractWriteTargets(p);
+  return { cls, targets, undetermined: targets.length === 0 };
+}
+
+function extractWriteTargets(p: NormalizedPayload): GateTarget[] {
   const n = p.toolName.toLowerCase();
   const input = p.input;
 
@@ -353,9 +593,11 @@ const PATH_CODES: ReadonlySet<string> = new Set<ErrorCode>([
 export async function resolveGateTarget(
   rootReal: string,
   target: GateTarget,
+  /** Directory relative paths are resolved against (the harness cwd); defaults to the root. */
+  cwdReal: string = rootReal,
 ): Promise<ResolvedGateTarget> {
   const supplied = target.rawPath.replace(/\\/g, "/");
-  let abs = path.isAbsolute(supplied) ? path.resolve(supplied) : path.resolve(rootReal, supplied);
+  let abs = path.isAbsolute(supplied) ? path.resolve(supplied) : path.resolve(cwdReal, supplied);
   if (path.isAbsolute(supplied)) {
     // The harness hands us paths under its own cwd, which may be non-canonical
     // (macOS /var → /private/var, Windows RUNNER~1). Canonicalize the deepest
@@ -479,8 +721,17 @@ export interface GateOptions {
   root?: string;
   /** Explicit profile file (overrides the search path). */
   profilePath?: string;
-  /** Internal errors deny instead of failing open. */
+  /** @deprecated Gate v2 is fail-closed by default; kept as a no-op alias for old hook configs. */
   strict?: boolean;
+  /**
+   * Restore the 2.1 behaviour: internal errors, malformed payloads and undetermined write
+   * targets are allowed with a stderr warning instead of denied (D-18 opt-out).
+   */
+  failOpen?: boolean;
+  /** Do not scan shell commands for write primitives (D-18 opt-out). */
+  noShellScan?: boolean;
+  /** Do not walk up from `cwd` to the nearest `.axiom/`/`.git/` ancestor. */
+  noRootDiscovery?: boolean;
   logLevel?: GateLogLevel;
   /** Test hook for `~/.axiom/gate-profile.json`. */
   home?: string;
@@ -494,41 +745,123 @@ export interface GateOptions {
 
 export interface GateResult {
   decision: "allow" | "deny";
+  /** OWASP Agent Control Standard v0.1 Guardian vocabulary; the gate emits `allow` or `deny`. */
+  verdict: "allow" | "deny" | "modify" | "ask" | "defer";
   exitCode: typeof GATE_EXIT_ALLOW | typeof GATE_EXIT_DENY;
   code?: string;
   reason?: string;
   path?: string;
-  /** Claude `hookSpecificOutput` JSON, deny only. */
+  /** One JSON object (Claude `hookSpecificOutput` + Copilot flat shape + `axiom` block), deny only. */
   stdout?: string;
   stderr: string[];
   durationMs: number;
+  /** Which class of tool was judged. */
+  toolClass?: ToolClass;
+  /** Root actually used, when one was resolved. */
+  root?: string;
 }
 
-function denyResult(d: GateDeny, stderr: string[], t0: number): GateResult {
+/**
+ * The single stdout document for a deny. Claude reads `hookSpecificOutput.permissionDecision`;
+ * Copilot CLI/VS Code read the flat `permissionDecision`/`permissionDecisionReason` and merge
+ * them into their own deny; `axiom` carries the machine-readable verdict (OWASP ACS
+ * vocabulary) plus code/path for log consumers. Unknown keys are ignored by both harnesses.
+ */
+export function denyDocument(d: GateDeny, reason: string, extra: { toolClass?: ToolClass }) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+    permissionDecision: "deny",
+    permissionDecisionReason: reason,
+    axiom: {
+      verdict: "deny",
+      code: d.code,
+      ...(d.relPath === undefined ? {} : { path: d.relPath }),
+      ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
+      standard: "owasp-acs/0.1",
+    },
+  };
+}
+
+function denyResult(
+  d: GateDeny,
+  stderr: string[],
+  t0: number,
+  extra: { toolClass?: ToolClass; root?: string } = {},
+): GateResult {
   const where = d.relPath === undefined ? "" : ` (${d.relPath})`;
   const reason = `AXIOM GATE DENY ${d.code}: ${d.message}${where}`;
   stderr.push(reason);
   return {
     decision: "deny",
+    verdict: "deny",
     exitCode: GATE_EXIT_DENY,
     code: d.code,
     reason: d.message,
     ...(d.relPath === undefined ? {} : { path: d.relPath }),
-    stdout: JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: reason,
-      },
-    }),
+    stdout: JSON.stringify(denyDocument(d, reason, extra)),
     stderr,
     durationMs: performance.now() - t0,
+    ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
+    ...(extra.root === undefined ? {} : { root: extra.root }),
   };
+}
+
+const AXIOM_REPO_MARKERS = ["journal", "cas", "applied", "profiles", "trust", "lock", "backup"];
+
+/**
+ * Walk up from `start` to the nearest directory that is a repository root: it holds `.git`
+ * (directory, or the file a worktree/submodule uses) or a *repo* `.axiom/` (one with
+ * journal/cas/applied/profiles/trust — not `~/.axiom/`, which only holds a gate profile).
+ * Never climbs to or above the home directory, and never above `stopAt` when given. A
+ * harness that runs the agent in `apps/web` still has `.git/**` and `.env` at the repo root,
+ * and the profile lives there too. Returns `start` when nothing is found.
+ */
+export async function discoverRoot(start: string, home: string = homedir()): Promise<string> {
+  const homeReal = path.resolve(home);
+  const isHomeOrAbove = (p: string): boolean => {
+    const a = IS_WIN32 ? p.toLowerCase() : p;
+    const h = IS_WIN32 ? homeReal.toLowerCase() : homeReal;
+    return a === h || h.startsWith(a.endsWith(path.sep) ? a : a + path.sep);
+  };
+  let cur = start;
+  for (let depth = 0; depth < 64; depth++) {
+    if (isHomeOrAbove(cur)) break;
+    try {
+      const st = await lstat(path.join(cur, ".git"));
+      if (st.isDirectory() || st.isFile()) return cur;
+    } catch {
+      /* keep walking */
+    }
+    try {
+      const ax = path.join(cur, ".axiom");
+      if ((await lstat(ax)).isDirectory()) {
+        for (const m of AXIOM_REPO_MARKERS) {
+          try {
+            await lstat(path.join(ax, m));
+            return cur;
+          } catch {
+            /* next marker */
+          }
+        }
+      }
+    } catch {
+      /* keep walking */
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return start;
 }
 
 /**
  * Evaluate one payload (already read from stdin). Never throws.
- * `payloadText === undefined` means stdin timed out / was empty → fail open.
+ * `payloadText === undefined` means stdin timed out / was empty → deny (fail closed) unless
+ * `failOpen`.
  */
 export async function runGate(
   payloadText: string | undefined,
@@ -537,6 +870,8 @@ export async function runGate(
   const t0 = performance.now();
   const level: GateLogLevel = opts.logLevel ?? "warn";
   const stderr: string[] = [];
+  let toolClass: ToolClass | undefined;
+  let rootUsed: string | undefined;
   const log = (lvl: GateLogLevel, msg: string) => {
     if (RANK[lvl] <= RANK[level]) stderr.push(`AXIOM GATE ${lvl.toUpperCase()}: ${msg}`);
   };
@@ -544,17 +879,26 @@ export async function runGate(
     log("debug", `allow: ${why}`);
     return {
       decision: "allow",
+      verdict: "allow",
       exitCode: GATE_EXIT_ALLOW,
       stderr,
       durationMs: performance.now() - t0,
+      ...(toolClass === undefined ? {} : { toolClass }),
+      ...(rootUsed === undefined ? {} : { root: rootUsed }),
     };
   };
+  const deny = (d: GateDeny): GateResult =>
+    denyResult(d, stderr, t0, {
+      ...(toolClass === undefined ? {} : { toolClass }),
+      ...(rootUsed === undefined ? {} : { root: rootUsed }),
+    });
+  /** Fail-closed (D-18): a non-answer is a deny unless the operator opted out. */
   const internal = (why: string): GateResult => {
-    if (opts.strict === true) {
-      return denyResult(new GateDeny("ERR_INTERNAL", `${why} (--strict)`), stderr, t0);
+    if (opts.failOpen === true) {
+      log("warn", `${why} — failing open (--fail-open)`);
+      return allow("internal error");
     }
-    log("warn", `${why} — failing open`);
-    return allow("internal error");
+    return deny(new GateDeny("ERR_INTERNAL", `${why} (fail-closed; pass --fail-open to allow)`));
   };
 
   if (payloadText === undefined) return internal("no payload on stdin (timeout or empty)");
@@ -565,27 +909,92 @@ export async function runGate(
     return internal(`payload is not JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
   const payload = normalizePayload(raw);
-  if (payload === undefined) return allow("payload carries no tool name");
-  const targets = extractTargets(payload);
-  if (targets.length === 0) return allow(`tool ${payload.toolName} has no write target`);
+  // No tool name at all: not a PreToolUse payload we understand. Nothing to judge → allow
+  // (a hook wired to the wrong event must not brick the editor); logged at info.
+  if (payload === undefined) {
+    log("info", "payload carries no tool name");
+    return allow("payload carries no tool name");
+  }
+  const extracted = extractTargets(payload);
+  toolClass = extracted.cls;
+  if (extracted.cls === "other") return allow(`tool ${payload.toolName} is not a write/shell tool`);
+  if (extracted.cls === "shell" && opts.noShellScan === true) {
+    return allow(`tool ${payload.toolName} is a shell tool and --no-shell-scan is set`);
+  }
+  if (extracted.undetermined) {
+    // Write-class tool, target unknown (D-18: unknown → deny with reason).
+    if (opts.failOpen === true) {
+      log(
+        "warn",
+        `write tool ${payload.toolName} has no recognised path key — allowing (--fail-open)`,
+      );
+      return allow("undetermined write target");
+    }
+    return deny(
+      new GateDeny(
+        "ERR_UNSUPPORTED_OP",
+        `write tool "${payload.toolName}" carries no recognised path key (${PATH_KEYS.join(", ")}); add it to the gate or pass --fail-open`,
+      ),
+    );
+  }
+  const targets = extracted.targets;
+  if (targets.length === 0) return allow(`tool ${payload.toolName} writes nothing recognisable`);
 
   try {
     const rootArg = payload.cwd ?? opts.root ?? (opts.cwdFallback ?? (() => process.cwd()))();
     let rootReal = await realpathNative(path.resolve(rootArg));
     if (IS_WIN32 && rootReal.startsWith("\\\\?\\")) rootReal = rootReal.slice(4);
+    // Relative targets are relative to where the agent runs (the payload cwd), even after the
+    // root is discovered above it.
+    const cwdReal = rootReal;
+    if (opts.noRootDiscovery !== true) {
+      const discovered = await discoverRoot(rootReal, opts.home);
+      if (discovered !== rootReal) {
+        log("debug", `root discovered ${rootReal} → ${discovered}`);
+        rootReal = discovered;
+      }
+    }
+    rootUsed = rootReal;
     const { profile, source } = await loadGateProfile({
       root: rootReal,
       ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
       ...(opts.home === undefined ? {} : { home: opts.home }),
     });
-    log("debug", `root=${rootReal} profile=${source} targets=${targets.length}`);
+    log(
+      "debug",
+      `root=${rootReal} profile=${source} class=${extracted.cls} targets=${targets.length}`,
+    );
     const resolved: ResolvedGateTarget[] = [];
-    for (const t of targets) resolved.push(await resolveGateTarget(rootReal, t));
-    const deny = await runGatePredicates(resolved, profile);
-    if (deny !== undefined) return denyResult(deny, stderr, t0);
-    return allow(`${resolved.length} target(s) passed`);
+    for (const t of targets) {
+      try {
+        resolved.push(await resolveGateTarget(rootReal, t, cwdReal));
+      } catch (err) {
+        // Shell operands are heuristic: a token that is not a path (a URL, a glob, `.`)
+        // must not deny the whole command. Real write tools keep the strict behaviour.
+        if (
+          extracted.cls === "shell" &&
+          err instanceof GateDeny &&
+          err.code !== "ERR_CONTAINMENT"
+        ) {
+          log("debug", `shell operand ${JSON.stringify(t.rawPath)} skipped: ${err.code}`);
+          continue;
+        }
+        if (extracted.cls === "shell" && err instanceof GateDeny && t.rawPath === ".") {
+          // `git clean` / `reset --hard` on the root itself: deny only if the profile protects
+          // anything — approximate by denying when the profile has a deny list.
+          if (profile.deny.length > 0) {
+            throw new GateDeny("path.deny", "destructive git command on the whole tree", ".");
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
+    const verdict = await runGatePredicates(resolved, profile);
+    if (verdict !== undefined) return deny(verdict);
+    return allow(`${resolved.length} target(s) passed (${extracted.cls})`);
   } catch (err) {
-    if (err instanceof GateDeny) return denyResult(err, stderr, t0);
+    if (err instanceof GateDeny) return deny(err);
     return internal(err instanceof Error ? err.message : String(err));
   }
 }
@@ -641,7 +1050,7 @@ export function readStdin(
 // ------------------------------------------------------------------- cli --
 
 export const GATE_USAGE =
-  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level error|warn|info|debug]";
+  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level error|warn|info|debug]";
 
 /** `axiom gate <argv>` → result. Reads stdin only when `--stdin` is given. Never throws. */
 export async function gateMain(
@@ -654,6 +1063,9 @@ export async function gateMain(
     root?: string;
     profile?: string;
     strict?: boolean;
+    "fail-open"?: boolean;
+    "no-shell-scan"?: boolean;
+    "no-root-discovery"?: boolean;
     "log-level"?: string;
   };
   try {
@@ -663,7 +1075,11 @@ export async function gateMain(
         stdin: { type: "boolean" },
         root: { type: "string" },
         profile: { type: "string" },
+        // 2.1 flag; fail-closed is now the default so this is accepted and ignored.
         strict: { type: "boolean" },
+        "fail-open": { type: "boolean" },
+        "no-shell-scan": { type: "boolean" },
+        "no-root-discovery": { type: "boolean" },
         "log-level": { type: "string" },
       },
       strict: true,
@@ -672,6 +1088,7 @@ export async function gateMain(
   } catch (err) {
     return {
       decision: "deny",
+      verdict: "deny",
       exitCode: GATE_EXIT_DENY,
       reason: err instanceof Error ? err.message : String(err),
       stderr: [`AXIOM GATE ERROR: ${err instanceof Error ? err.message : String(err)}`, GATE_USAGE],
@@ -681,6 +1098,7 @@ export async function gateMain(
   if (values.stdin !== true) {
     return {
       decision: "deny",
+      verdict: "deny",
       exitCode: GATE_EXIT_DENY,
       reason: "--stdin is required",
       stderr: ["AXIOM GATE ERROR: --stdin is required", GATE_USAGE],
@@ -696,6 +1114,9 @@ export async function gateMain(
   if (values.root !== undefined) opts.root = values.root;
   if (values.profile !== undefined) opts.profilePath = values.profile;
   if (values.strict === true) opts.strict = true;
+  if (values["fail-open"] === true) opts.failOpen = true;
+  if (values["no-shell-scan"] === true) opts.noShellScan = true;
+  if (values["no-root-discovery"] === true) opts.noRootDiscovery = true;
   if (io.cwdFallback !== undefined) opts.cwdFallback = io.cwdFallback;
   if (io.home !== undefined) opts.home = io.home;
   if (read.tooLarge) {

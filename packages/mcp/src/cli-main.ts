@@ -56,7 +56,7 @@ Usage:
   axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
   axiom sign <bundle.json> [--key-file <path>] [-o <out.json>]   (private key from --key-file or $${SIGNING_KEY_ENV})
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
-  axiom gate --stdin [--root <dir>] [--profile <file>] [--strict] [--log-level ...]   (PreToolUse hook; exit 0 allow / 2 deny)
+  axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level ...]   (PreToolUse hook; fail-closed; exit 0 allow / 2 deny)
     axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
                                            (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
   axiom snapshot --root <dir> [-o <out.json>] [--include <glob>]... [--exclude <glob>]... [--max-files <n>] [--no-gitignore] [--no-digest]
