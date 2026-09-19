@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-axm-lsp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Language server for AXIOM `.axm` plans: diagnostics, completion, hover, document symbols, formatting and semantic tokens over LSP, reusing the @codai/axiom-axm Chevrotain parser (one grammar, zero drift)",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

@@ -1,5 +1,0 @@
----
-"@codai/axiom-mcp": minor
----
-
-`axiom migrate v1 <manifest.json> [-o plan.json] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]` — lift an AXIOM 1.0.x manifest into a v2 `Plan` (S-305). Paths become POSIX `RelPath`s, `contentUtf8`/`contentBase64` become `inline` sources, hash-only artifacts are read from the v1 output tree and re-verified against their `sha256` (or stored in `<root>/.axiom/cas` with `--cas`), known policy evidence and the built-in `budget`/`edge` profile constraints map to `content.noSecrets`/`deps.max`/`manifest.maxTotalBytes`/`content.maxBytes`, and every field without a v2 equivalent (`buildId`, `irHash`, `createdAt`, per-artifact `sha256`/`bytes`/`kind`, runtime evidence) is listed in `metadata.migration.dropped` with a reason — no timestamps enter the Plan. Exit 0 clean, 1 migrated with warnings (still written), 2 not a v1 manifest (`ERR_INVALID_MANIFEST`). `migrateV1()` is exported for programmatic use; the code ships as a lazy chunk (`dist/migrate-lazy.js`) so the eager CLI bundle is unchanged. See `docs/migrate.md`.

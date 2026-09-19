@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-schema",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Zod v4 schemas, closed error codes and JSON Schema for AXIOM v2 Plan, Manifest, CheckReport, ApplyResult, Profile and Journal",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

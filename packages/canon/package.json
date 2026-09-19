@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-canon",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "RFC 8785 JSON canonicalization, sha256 digests and in-toto Statement/SLSA provenance builders for AXIOM",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

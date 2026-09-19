@@ -1,5 +1,16 @@
 # @codai/axiom-apply
 
+## 2.1.0
+
+### Patch Changes
+
+- Updated dependencies [a483fe8]
+- Updated dependencies [f70b6d2]
+- Updated dependencies [40d88ee]
+- Updated dependencies [40d88ee]
+  - @codai/axiom-canon@2.1.0
+  - @codai/axiom-schema@2.1.0
+
 ## 2.0.0
 
 ### Minor Changes
