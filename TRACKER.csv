@@ -51,7 +51,7 @@ D-18,decision,4,gate default fail-closed for writes + shell write-primitive scan
 D-19,decision,4,MCP 2026-07-28 wire default in 2.2.0 with --wire 2025 fallback (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 owner chose B over rec A
 D-20,decision,4,verify --tree scope: manifest paths + preImage set (A),done,owner,,answer recorded in PLAN.md §1,2026-09-19 rec A
 D-21,decision,4,in-toto predicate axiom.dev/attestation/apply/v1 + actions/attest opt-in,done,owner,,answer recorded in PLAN.md §1,2026-09-19
-D-22,decision,4,2.1.0 repair via trusted publishing --allow-publish then re-run release.yml (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 owner step; axm-lsp@2.1.0 uninstallable until done
+D-22,decision,4,2.1.0 repair: manual -Missing publish now (A) + trusted publishing --allow-publish for 2.2.0 (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 B; revised 2026-09-20 A now + B before v2.2.0 tag
 D-23,decision,4,2.2.0 scope = S-401..S-414 (all four extras in),done,owner,,answer recorded in PLAN.md §1,2026-09-19 ~12 agent-days
 S-401,story,4,patch artifact source (unified/v4a/search-replace; exact applier),todo,agent,D-17,golden fixture + property: patch plan digest == equivalent inline plan digest,
 S-402,story,4,preImage[] in ManifestBody; check records; apply re-verifies,todo,agent,S-401,ERR_PREIMAGE_CHANGED across separate check/apply calls; golden re-pinned,
@@ -65,5 +65,5 @@ S-409,story,4,Signing hardening: root-bound payload; signed state.json; CI key c
 S-410,story,4,Doc/code drift sweep + check-stale-markers guard,todo,agent,,guard green; LSP hover for template/pr correct,
 S-411,story,4,expr.cedar fact provider (cedar-wasm),todo,agent,S-405,vector suite like cel-vectors; offline; ACS mapping doc,
 S-412,story,4,VS Code extension on Marketplace,todo,owner,,ext install codai.axiom-axm works,needs publisher account (owner)
-S-413,story,4,2.1.0 repair + release-complete guard + bootstrap -Missing,todo,owner,D-22,npm view every pkg@2.1.0 dist.attestations present,
+S-413,story,4,2.1.0 repair + release-complete guard + bootstrap -Missing,done,agent,D-22,check-release-complete green: 9 tagged versions on registry,2026-09-20 published interactively (no provenance); trusted publishing --allow-publish = owner step before v2.2.0 tag
 S-414,story,4,codai AXIOM_APPLY default-on after eval arm,todo,agent,S-401;S-404,eval arm numbers in docs/integration/codai.md; default flipped only if not worse,

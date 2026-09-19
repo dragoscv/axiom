@@ -34,15 +34,25 @@ in `.github/workflows/release.yml` via **npm trusted publishing** (OIDC,
    First release of a package: trusted publishing must be configured on
    npmjs.com (package → Settings → Trusted publishing → GitHub Actions →
    `dragoscv/axiom`, workflow `release.yml`) *before* the run; otherwise
-   `E404`/`ENEEDAUTH` — configure, then rerun the same tag.
+   `E404`/`ENEEDAUTH` — configure, then rerun the same tag. Since npm's
+   stage-only default, the trusted publisher must also *allow publish*:
+   `npm trust github --file .github/workflows/release.yml --allow-publish`
+   inside each package dir (9 packages), or the run stages without publishing.
 7. **Verify LIVE**, never infer:
    `npm view @codai/axiom-mcp version dist.attestations` shows the new version
    and a provenance attestation; the npmjs.com page shows the *Provenance*
    badge; `npx -y @codai/axiom-mcp@2.x.y --version` prints it.
+   `node scripts/check-release-complete.mjs` compares every tagged
+   `packages/*/package.json` version against the registry — it FAILS on a
+   partial release (v2.1.0 shipped 2 of 9 packages for a day).
 8. **Failed mid-publish?** Fixed group means some packages may be live and
-   others not. `npm view @codai/axiom-<pkg> version` for each of schema, canon,
-   plan, checks, apply, mcp; `changeset publish` is idempotent (skips already
-   published versions) — rerun the workflow, do **not** bump again.
+   others not. `node scripts/check-release-complete.mjs` lists exactly which;
+   `changeset publish` is idempotent (skips already published versions) —
+   rerun the workflow, do **not** bump again. If CI cannot publish (trusted
+   publishing not yet enabled), repair from a logged-in terminal:
+   `pwsh -NoProfile -File scripts/release-bootstrap.ps1 -Publish -Missing`
+   (publishes only tagged versions absent from the registry, in dependency
+   order; refuses untagged versions). One browser approval covers the session.
 9. **Post-release**: update `PLAN.md` + `TRACKER.csv` (same commit) for the
    phase story (e.g. S-109 → done); first v2.0.0 only — deprecate 1.x:
    `npm deprecate @codai/axiom-mcp@"<2.0.0" "superseded by 2.x — see MIGRATION.md"`

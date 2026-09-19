@@ -30,11 +30,12 @@ const quiet = flags.has("--quiet");
 const json = flags.has("--json");
 const fast = flags.has("--fast");
 
-/** Guards that need a build or spawn processes — skipped under `--fast`. */
+/** Guards that need a build, spawn processes or the network — skipped under `--fast`. */
 const SLOW = new Set([
   "check-cold-start.mjs",
   "check-bundle-size.mjs",
   "check-schema-json-fresh.mjs",
+  "check-release-complete.mjs",
 ]);
 
 const guards = readdirSync(SCRIPTS_DIR)
