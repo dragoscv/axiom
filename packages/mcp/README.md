@@ -120,6 +120,7 @@ axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [-
               [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
 axiom compile <plan.json> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
 axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
+axiom verify  <bundle.json> --tree <root> [--pre] [--attest out.intoto.json]   (tree matches manifest? docs/verify-tree.md)
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
 axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .

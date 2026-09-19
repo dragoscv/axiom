@@ -157,3 +157,85 @@ jobs:
           path: packages/conformance/results/
           if-no-files-found: ignore
           retention-days: 14
+
+  verify-action:
+    # S-403: dogfood the composite action (action/action.yml). Compile a plan against a
+    # scratch tree, apply it, then run the action — it must pass on the applied tree, fail
+    # after a hand edit, and (on push to main) upload an in-toto attestation.
+    name: verify-tree action / ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: quality
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Compile + apply a plan into a scratch tree
+        id: scratch
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/tree"
+          mkdir -p "$tree"
+          cat > "$RUNNER_TEMP/plan.json" <<'JSON'
+          {"apiVersion":"axiom.dev/v2","kind":"Plan","name":"ci-verify","intent":"S-403 action dogfood",
+           "artifacts":[{"path":"src/hello.ts","source":{"type":"inline","content":"export const hi = 1;\n"}},
+                        {"path":"README.md","source":{"type":"inline","content":"# hi\n"}}]}
+          JSON
+          node packages/mcp/dist/cli.js compile "$RUNNER_TEMP/plan.json" --root "$tree" -o "$RUNNER_TEMP/bundle.json" > "$RUNNER_TEMP/compile.out"
+          digest=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).manifestDigest)' "$RUNNER_TEMP/compile.out")
+          node packages/mcp/dist/cli.js apply "$RUNNER_TEMP/bundle.json" --root "$tree" --confirm "$digest" > /dev/null
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "bundle=$RUNNER_TEMP/bundle.json" >> "$GITHUB_OUTPUT"
+
+      - name: Action passes on the applied tree (with attestation on main)
+        id: pass
+        uses: ./action
+        with:
+          bundle: ${{ steps.scratch.outputs.bundle }}
+          root: ${{ steps.scratch.outputs.tree }}
+          local-cli: ${{ github.workspace }}/packages/mcp/dist/cli.js
+          attest: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          attestation-path: ${{ runner.temp }}/axiom-attestation.intoto.json
+
+      - name: Outputs are set
+        run: |
+          test "${{ steps.pass.outputs.ok }}" = "true"
+          test "${{ steps.pass.outputs.mismatches }}" = "0"
+          case "${{ steps.pass.outputs.manifest-digest }}" in sha256:*) ;; *) echo "bad digest"; exit 1;; esac
+
+      - name: Hand-edit the tree
+        run: echo "tampered" >> "${{ steps.scratch.outputs.tree }}/src/hello.ts"
+
+      - name: Action fails on the drifted tree
+        id: fail
+        continue-on-error: true
+        uses: ./action
+        with:
+          bundle: ${{ steps.scratch.outputs.bundle }}
+          root: ${{ steps.scratch.outputs.tree }}
+          local-cli: ${{ github.workspace }}/packages/mcp/dist/cli.js
+
+      - name: The drifted run must have failed with one mismatch
+        run: |
+          test "${{ steps.fail.outcome }}" = "failure"
+          test "${{ steps.fail.outputs.ok }}" = "false"
+          test "${{ steps.fail.outputs.mismatches }}" = "1"

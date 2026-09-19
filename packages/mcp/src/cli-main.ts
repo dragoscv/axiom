@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { apply, rollback } from "@codai/axiom-apply";
+import { apply, rollback, verifyTree } from "@codai/axiom-apply";
+import { buildApplyAttestation, canonicalize } from "@codai/axiom-canon";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import {
@@ -44,6 +45,9 @@ Usage:
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
                                      [--allow-net [--net-allow <host>[,host]]] [--allow-file]   (ref sources; offline by default)
   axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
+  axiom verify <bundle.json> --tree <dir> [--pre] [--attest <out.json>]
+                                          (tree ≟ manifest: every artifact digest (or --pre: the declared pre-image set);
+                                           --attest writes an in-toto Statement ${"https://axiom.dev/attestation/apply/v1"})
   axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
   axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
@@ -236,10 +240,18 @@ async function cmdCompile(argv: string[]): Promise<number> {
 }
 
 async function cmdVerify(argv: string[]): Promise<number> {
-  const { values, positionals } = opts(argv, { root: { type: "string" } });
+  const { values, positionals } = opts(argv, {
+    root: { type: "string" },
+    tree: { type: "string" },
+    pre: { type: "boolean" },
+    attest: { type: "string" },
+  });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("verify: <bundle.json> is required");
   const raw = await readJson(file);
+  if (values.tree !== undefined)
+    return cmdVerifyTree(raw, values.tree, values.pre === true, values.attest);
+  if (values.attest !== undefined) throw new UsageError("verify: --attest requires --tree <dir>");
   const r = verifyBundle(raw);
   if (values.root === undefined || !r.ok) {
     out(r);
@@ -253,6 +265,73 @@ async function cmdVerify(argv: string[]): Promise<number> {
   }
   out({ ...r, signed: sig.keyids.length > 0, signatures: sig });
   return sig.ok ? EXIT_OK : EXIT_FAIL;
+}
+
+/** `axiom verify <bundle> --tree <root> [--pre] [--attest <out>]` (S-403, D-20/D-21). */
+async function cmdVerifyTree(
+  raw: unknown,
+  treeRoot: string,
+  pre: boolean,
+  attestOut: string | undefined,
+): Promise<number> {
+  // Structural verification first: a tree cannot match a bundle that is not self-consistent.
+  const structural = verifyBundle(raw);
+  if (!structural.ok) {
+    out({
+      ...structural,
+      tree: null,
+      note: "bundle failed structural verification; tree not checked",
+    });
+    return EXIT_FAIL;
+  }
+  const bundle = parseBundleFile(raw);
+  const r = await verifyTree(treeRoot, bundle, { pre });
+  const result: Record<string, unknown> = {
+    ok: r.ok,
+    manifestDigest: r.manifestDigest,
+    canonical: structural.canonical,
+    root: r.root,
+    tree: r.tree,
+    paths: r.paths.length,
+    mismatches: r.mismatches,
+  };
+  if (r.preImageMissing === true)
+    result.note =
+      "manifest carries no preImage (compiled without a root); --pre cannot be verified";
+  if (r.ok && attestOut !== undefined) {
+    const source: Record<string, string> = {};
+    const env = process.env;
+    if (env.GITHUB_REPOSITORY) source.repository = env.GITHUB_REPOSITORY;
+    if (env.GITHUB_REF) source.ref = env.GITHUB_REF;
+    if (env.GITHUB_SHA) source.sha = env.GITHUB_SHA;
+    if (env.GITHUB_RUN_ID) source.runId = env.GITHUB_RUN_ID;
+    const statement = buildApplyAttestation({
+      subjectName: bundle.manifest.name,
+      manifestDigestHex: bundle.manifestDigest.slice("sha256:".length),
+      planDigestHex: bundle.manifest.planDigest.slice("sha256:".length),
+      profile: bundle.manifest.profile,
+      tree: r.tree,
+      paths: r.paths,
+      ...(bundle.manifest.preImage === undefined ? {} : { preImage: bundle.manifest.preImage }),
+      axiomVersion: bundle.manifest.toolchain.axiom,
+      ...(Object.keys(source).length === 0 ? {} : { source }),
+    });
+    // JCS so the attestation bytes are deterministic for the same inputs (A2A/in-toto practice).
+    // Two files: the full in-toto Statement for standalone use, and the bare predicate for
+    // `actions/attest` (which builds the Statement itself from `predicate-path` + subject).
+    const statementFile = path.resolve(attestOut);
+    const predicateFile = statementFile.replace(/(\.intoto)?\.json$/i, "") + ".predicate.json";
+    await writeFile(statementFile, `${canonicalize(statement)}\n`, "utf8");
+    await writeFile(predicateFile, `${canonicalize(statement.predicate)}\n`, "utf8");
+    result.attestation = {
+      file: statementFile,
+      predicateFile,
+      predicateType: statement.predicateType,
+      subjects: statement.subject.length,
+    };
+  }
+  out(result);
+  return r.ok ? EXIT_OK : EXIT_FAIL;
 }
 
 async function loadProfileFor(rootReal: string, name: string) {

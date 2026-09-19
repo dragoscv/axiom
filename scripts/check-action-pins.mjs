@@ -87,7 +87,10 @@ if (args.has("--self-test")) selfTest();
 const problems = [];
 let files = 0;
 let uses = 0;
-for (const f of walk(join(REPO_ROOT, ".github"), (r) => /\.ya?ml$/.test(r))) {
+for (const f of [
+  ...walk(join(REPO_ROOT, ".github"), (r) => /\.ya?ml$/.test(r)),
+  ...walk(join(REPO_ROOT, "action"), (r) => /\.ya?ml$/.test(r)),
+]) {
   const text = readText(f);
   files++;
   uses += (text.match(/^\s*-?\s*uses:/gm) ?? []).length;

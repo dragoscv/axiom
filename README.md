@@ -158,7 +158,7 @@ CAS ([docs/cas.md](docs/cas.md)), `axiom migrate v1` ([docs/migrate.md](docs/mig
 `axiom_repo_snapshot`, repo guards, CI on three OSes.
 
 **Next (2.2.0).** `patch` artifact source (unified / V4A / search-replace, exact
-match), pre-image binding in the manifest + `axiom verify --tree` and a GitHub
+match), pre-image binding in the manifest + `axiom verify --tree` ([docs/verify-tree.md](docs/verify-tree.md)) and a GitHub
 action with in-toto attestations, fail-closed gate v2 with the OWASP ACS verdict
 vocabulary, MCP 2026-07-28 wire via SDK v2, `tasks` for long guards and chunked
 plan builds, `expr.cedar`, VS Code Marketplace publish. Details and status in

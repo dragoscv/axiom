@@ -48,4 +48,6 @@ export {
 } from "./journal.js";
 export type { Lock, LockHolder } from "./lock.js";
 export { acquireLock, LOCK_STALE_MS, LOCK_TIMEOUT_MS, lockPath, withLock } from "./lock.js";
+export type { TreeMismatch, VerifyTreeOptions, VerifyTreeResult } from "./verify-tree.js";
+export { verifyTree } from "./verify-tree.js";
 export { RENAME_BACKOFF_MS, RENAME_RETRIES, renameRetry, writeAtomic } from "./write.js";

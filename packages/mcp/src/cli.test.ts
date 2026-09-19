@@ -130,6 +130,57 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     expect(JSON.parse(ap.stdout).status).toBe("applied");
     expect(await readFile(join(repo.root, "src", "x.ts"), "utf8")).toBe("export {};\n");
 
+    // S-403: verify --tree after apply → ok; --attest writes the in-toto Statement + predicate.
+    const attestFile = join(repo.root, "att.intoto.json");
+    const vt = await run(["verify", bundleFile, "--tree", repo.root, "--attest", attestFile]);
+    expect(vt.code, vt.stderr).toBe(0);
+    const vtj = JSON.parse(vt.stdout) as {
+      ok: boolean;
+      tree: string;
+      mismatches: unknown[];
+      attestation: { file: string; predicateFile: string; predicateType: string; subjects: number };
+    };
+    expect(vtj).toMatchObject({ ok: true, tree: "post", mismatches: [] });
+    expect(vtj.attestation.predicateType).toBe("https://axiom.dev/attestation/apply/v1");
+    expect(vtj.attestation.subjects).toBe(2); // manifest + src/x.ts
+    const statement = JSON.parse(await readFile(attestFile, "utf8")) as {
+      _type: string;
+      subject: { name: string; digest: { sha256: string } }[];
+      predicate: { manifest: { sha256: string }; tree: string; paths: unknown[] };
+    };
+    expect(statement._type).toBe("https://in-toto.io/Statement/v1");
+    expect(statement.subject.map((s) => s.name).sort()).toEqual(["cli", "src/x.ts"]);
+    expect(`sha256:${statement.predicate.manifest.sha256}`).toBe(manifestDigest);
+    const predicate = JSON.parse(await readFile(vtj.attestation.predicateFile, "utf8")) as unknown;
+    expect(predicate).toEqual(statement.predicate);
+    // Drift → exit 1, mismatches listed, no attestation written.
+    await writeFile(join(repo.root, "src", "x.ts"), "tampered");
+    const bad = await run([
+      "verify",
+      bundleFile,
+      "--tree",
+      repo.root,
+      "--attest",
+      join(repo.root, "no.json"),
+    ]);
+    expect(bad.code).toBe(1);
+    const badj = JSON.parse(bad.stdout) as {
+      ok: boolean;
+      mismatches: { path: string }[];
+      attestation?: unknown;
+    };
+    expect(badj.ok).toBe(false);
+    expect(badj.mismatches.map((m) => m.path)).toEqual(["src/x.ts"]);
+    expect(badj.attestation).toBeUndefined();
+    await expect(stat(join(repo.root, "no.json"))).rejects.toThrow();
+    await writeFile(join(repo.root, "src", "x.ts"), "export {};\n");
+    // --pre on a manifest compiled without a root → exit 1 with a note.
+    const pre = await run(["verify", bundleFile, "--tree", repo.root, "--pre"]);
+    expect(pre.code).toBe(1);
+    expect(JSON.parse(pre.stdout).note).toMatch(/no preImage/);
+    // --attest without --tree is a usage error.
+    expect((await run(["verify", bundleFile, "--attest", "x.json"])).code).toBe(2);
+
     const rb = await run(["rollback", manifestDigest, "--root", repo.root]);
     expect(rb.code, rb.stderr).toBe(0);
     await expect(stat(join(repo.root, "src", "x.ts"))).rejects.toThrow();

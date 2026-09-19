@@ -1,0 +1,115 @@
+name: "AXIOM verify tree"
+description: >-
+  Fail a pull request whose working tree does not match an AXIOM manifest (every artifact
+  digest — or, with `pre: true`, the manifest's declared pre-image set). Optionally emit an
+  in-toto Statement (`https://axiom.dev/attestation/apply/v1`) and upload it with
+  actions/attest so `gh attestation verify` can prove which tree a manifest was verified against.
+author: dragoscv
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  bundle:
+    description: Path to the ManifestBundle JSON (output of `axiom compile`).
+    required: true
+  root:
+    description: Repository root to verify against.
+    required: false
+    default: "."
+  pre:
+    description: Verify the manifest's declared pre-image set instead of the post-apply artifacts.
+    required: false
+    default: "false"
+  attest:
+    description: >-
+      Write an in-toto Statement and upload it via actions/attest (needs
+      `permissions: id-token: write, attestations: write`).
+    required: false
+    default: "false"
+  attestation-path:
+    description: Where to write the in-toto Statement JSON when `attest` is true.
+    required: false
+    default: axiom-attestation.intoto.json
+  version:
+    description: "@codai/axiom-mcp version to use (npm dist-tag or exact version)."
+    required: false
+    default: "2"
+  local-cli:
+    description: >-
+      Path to a built `cli.js` to use instead of installing from npm (dogfooding inside the
+      AXIOM repo's own CI; consumers leave this empty).
+    required: false
+    default: ""
+
+outputs:
+  ok:
+    description: "`true` when the tree matches the manifest."
+    value: ${{ steps.verify.outputs.ok }}
+  manifest-digest:
+    description: The manifest digest that was verified.
+    value: ${{ steps.verify.outputs.manifest_digest }}
+  mismatches:
+    description: Number of paths that did not match.
+    value: ${{ steps.verify.outputs.mismatches }}
+  attestation-path:
+    description: Path of the written in-toto Statement (when `attest` is true).
+    value: ${{ steps.verify.outputs.attestation_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install @codai/axiom-mcp
+      if: ${{ inputs.local-cli == '' }}
+      shell: bash
+      run: npm install -g "@codai/axiom-mcp@${{ inputs.version }}" --no-audit --no-fund
+
+    - name: axiom verify --tree
+      id: verify
+      shell: bash
+      env:
+        AXIOM_BUNDLE: ${{ inputs.bundle }}
+        AXIOM_ROOT: ${{ inputs.root }}
+        AXIOM_PRE: ${{ inputs.pre }}
+        AXIOM_ATTEST: ${{ inputs.attest }}
+        AXIOM_ATTEST_PATH: ${{ inputs.attestation-path }}
+        AXIOM_LOCAL_CLI: ${{ inputs.local-cli }}
+      run: |
+        set -uo pipefail
+        if [ -n "$AXIOM_LOCAL_CLI" ]; then axiom() { node "$AXIOM_LOCAL_CLI" "$@"; }; fi
+        args=(verify "$AXIOM_BUNDLE" --tree "$AXIOM_ROOT")
+        if [ "$AXIOM_PRE" = "true" ]; then args+=(--pre); fi
+        if [ "$AXIOM_ATTEST" = "true" ]; then args+=(--attest "$AXIOM_ATTEST_PATH"); fi
+        set +e
+        out="$(axiom "${args[@]}")"
+        code=$?
+        set -e
+        printf '%s\n' "$out"
+        ok=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(j.ok===true)}catch{console.log(false)}})')
+        digest=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).manifestDigest??"")}catch{console.log("")}})')
+        mism=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).mismatches??[]).length)}catch{console.log(0)}})')
+        pred=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).attestation?.predicateFile??"")}catch{console.log("")}})')
+        name=$(node -e 'const j=require(process.argv[1]);console.log(j.manifest?.name??"axiom-manifest")' "$AXIOM_BUNDLE" 2>/dev/null || echo axiom-manifest)
+        {
+          echo "ok=$ok"
+          echo "manifest_digest=$digest"
+          echo "mismatches=$mism"
+          echo "subject_name=$name"
+          echo "predicate_path=$pred"
+          if [ "$AXIOM_ATTEST" = "true" ] && [ "$ok" = "true" ]; then echo "attestation_path=$AXIOM_ATTEST_PATH"; else echo "attestation_path="; fi
+        } >> "$GITHUB_OUTPUT"
+        if [ "$code" -ne 0 ]; then
+          echo "::error title=AXIOM verify --tree::tree does not match manifest ${digest} (${mism} mismatch(es))"
+          exit "$code"
+        fi
+
+    - name: Attest (in-toto, uploaded to GitHub)
+      if: ${{ inputs.attest == 'true' && steps.verify.outputs.ok == 'true' }}
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+      with:
+        # Subject = the manifest itself (its content-address), so `gh attestation verify` can
+        # be pointed at the digest recorded in .axiom/applied/<hex>.json or a CheckReport.
+        subject-name: ${{ steps.verify.outputs.subject_name }}
+        subject-digest: ${{ steps.verify.outputs.manifest_digest }}
+        predicate-type: https://axiom.dev/attestation/apply/v1
+        predicate-path: ${{ steps.verify.outputs.predicate_path }}

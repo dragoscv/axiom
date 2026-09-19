@@ -31,16 +31,21 @@ export {
 export { CanonicalizeError, canonicalize } from "./jcs.js";
 export { DSSE_IN_TOTO_PAYLOAD_TYPE, pae } from "./pae.js";
 export type {
+  AxiomApplyAttestationV1Predicate,
+  BuildApplyAttestationInput,
   BuildMetadata,
   BuildStatementInput,
+  InTotoApplyAttestationV1,
   InTotoStatementV1,
   ResolvedDependency,
   ResourceDescriptor,
   SlsaProvenanceV1Predicate,
 } from "./statement.js";
 export {
+  AXIOM_APPLY_ATTESTATION_V1,
   AXIOM_BUILD_TYPE,
   AXIOM_BUILDER_ID,
+  buildApplyAttestation,
   buildStatement,
   IN_TOTO_STATEMENT_V1,
   SLSA_PROVENANCE_V1,
