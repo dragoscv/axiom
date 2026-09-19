@@ -367,7 +367,12 @@ describe("TOCTOU and rollback", () => {
       fc.asyncProperty(
         fc.uniqueArray(
           fc.record({
-            name: fc.stringMatching(/^[a-z]{1,6}$/),
+            // `[a-z]{1,6}` can spell a reserved device name (`aux`, `con`, `nul`, `prn`,
+            // `com1`…) which RelPath rejects on every platform (ERR_PATH_RESERVED_NAME) —
+            // that is a schema failure, not a commit fault, so keep it out of this property.
+            name: fc
+              .stringMatching(/^[a-z]{1,6}$/)
+              .filter((n) => !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(n)),
             kind: fc.constantFrom("create", "overwrite", "delete"),
             content: fc.string({ maxLength: 20 }),
           }),
@@ -417,7 +422,7 @@ describe("TOCTOU and rollback", () => {
           });
           try {
             const r = await fsApply(bundle, root);
-            expect(r.status).toBe("rolled-back");
+            expect(r.status, JSON.stringify(r.error)).toBe("rolled-back");
             expect(r.error?.code).toBe("ERR_INTERNAL");
           } finally {
             spyRename.mockRestore();

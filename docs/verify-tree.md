@@ -94,14 +94,32 @@ jobs:
 Outputs: `ok`, `manifest-digest`, `mismatches` (count), `attestation-path`. A mismatch fails
 the step with an `::error` annotation naming the digest and the count; the JSON is in the log.
 
-Verify later with the GitHub CLI:
+Verify later. The subject is the **manifest digest** (`sha256(JCS(manifest))`), not the
+sha256 of any file on disk, so `gh attestation verify <file>` — which hashes the file you
+pass — cannot be pointed at `bundle.json`. Look the attestation up by subject digest instead:
 
-```
-gh attestation verify --repo <owner>/<repo> --predicate-type https://axiom.dev/attestation/apply/v1 \
-  --subject-digest sha256:<manifest hex> /dev/null
+```sh
+# the digest is in .axiom/applied/<hex>.json, a CheckReport, or `axiom verify` output
+gh api repos/<owner>/<repo>/attestations/sha256:<manifest hex> \
+  --jq '.attestations[].bundle.dsseEnvelope.payload' | base64 -d \
+  | jq '.predicateType, .subject, .predicate.tree, .predicate.source'
 ```
 
-(`gh` needs *a* subject path argument; with `--subject-digest` the file is not read.)
+To run the full Sigstore verification with `gh`, give it a file whose sha256 **is** the
+manifest digest — the JCS bytes of `bundle.manifest` (that is what the digest hashes):
+
+```sh
+node -e 'const {canonicalize}=require("@codai/axiom-canon");const b=require(process.argv[1]);process.stdout.write(canonicalize(b.manifest))' bundle.json > manifest.jcs
+gh attestation verify manifest.jcs --repo <owner>/<repo> --predicate-type https://axiom.dev/attestation/apply/v1
+```
+
+`gh` fetches the bundle for that digest from GitHub, checks the Sigstore signature, the
+certificate's workflow identity and the Rekor entry, and prints the verified statement.
+
+The first CI run that exercised this (`dragoscv/axiom` run 35476782913, 2026-09-20)
+produced one attestation for `ci-verify@sha256:b1df83a6…`, signed by the public Sigstore
+instance (`logIndex 2893697943`), with `predicate.source = { repository, ref, sha, runId }`
+— fetched and decoded with the command above.
 
 The repository's own CI runs the action against a scratch tree on every push
 (`verify-action` job): it must pass on the applied tree, fail with one mismatch after a hand

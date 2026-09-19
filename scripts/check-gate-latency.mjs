@@ -5,9 +5,12 @@
  * (v2-architecture §5.6: the hook must be fast, because harness timeouts fail open).
  *
  * Also asserts the allow contract: exit 0 and empty stdout on every run.
- * The p95 of 15 spawns is dominated by scheduler noise when other guards run in the same
- * pool, so a miss is re-measured once and the better round is judged (a genuine regression
- * misses twice; a busy machine rarely does).
+ * The p95 of 15 spawns is the second-worst sample, so it is dominated by scheduler noise when
+ * other guards run in the same pool — and on hosted Windows runners by Defender scanning a
+ * freshly built `dist/` on the first spawns (observed: p50 101 ms, p95 654 ms, run
+ * 35475685730). So: one untimed warm-up spawn, then a miss is re-measured up to two more
+ * times and the MEDIAN round p95 is judged. A genuine regression misses every round; a busy
+ * machine misses one.
  * Skips with OK+note when dist is absent; `--strict` fails instead.
  */
 import { spawnSync } from "node:child_process";
@@ -18,6 +21,7 @@ import { exists, REPO_ROOT, report, STRICT } from "./_guard-lib.mjs";
 
 const RUNS = 15;
 const P95_LIMIT_MS = 250;
+const MAX_ROUNDS = 3;
 const target = join(REPO_ROOT, "packages", "mcp", "dist", "cli.js");
 
 if (!exists(target)) {
@@ -69,12 +73,24 @@ function measure() {
 let stats;
 let rounds = 0;
 try {
+  // Warm-up: page in node + dist (and let an AV scanner finish with the fresh files).
+  spawnSync(process.execPath, [target, "gate", "--stdin"], {
+    cwd: root,
+    input: payload,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  const roundsSeen = [];
   stats = measure();
   rounds = 1;
-  if (problems.length === 0 && stats.p95 > P95_LIMIT_MS) {
+  roundsSeen.push(stats);
+  while (problems.length === 0 && stats.p95 > P95_LIMIT_MS && rounds < MAX_ROUNDS) {
     const again = measure();
-    rounds = 2;
-    if (again.p95 < stats.p95) stats = again;
+    rounds++;
+    roundsSeen.push(again);
+    // Judge the median round by p95: noise must hit a majority of rounds to fail the guard.
+    const byP95 = [...roundsSeen].sort((a, b) => a.p95 - b.p95);
+    stats = byP95[Math.floor(byP95.length / 2)];
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
