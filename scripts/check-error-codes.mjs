@@ -6,9 +6,15 @@
  * are a closed enum").
  *
  * Also fails if the enum itself cannot be parsed — a silently empty set would
- * make the guard vacuous. `*.test.ts` files are skipped: tests legitimately use
- * made-up codes ("ERR_NOPE") to prove `isErrorCode()` rejects them. Node's own
- * `ERR_*` errno codes (util.parseArgs etc.) are allowlisted by prefix.
+ * make the guard vacuous. For the "unknown literal" rule `*.test.ts` files are
+ * skipped: tests legitimately use made-up codes ("ERR_NOPE") to prove
+ * `isErrorCode()` rejects them. Node's own `ERR_*` errno codes (util.parseArgs
+ * etc.) are allowlisted by prefix.
+ *
+ * S-407 hygiene: every enum member must be RAISED in some `src` file and
+ * ASSERTED in some behavioural test (a `*.test.ts` other than `errors.test.ts`,
+ * which only lists the enum). A code nobody raises is dead; a code nobody
+ * asserts has an untested failure path.
  */
 import { join } from "node:path";
 import { REPO_ROOT, readText, rel, report, walk } from "./_guard-lib.mjs";
@@ -31,6 +37,7 @@ const problems = [];
 let files = 0;
 let refs = 0;
 const usedCodes = new Set();
+const assertedCodes = new Set();
 
 for (const file of walk(
   join(REPO_ROOT, "packages"),
@@ -51,12 +58,34 @@ for (const file of walk(
   }
 }
 
+for (const file of walk(
+  join(REPO_ROOT, "packages"),
+  (r) => /\/src\/.*\.test\.ts$/.test(r) && !/errors\.test\.ts$/.test(r),
+)) {
+  for (const m of readText(file).matchAll(LITERAL)) assertedCodes.add(m[2]);
+}
+
+/** `ERR_INTERNAL` is the catch-all for invariant violations; it is asserted but never raised on purpose in a reachable path. */
+const RAISE_EXEMPT = new Set(["ERR_INTERNAL"]);
+const unraised = [...known].filter((c) => !usedCodes.has(c) && !RAISE_EXEMPT.has(c));
+const unasserted = [...known].filter((c) => !assertedCodes.has(c));
+for (const c of unraised)
+  problems.push(`"${c}" is in ERROR_CODES but never raised in packages/*/src`);
+for (const c of unasserted) {
+  problems.push(
+    `"${c}" is never asserted in a behavioural test (*.test.ts other than errors.test.ts)`,
+  );
+}
+
 report("error-codes", problems, {
-  notes: [`${known.size} codes in enum, ${refs} references across ${files} files`],
+  notes: [
+    `${known.size} codes in enum, ${refs} references across ${files} files, all raised and asserted`,
+  ],
   stats: {
     enumSize: known.size,
     references: refs,
     files,
-    unused: [...known].filter((c) => !usedCodes.has(c)),
+    unraised,
+    unasserted,
   },
 });

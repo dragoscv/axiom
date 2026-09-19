@@ -258,7 +258,7 @@ describe("guard.external", () => {
       ),
     });
     expect(r.verdict).toBe("error");
-    expect(r.findings[0]?.facts.code).toBe("ERR_UNSUPPORTED_OP");
+    expect(r.findings[0]?.facts.code).toBe("ERR_FACT_DISABLED");
     expect(r.findings[0]?.message).toMatch(/disabled/);
   });
   it("errors when the profile forbids guards", async () => {

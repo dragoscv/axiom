@@ -247,6 +247,7 @@ Provider failures carry `facts.code` (an error code) and `facts.__provider: true
 | `diff` | string | dry-run only; unified diff capped at 1 MiB |
 | `journal` | string | path of `.axiom/journal/<hex>.json` when phase 2 started |
 | `git` | `{ branch, commit?, compareUrl? }` | `pr` mode only |
+| `drifted` | `RelPath[]` | re-apply of an already-applied digest: the artifacts whose on-disk bytes no longer matched and were re-written (a drifted `create` is committed as an overwrite, foreign bytes backed up) |
 | `error` | `{ code: ErrorCode, message, path? }` | present on `failed` and `rolled-back` |
 
 ### Journal (`.axiom/journal/<hex>.json`)
@@ -296,6 +297,11 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_PROVIDER_FAILED` | a fact provider or predicate threw |
 | `ERR_GUARD_TIMEOUT` | external guard exceeded `timeoutMs` |
 | `ERR_GUARD_OUTPUT` | external guard stdout was not a valid `GuardOutput` |
+| `ERR_FACT_DISABLED` | a fact provider / predicate is disabled by the profile or a CLI gate (`guard.external` without `facts.allowGuards` + `--allow-guards`, or without a root) → `verdict: error` |
+| `ERR_SIGNATURE_MISSING` | a trust store exists but the bundle carries no signature (`axiom verify --root`, `axiom_manifest_verify`) |
+| `ERR_SIGNATURE_INVALID` | signature verification failed (unknown key, bad signature, non-canonical payload, rollback) or unusable key material |
+| `ERR_TRUST_STATE_CORRUPT` | `.axiom/trust/state.json` is unreadable, not JSON or fails schema — never treated as "no state" |
+| `ERR_ROLLBACK` | a commit failed **and** the scoped rollback failed; `status: failed`, journal left in place for `axiom rollback`; message carries both errors |
 | `ERR_EMITTER_UNKNOWN` | `template` source names an emitter that is not in the compile-time registry (or no registry was given) |
 | `ERR_TEMPLATE_UNKNOWN` | the emitter exists but has no template with that name |
 | `ERR_TEMPLATE_PARAMS` | `template.params` fail the template's Zod schema (details carry `issues`) |
@@ -304,5 +310,5 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_NET_DENIED` | `ref` refused by policy: not `https:` (`file:` without `--allow-file`), credentials in the URI, host not in `--net-allow` |
 | `ERR_NET_FAILED` | `ref` fetch failed: timeout, redirect, network error, non-2xx (`status`) |
 | `ERR_NOT_CANONICAL` | manifest not sorted/unique, or `manifestDigest` does not match the recomputed hash |
-| `ERR_UNSUPPORTED_OP` | a gated feature used without its gate (`guard.external` without `--allow-guards`; `template` source without an emitter registry) |
+| `ERR_UNSUPPORTED_OP` | an operation the engine does not implement (`axiom_repo_snapshot` with `followSymlinks: true`) |
 | `ERR_INTERNAL` | invariant violation inside AXIOM; please report |

@@ -73,14 +73,52 @@ describe("apply happy path", () => {
     expect(r2.files[0]?.status).toBe("unchanged");
   });
 
-  it("re-applies when marker exists but files drifted (create → ERR_EXISTS since target now exists)", async () => {
+  it("re-applies when marker exists but an overwrite target drifted; reports `drifted`", async () => {
     const root = await mkRoot();
     const bundle = makeBundle([{ path: "x.txt", content: "x", op: "overwrite" }]);
     await fsApply(bundle, root);
     await writeTree(root, { "x.txt": "drifted" });
     const r = await fsApply(bundle, root);
     expect(r.status).toBe("applied");
+    expect(r.drifted).toEqual(["x.txt"]);
     expect(await readText(root, "x.txt")).toBe("x");
+  });
+
+  it("drifted re-apply of a `create` proceeds (design §apply), backs up the foreign bytes, and does not ERR_EXISTS", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([
+      { path: "gen/a.txt", content: "a" },
+      { path: "gen/b.txt", content: "b" },
+    ]);
+    expect((await fsApply(bundle, root)).status).toBe("applied");
+    // Somebody edited one generated file by hand after the apply.
+    await writeTree(root, { "gen/a.txt": "hand-edited" });
+    const r = await fsApply(bundle, root);
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe("applied");
+    expect(r.drifted).toEqual(["gen/a.txt"]);
+    expect(r.files.map((f) => `${f.path}:${f.status}`)).toEqual([
+      "gen/a.txt:written",
+      "gen/b.txt:written",
+    ]);
+    expect(await readText(root, "gen/a.txt")).toBe("a");
+    // The foreign pre-image is recoverable, exactly like an overwrite's.
+    expect(await readText(root, `.axiom/backup/${bundle.manifestDigest.slice(7)}/gen/a.txt`)).toBe(
+      "hand-edited",
+    );
+    // A third apply with nothing drifted is a plain noop without `drifted`.
+    const r3 = await fsApply(bundle, root);
+    expect(r3.status).toBe("noop");
+    expect(r3.drifted).toBeUndefined();
+  });
+
+  it("a fresh `create` over an existing file (no applied marker) is still ERR_EXISTS", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "x.txt": "theirs" });
+    const r = await fsApply(makeBundle([{ path: "x.txt", content: "x" }]), root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_EXISTS");
+    expect(r.drifted).toBeUndefined();
   });
 
   it("delete of an absent file is skipped, not an error", async () => {
@@ -473,6 +511,130 @@ describe("TOCTOU and rollback", () => {
       }
     },
   );
+});
+
+describe("error-code hygiene (S-407)", () => {
+  it("ERR_ROLLBACK when the commit fails AND the rollback fails; original error kept in the message", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "a.txt": "a0" });
+    const bundle = makeBundle([
+      { path: "a.txt", content: "a1", op: "overwrite" },
+      { path: "b.txt", content: "b" },
+    ]);
+    const realRename = fs.rename.bind(fs);
+    const inUserTree = (p: string): boolean => !p.includes(`${path.sep}.axiom${path.sep}`);
+    let userRenames = 0;
+    let restores = 0;
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      const fromStr = String(from);
+      const toStr = String(to);
+      // Commit: staging → target. Fail the 2nd one so step 1 is done and must be rolled back.
+      if (inUserTree(toStr) && fromStr.includes(`${path.sep}staging${path.sep}`)) {
+        userRenames++;
+        if (userRenames === 2) {
+          throw Object.assign(new Error("disk on fire"), { code: "EIO" });
+        }
+      }
+      // Rollback: backup → target. Make it fail too.
+      if (inUserTree(toStr) && fromStr.includes(`${path.sep}backup${path.sep}`)) {
+        restores++;
+        throw Object.assign(new Error("restore failed"), { code: "EIO" });
+      }
+      return realRename(from, to);
+    });
+    let r: Awaited<ReturnType<typeof fsApply>>;
+    try {
+      r = await fsApply(bundle, root);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(restores).toBeGreaterThan(0);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_ROLLBACK");
+    // Raw EIO is not an AxiomError → the original surfaces as ERR_INTERNAL inside the message.
+    expect(r.error?.message).toContain("after ERR_INTERNAL");
+    expect(r.error?.message).toContain("disk on fire");
+    expect(r.journal).toBeDefined();
+    // No applied marker: the digest is not considered applied.
+    expect(await exists(root, `.axiom/applied/${bundle.manifestDigest.slice(7)}.json`)).toBe(false);
+    // The journal is left for `axiom rollback`, and that rollback (unmocked) restores the tree.
+    const j = await rollback(root, bundle.manifestDigest);
+    expect(j.phase).toBe("rolled-back");
+    expect(await readText(root, "a.txt")).toBe("a0");
+    expect(await exists(root, "b.txt")).toBe(false);
+  });
+
+  it("ERR_JOURNAL_CORRUPT from readJournal; recovery skips the corrupt file and a fresh apply still works", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "x.txt", content: "x" }]);
+    const other = makeBundle([{ path: "y.txt", content: "y" }]);
+    // A journal file that is not JSON at all, and one that is JSON but fails the schema.
+    await fs.mkdir(path.join(root, ".axiom", "journal"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".axiom", "journal", `${bundle.manifestDigest.slice(7)}.json`),
+      "{not json",
+    );
+    await fs.writeFile(
+      path.join(root, ".axiom", "journal", `${other.manifestDigest.slice(7)}.json`),
+      JSON.stringify({ manifestDigest: other.manifestDigest, phase: "sideways", steps: 3 }),
+    );
+    const { readJournal, listJournals } = await import("./journal.js");
+    await expect(readJournal(root, bundle.manifestDigest)).rejects.toMatchObject({
+      code: "ERR_JOURNAL_CORRUPT",
+    });
+    await expect(readJournal(root, other.manifestDigest)).rejects.toMatchObject({
+      code: "ERR_JOURNAL_CORRUPT",
+    });
+    const listed = await listJournals(root);
+    expect(listed.corrupt).toHaveLength(2);
+    expect(listed.journals).toHaveLength(0);
+    // `axiom rollback <digest>` on a corrupt journal is the error, not a crash.
+    await expect(rollback(root, bundle.manifestDigest)).rejects.toMatchObject({
+      code: "ERR_JOURNAL_CORRUPT",
+    });
+    // Recovery at the start of apply ignores corrupt journals and the apply succeeds.
+    const r = await fsApply(makeBundle([{ path: "z.txt", content: "z" }]), root);
+    expect(r.status).toBe("applied");
+    expect(await readText(root, "z.txt")).toBe("z");
+  });
+
+  it("ERR_SIZE_MISMATCH when `bytes` disagrees with the blob (digest still right)", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "s.txt", content: "12345" }]);
+    // Tamper `bytes` only; recompute the manifest digest so canonical checks pass.
+    const { canonicalDigestRef } = await import("@codai/axiom-canon");
+    const manifest = structuredClone(bundle.manifest);
+    const a = manifest.artifacts[0];
+    if (a === undefined) throw new Error("fixture");
+    a.bytes = 4;
+    const tampered = { ...bundle, manifest, manifestDigest: canonicalDigestRef(manifest) };
+    const r = await fsApply(tampered, root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_SIZE_MISMATCH");
+    expect(r.error?.path).toBe("s.txt");
+    expect(await exists(root, "s.txt")).toBe(false);
+  });
+
+  it("ERR_DIGEST_FORMAT: a manifest whose artifact digest is not 64 lowercase hex fails schema with that code", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "d.txt", content: "d" }]);
+    const manifest = structuredClone(bundle.manifest);
+    const a = manifest.artifacts[0];
+    if (a === undefined || a.digest === undefined) throw new Error("fixture");
+    a.digest.sha256 = a.digest.sha256.toUpperCase();
+    const { canonicalDigestRef } = await import("@codai/axiom-canon");
+    const tampered = { ...bundle, manifest, manifestDigest: canonicalDigestRef(manifest) };
+    const r = await fsApply(tampered as typeof bundle, root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_INVALID_MANIFEST");
+    // The Zod issue that caused it names the closed-enum code.
+    const { ManifestBundleSchema } = await import("@codai/axiom-schema");
+    const parsed = ManifestBundleSchema.safeParse(tampered);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((i) => i.message)).toContain("ERR_DIGEST_FORMAT");
+    }
+  });
 });
 
 describe("long paths", () => {

@@ -54,7 +54,17 @@ then fail with `ERR_LOCKED` (details carry the holder).
 **Idempotent.** If `.axiom/applied/<hex>.json` exists and every artifact's
 on-disk digest still matches the manifest, the result is `status: noop` with
 every file `unchanged`; nothing is touched and the lock is held only briefly.
-If the marker exists but files drifted, the apply proceeds as a re-apply.
+If the marker exists but files drifted, the apply proceeds as a re-apply and
+lists the re-written paths in `result.drifted`. A drifted `create` target is
+not `ERR_EXISTS`: it is committed as an overwrite and the foreign bytes are
+backed up under `.axiom/backup/<hex>/` like any pre-image. Without the marker a
+`create` over an existing file is still `ERR_EXISTS`.
+
+**Rollback failure is its own error.** When a commit step fails and the scoped
+rollback also fails, the result is `status: failed` with `error.code:
+ERR_ROLLBACK` (the original error is in the message and `details`), the journal
+stays in `rolling-back`, and `axiom rollback <digest>` (or the recovery at the
+next apply) retries it.
 
 **Pre-apply checks are part of the transaction.** When a `preChecks` callback
 is supplied (the MCP server and CLI always do, using the profile), it runs on

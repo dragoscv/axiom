@@ -146,7 +146,9 @@ manifest hash). AXIOM keeps only the monotonic rule and makes it strict:
 
 Provider errors (`verdict: error`, never pass): no root, trust file missing
 (`ERR_NOT_FOUND`), unreadable/invalid trust file (`ERR_PROVIDER_FAILED`), corrupt
-`state.json` (`ERR_JOURNAL_CORRUPT`).
+`state.json` (`ERR_TRUST_STATE_CORRUPT`). `axiom verify --root` / `axiom_manifest_verify`
+report `signatures.code`: `ERR_SIGNATURE_MISSING` when the bundle carries no signature
+at all, `ERR_SIGNATURE_INVALID` for every other failure.
 
 ## CLI walkthrough
 

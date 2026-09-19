@@ -1,4 +1,5 @@
 import cp, { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ManifestBundle } from "@codai/axiom-schema";
@@ -314,5 +315,80 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     expect(r.error?.code).toBe("ERR_EXISTS");
     expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
     expect(git(root, ["branch", "--list"]).trim()).toBe("* main");
+  });
+
+  it("ERR_GIT_NOT_FOUND when the git executable is missing (spawn ENOENT) — apply fails before any write", async () => {
+    const root = await mkRepo();
+    const bundle = bundleOf();
+    const spy = vi.spyOn(cp, "spawn").mockImplementation(() => {
+      const child = new EventEmitter() as unknown as cp.ChildProcess;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { end: () => undefined }),
+        kill: () => true,
+      });
+      queueMicrotask(() =>
+        child.emit("error", Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" })),
+      );
+      return child;
+    });
+    let r: Awaited<ReturnType<typeof prApply>>;
+    try {
+      r = await prApply(bundle, root);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_GIT_NOT_FOUND");
+    expect(await exists(root, "src/a.ts")).toBe(false);
+    expect(await readText(root, "over.txt")).toBe("v1\n");
+  });
+
+  it("ERR_GIT_FAILED when git exits non-zero (root is not a repository); stderr head in message, no write", async () => {
+    const root = await mkRoot(); // no `git init`
+    await writeTree(root, { "over.txt": "v1\n", "old.txt": "bye\n" });
+    const r = await prApply(bundleOf(), root);
+    expect(r.status).toBe("failed");
+    // `rev-parse --show-toplevel` outside a repo exits 128 → mapped to ERR_GIT_NOT_REPO by the
+    // preflight; the raw runGit surface is what carries ERR_GIT_FAILED, so probe that too.
+    expect(["ERR_GIT_NOT_REPO", "ERR_GIT_FAILED"]).toContain(r.error?.code);
+    const { runGit } = await import("./git.js");
+    await expect(
+      runGit(root, ["rev-parse", "--verify", "definitely-not-a-ref"]),
+    ).rejects.toMatchObject({
+      code: "ERR_GIT_FAILED",
+      details: expect.objectContaining({ code: expect.any(Number) }),
+    });
+    expect(await exists(root, "src/a.ts")).toBe(false);
+  });
+
+  it("ERR_GIT_FAILED on timeout: the hung child is killed and details carry timeoutMs", async () => {
+    const root = await mkRepo();
+    const { runGit } = await import("./git.js");
+    let killed = 0;
+    const spy = vi.spyOn(cp, "spawn").mockImplementation(() => {
+      const child = new EventEmitter() as unknown as cp.ChildProcess;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { end: () => undefined }),
+        kill: () => {
+          killed++;
+          queueMicrotask(() => child.emit("close", null));
+          return true;
+        },
+      });
+      return child; // never emits close on its own → the timer must fire
+    });
+    try {
+      await expect(runGit(root, ["status"], { timeoutMs: 50 })).rejects.toMatchObject({
+        code: "ERR_GIT_FAILED",
+        details: expect.objectContaining({ timeoutMs: 50 }),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(killed).toBe(1);
   });
 });

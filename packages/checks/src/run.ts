@@ -203,7 +203,7 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
         providerFinding(
           check,
           predicate.id,
-          "ERR_UNSUPPORTED_OP",
+          "ERR_FACT_DISABLED",
           "guards are not allowed by this profile",
         ),
       );

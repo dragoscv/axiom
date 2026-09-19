@@ -592,8 +592,10 @@
                   "ERR_PROVIDER_FAILED",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
+                  "ERR_FACT_DISABLED",
                   "ERR_SIGNATURE_MISSING",
                   "ERR_SIGNATURE_INVALID",
+                  "ERR_TRUST_STATE_CORRUPT",
                   "ERR_ROLLBACK",
                   "ERR_EMITTER_UNKNOWN",
                   "ERR_TEMPLATE_UNKNOWN",
@@ -658,6 +660,13 @@
             },
             "ok": {
               "type": "boolean"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "ERR_SIGNATURE_MISSING",
+                "ERR_SIGNATURE_INVALID"
+              ]
             }
           },
           "required": [
@@ -1027,6 +1036,15 @@
           ],
           "additionalProperties": false
         },
+        "drifted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Relative POSIX path, NFC, no reserved names"
+          }
+        },
         "error": {
           "type": "object",
           "properties": {
@@ -1067,8 +1085,10 @@
                 "ERR_PROVIDER_FAILED",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
+                "ERR_FACT_DISABLED",
                 "ERR_SIGNATURE_MISSING",
                 "ERR_SIGNATURE_INVALID",
+                "ERR_TRUST_STATE_CORRUPT",
                 "ERR_ROLLBACK",
                 "ERR_EMITTER_UNKNOWN",
                 "ERR_TEMPLATE_UNKNOWN",
@@ -1288,6 +1308,15 @@
           ],
           "additionalProperties": false
         },
+        "drifted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Relative POSIX path, NFC, no reserved names"
+          }
+        },
         "error": {
           "type": "object",
           "properties": {
@@ -1328,8 +1357,10 @@
                 "ERR_PROVIDER_FAILED",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
+                "ERR_FACT_DISABLED",
                 "ERR_SIGNATURE_MISSING",
                 "ERR_SIGNATURE_INVALID",
+                "ERR_TRUST_STATE_CORRUPT",
                 "ERR_ROLLBACK",
                 "ERR_EMITTER_UNKNOWN",
                 "ERR_TEMPLATE_UNKNOWN",
@@ -1872,8 +1903,10 @@
                   "ERR_PROVIDER_FAILED",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
+                  "ERR_FACT_DISABLED",
                   "ERR_SIGNATURE_MISSING",
                   "ERR_SIGNATURE_INVALID",
+                  "ERR_TRUST_STATE_CORRUPT",
                   "ERR_ROLLBACK",
                   "ERR_EMITTER_UNKNOWN",
                   "ERR_TEMPLATE_UNKNOWN",

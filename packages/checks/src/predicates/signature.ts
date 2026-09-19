@@ -132,13 +132,19 @@ export async function loadTrustState(
   if ("missing" in r) return { state: undefined };
   if ("error" in r) {
     return {
-      finding: providerError("ERR_PROVIDER_FAILED", `trust state ${TRUST_STATE_FILE}: ${r.error}`),
+      finding: providerError(
+        "ERR_TRUST_STATE_CORRUPT",
+        `trust state ${TRUST_STATE_FILE}: ${r.error}`,
+      ),
     };
   }
   const parsed = TrustStateSchema.safeParse(r.value);
   if (!parsed.success) {
     return {
-      finding: providerError("ERR_JOURNAL_CORRUPT", `trust state ${TRUST_STATE_FILE} is invalid`),
+      finding: providerError(
+        "ERR_TRUST_STATE_CORRUPT",
+        `trust state ${TRUST_STATE_FILE} is invalid`,
+      ),
     };
   }
   return { state: parsed.data };

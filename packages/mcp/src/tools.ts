@@ -224,6 +224,8 @@ export const ManifestVerifyOutput = z.object({
       keyids: z.array(z.string()),
       findings: z.array(z.object({ id: z.string(), message: z.string() })),
       ok: z.boolean(),
+      /** `ERR_SIGNATURE_MISSING` (no signatures at all) or `ERR_SIGNATURE_INVALID`; absent when `ok`. */
+      code: z.enum(["ERR_SIGNATURE_MISSING", "ERR_SIGNATURE_INVALID"]).optional(),
     })
     .optional(),
 });

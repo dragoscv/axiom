@@ -49,6 +49,11 @@ export const ApplyResultSchema = z
     /** Path of `.axiom/journal/<digest>.json`. */
     journal: z.string().optional(),
     git: GitResultSchema.optional(),
+    /**
+     * Re-apply of an already-applied digest whose files no longer matched on disk:
+     * the artifacts listed here were re-written over foreign changes (design §apply).
+     */
+    drifted: z.array(RelPathSchema).optional(),
     error: ApplyErrorSchema.optional(),
   })
   .strict()

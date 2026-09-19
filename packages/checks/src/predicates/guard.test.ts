@@ -53,14 +53,14 @@ describe("guard.external gating", () => {
     expect(r.verdict).toBe("error");
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0]?.id).toBe("g");
-    expect(code(r)).toBe("ERR_UNSUPPORTED_OP");
+    expect(code(r)).toBe("ERR_FACT_DISABLED");
     expect(r.findings[0]?.message).toMatch(/disabled/);
     expect(r.providers.find((p) => p.name === "guard")?.status).toBe("error");
   });
   it("profile forbids guards → error even when the server allows", async () => {
     const r = await run({ command: "ok.mjs" }, { profileAllows: false });
     expect(r.verdict).toBe("error");
-    expect(code(r)).toBe("ERR_UNSUPPORTED_OP");
+    expect(code(r)).toBe("ERR_FACT_DISABLED");
     expect(r.providers.find((p) => p.name === "guard")?.status).toBe("error");
   });
   it("no root → disabled", async () => {
@@ -70,7 +70,7 @@ describe("guard.external gating", () => {
       allowGuards: true,
     });
     expect(r.verdict).toBe("error");
-    expect(code(r)).toBe("ERR_UNSUPPORTED_OP");
+    expect(code(r)).toBe("ERR_FACT_DISABLED");
   });
   it("no guard checks → provider skipped", async () => {
     const r = await runChecks({ bundle, root, profile: profileWith([]), allowGuards: true });

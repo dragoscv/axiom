@@ -149,6 +149,45 @@ describe("keys.ts (unit)", () => {
     const stranger = { ...b, signatures: [signEnvelope(b.manifest, generateKeyPair().privateKey)] };
     const u = await verifyBundleAgainstRoot(repo.root, stranger);
     expect(u?.findings.map((f) => f.id)).toEqual(["signature.unknownKey"]);
+    expect(u?.code).toBe("ERR_SIGNATURE_INVALID");
+    expect(r?.code).toBe("ERR_SIGNATURE_INVALID");
+    expect(ok?.code).toBeUndefined();
+  });
+
+  it("ERR_SIGNATURE_MISSING: a trust store exists but the bundle carries no signature at all", async () => {
+    const kp = generateKeyPair();
+    await trustAdd(repo.root, { keyid: kp.keyid, alg: "ed25519", publicKey: kp.publicKeyBase64 });
+    const unsigned = await compiled(1);
+    expect(unsigned.signatures).toBeUndefined();
+    const r = await verifyBundleAgainstRoot(repo.root, unsigned);
+    expect(r).toMatchObject({
+      ok: false,
+      code: "ERR_SIGNATURE_MISSING",
+      keyids: [],
+      findings: [{ id: "signature.missing" }],
+    });
+    // Empty array is the same thing as absent.
+    const empty = await verifyBundleAgainstRoot(repo.root, { ...unsigned, signatures: [] });
+    expect(empty?.code).toBe("ERR_SIGNATURE_MISSING");
+  });
+
+  it("ERR_TRUST_STATE_CORRUPT: a state.json that is not JSON or fails the schema is refused, never treated as 'no state'", async () => {
+    await mkdir(dirname(trustStatePath(repo.root)), { recursive: true });
+    await writeFile(trustStatePath(repo.root), "{oops");
+    await expect(loadTrustState(repo.root)).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    await writeFile(trustStatePath(repo.root), JSON.stringify({ version: 1, lastCounter: "9" }));
+    await expect(loadTrustState(repo.root)).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    // A corrupt state must not be silently overwritten by an advance either.
+    await expect(advanceTrustState(repo.root, await compiled(5))).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    expect(await readFile(trustStatePath(repo.root), "utf8")).toBe(
+      JSON.stringify({ version: 1, lastCounter: "9" }),
+    );
   });
 
   it("advanceTrustState is monotonic, atomic and a no-op without a counter", async () => {

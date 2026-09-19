@@ -120,6 +120,21 @@ function toApplyError(err: unknown): ApplyError {
   return { code: "ERR_INTERNAL", message: err instanceof Error ? err.message : String(err) };
 }
 
+/**
+ * A commit failed AND its rollback failed: the tree may now be inconsistent, which is a
+ * different (worse) situation than the original error — surfaced as `ERR_ROLLBACK`, with
+ * the original error kept in `cause`/message so the operator sees both.
+ */
+function rollbackFailure(original: unknown, rbErr: unknown): AxiomError {
+  const o = toApplyError(original);
+  const r = toApplyError(rbErr);
+  return new AxiomError(
+    "ERR_ROLLBACK",
+    `rollback failed (${r.code}: ${r.message}) after ${o.code}: ${o.message}; run \`axiom rollback\` or inspect .axiom/journal`,
+    { cause: original, details: { original: o, rollback: r }, ...(o.path ? { path: o.path } : {}) },
+  );
+}
+
 async function realRoot(root: string): Promise<string> {
   let real: string;
   try {
@@ -142,15 +157,17 @@ function expectedDigest(a: ManifestArtifact): string {
   return a.op === "delete" ? "absent" : (a.digest?.sha256 ?? "absent");
 }
 
-async function onDiskMatchesAll(
+/** Artifacts whose on-disk digest differs from what this manifest declares. */
+async function driftedArtifacts(
   rootReal: string,
   artifacts: readonly ManifestArtifact[],
-): Promise<boolean> {
+): Promise<string[]> {
+  const out: string[] = [];
   for (const a of artifacts) {
     const cur = await fileDigestOrAbsent(path.join(rootReal, ...a.path.split("/")));
-    if (cur !== expectedDigest(a)) return false;
+    if (cur !== expectedDigest(a)) out.push(a.path);
   }
-  return true;
+  return out;
 }
 
 async function writeAppliedMarker(rootReal: string, result: ApplyResult): Promise<void> {
@@ -262,6 +279,8 @@ async function prepare(
   rootReal: string,
   bundle: ManifestBundle,
   wantDiff: boolean,
+  /** Re-apply of an applied digest: `create` targets that exist are overwritten, not `ERR_EXISTS`. */
+  reapply = false,
 ): Promise<Prepared> {
   const { manifest, manifestDigest } = bundle;
   validateArtifactPaths(manifest.artifacts);
@@ -276,10 +295,13 @@ async function prepare(
   const files: StagedFile[] = [];
   for (const a of manifest.artifacts) {
     const { abs } = await resolveContained(rootReal, a.path);
-    await checkTargetType(abs, a.path, a.op);
+    await checkTargetType(abs, a.path, reapply && a.op === "create" ? "overwrite" : a.op);
     if (caseInsensitive) await checkOnDiskCaseCollision(abs, a.path, a.op);
     const preImage = await fileDigestOrAbsent(abs);
-    const f: StagedFile = { path: a.path, op: a.op, preImage };
+    // A drifted `create` is committed as an overwrite so the foreign pre-image is backed up.
+    const op: ArtifactOp =
+      reapply && a.op === "create" && preImage !== "absent" ? "overwrite" : a.op;
+    const f: StagedFile = { path: a.path, op, preImage };
     if (a.digest !== undefined) f.digest = a.digest.sha256;
     files.push(f);
   }
@@ -505,9 +527,12 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
       async () => {
         await recoverIfNeeded(rootReal);
 
-        // Idempotency.
+        // Idempotency (design §apply): applied marker + on-disk match → noop; marker but
+        // drifted files → re-apply, reporting which artifacts were re-written.
+        let drifted: string[] | undefined;
         if ((await lstatOrNull(appliedPath(rootReal, bundle.manifestDigest))) !== null) {
-          if (await onDiskMatchesAll(rootReal, bundle.manifest.artifacts)) {
+          drifted = await driftedArtifacts(rootReal, bundle.manifest.artifacts);
+          if (drifted.length === 0) {
             return {
               ...base,
               status: "noop",
@@ -523,7 +548,7 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
 
         let prepared: Prepared;
         try {
-          prepared = await prepare(rootReal, bundle, mode === "dry-run");
+          prepared = await prepare(rootReal, bundle, mode === "dry-run", drifted !== undefined);
         } catch (err) {
           await rmrf(stagingDir(rootReal, bundle.manifestDigest));
           return fail(rootReal, err);
@@ -550,13 +575,15 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
         if (mode === "dry-run") {
           const diff = unifiedDiff(prepared.diffEntries);
           await rmrf(staged.stagingDir);
-          return {
+          const dry: ApplyResult = {
             ...base,
             status: "applied",
             root: rootReal,
             files: prepared.files,
             diff,
-          } satisfies ApplyResult;
+          };
+          if (drifted !== undefined) dry.drifted = drifted;
+          return dry;
         }
 
         // Phase 1 complete → journal `staged`, fsynced.
@@ -576,12 +603,8 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
             await rollbackJournal(rootReal, journal);
           } catch (rbErr) {
             return {
-              ...fail(rootReal, err, "failed"),
+              ...fail(rootReal, rollbackFailure(err, rbErr), "failed"),
               journal: journalFile,
-              error: {
-                ...toApplyError(err),
-                message: `${toApplyError(err).message}; rollback failed: ${toApplyError(rbErr).message}`,
-              },
             };
           }
           return { ...fail(rootReal, err, "rolled-back"), journal: journalFile };
@@ -594,6 +617,7 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
           files: prepared.files,
           journal: journalFile,
         };
+        if (drifted !== undefined) done.drifted = drifted;
         await writeAppliedMarker(rootReal, done);
         await rmrf(staged.stagingDir);
         await pruneBackups(rootReal, keep);
@@ -652,12 +676,7 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
         await abandonBranch();
         const base2 = fail(rootReal, err, rbErr === undefined ? "rolled-back" : "failed");
         if (result.journal !== undefined) base2.journal = result.journal;
-        if (rbErr !== undefined) {
-          base2.error = {
-            ...toApplyError(err),
-            message: `${toApplyError(err).message}; rollback failed: ${toApplyError(rbErr).message}`,
-          };
-        }
+        if (rbErr !== undefined) base2.error = toApplyError(rollbackFailure(err, rbErr));
         return base2;
       }
     }

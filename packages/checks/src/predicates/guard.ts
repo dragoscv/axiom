@@ -347,7 +347,7 @@ export async function runGuard(ctx: FactContext, params: GuardExternalParamsT): 
   if (guard === undefined || !guard.enabled || !ctx.facts.profile.allowGuards) {
     return [
       providerError(
-        "ERR_UNSUPPORTED_OP",
+        "ERR_FACT_DISABLED",
         "external guards disabled (needs profile facts.allowGuards and --allow-guards)",
         { command: params.command },
       ),

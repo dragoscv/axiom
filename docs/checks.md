@@ -168,7 +168,7 @@ needs a root (no root → `verdict: error`).
 Finding ids: `signature.missing`, `signature.unknownKey`, `signature.bad`,
 `signature.notCanonical`, `signature.rollback` (`facts.reason` ∈ `NO_COUNTER |
 ROLLBACK | BELOW_MIN`). Fail-closed: missing trust file → `ERR_NOT_FOUND`,
-unreadable/invalid → `ERR_PROVIDER_FAILED`, corrupt state → `ERR_JOURNAL_CORRUPT`,
+unreadable/invalid → `ERR_PROVIDER_FAILED`, corrupt state → `ERR_TRUST_STATE_CORRUPT`,
 all as provider errors (`verdict: error`).
 
 ```json
@@ -258,7 +258,7 @@ Runs a repository-owned guard script (design §3.2) and maps its output to
 findings. `requires: guard`. **Disabled by default, twice**: the predicate runs
 only when the profile sets `facts.allowGuards: true` **and** the server/CLI was
 started with `--allow-guards`. Otherwise it returns one `error` finding
-(`code: ERR_UNSUPPORTED_OP`, "external guards disabled") → `verdict: error`.
+(`code: ERR_FACT_DISABLED`, "external guards disabled") → `verdict: error`.
 
 | Param | Type | Default |
 |-------|------|---------|

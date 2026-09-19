@@ -42,9 +42,14 @@ export const ERROR_CODES = [
   "ERR_PROVIDER_FAILED",
   "ERR_GUARD_TIMEOUT",
   "ERR_GUARD_OUTPUT",
+  /** A fact provider / predicate is disabled by the profile or a CLI gate (`--allow-guards`). */
+  "ERR_FACT_DISABLED",
   // signing (D-16)
   "ERR_SIGNATURE_MISSING",
   "ERR_SIGNATURE_INVALID",
+  /** Anti-rollback state file (`.axiom/trust/state.json`) unreadable or fails schema. */
+  "ERR_TRUST_STATE_CORRUPT",
+  /** Rollback of a partially committed apply itself failed; the tree may be inconsistent. */
   "ERR_ROLLBACK",
   // template sources (v2.1)
   "ERR_EMITTER_UNKNOWN",

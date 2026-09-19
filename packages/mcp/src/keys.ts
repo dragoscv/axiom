@@ -147,6 +147,12 @@ export interface BundleSignatureReport {
   keyids: string[];
   findings: { id: string; message: string }[];
   ok: boolean;
+  /**
+   * Present when `ok` is false: `ERR_SIGNATURE_MISSING` when the bundle carries no
+   * signature at all, `ERR_SIGNATURE_INVALID` for every other failure (unknown key, bad
+   * signature, non-canonical payload, rollback).
+   */
+  code?: "ERR_SIGNATURE_MISSING" | "ERR_SIGNATURE_INVALID";
 }
 
 /** Verify a bundle's detached signatures against the root's trust store; `undefined` when no store. */
@@ -158,12 +164,17 @@ export async function verifyBundleAgainstRoot(
   const store = await loadTrustStore(root, rel);
   if (store === undefined) return undefined;
   const v = verifyBundleSignatures(bundle, store, bundle.manifest.counter);
-  return {
+  const report: BundleSignatureReport = {
     trustFile: rel,
     keyids: v.keyids,
     findings: v.findings.map((f) => ({ id: f.id, message: f.message })),
     ok: v.keyids.length > 0 && v.findings.length === 0,
   };
+  if (!report.ok) {
+    report.code =
+      (bundle.signatures ?? []).length === 0 ? "ERR_SIGNATURE_MISSING" : "ERR_SIGNATURE_INVALID";
+  }
+  return report;
 }
 
 /** Verify against an explicit set of trusted keys (no root). */
@@ -244,11 +255,23 @@ export async function trustRemove(
 // --- anti-rollback state ------------------------------------------------------------
 
 export async function loadTrustState(root: string): Promise<TrustState | undefined> {
-  const raw = await readJsonOrUndefined(trustStatePath(root));
+  let raw: unknown;
+  try {
+    raw = await readJsonOrUndefined(trustStatePath(root));
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new AxiomError("ERR_TRUST_STATE_CORRUPT", `${TRUST_STATE_FILE} is not valid JSON`, {
+        cause: err,
+      });
+    }
+    throw err;
+  }
   if (raw === undefined) return undefined;
   const parsed = TrustStateSchema.safeParse(raw);
   if (!parsed.success)
-    throw new AxiomError("ERR_JOURNAL_CORRUPT", `${TRUST_STATE_FILE} is invalid`);
+    throw new AxiomError("ERR_TRUST_STATE_CORRUPT", `${TRUST_STATE_FILE} is invalid`, {
+      details: { issues: parsed.error.issues.slice(0, 5).map((i) => i.message) },
+    });
   return parsed.data;
 }
 
