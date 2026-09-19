@@ -10,7 +10,7 @@
 | `scripts/axiom-guard-adapter.mjs` | `guard.external` adapter: reads the bundle from stdin, runs `scripts/run-guards.mjs --quiet <names>` (spawn, args array, no shell), maps `FAILED <guard>` headers / `FAIL` lines to AXIOM findings `brivio.<guard>`, prints `{ok, findings}`; always exit 0, 55 s internal cap. |
 | `.axiom/profiles/brivio.json` | Profile `brivio` extends `default`: `repo.noOverwriteOf` (`.github/**`, lockfiles, `drizzle/**/meta/**`), `repo.requireCompanion` transcribed from `.copilot-ripple.json` (gateway route → mcp tools + CLI + TS/PHP SDK + OpenAPI; openapi.ts → JSON; actions → test; db schema → migration), `content.noSecrets`, `guard.external` running the 7 change-set-relevant guards (see below). |
 | `.axiom/gate-profile.json` | PreToolUse gate: deny `.git/**`, `.axiom/**`, lockfiles, `.env*`, `node_modules`, `drizzle/**/meta/**`; `noSecrets`. |
-| `.github/hooks/axiom-gate.json` | Copilot CLI hook registration → `node E:/gh/axiom/packages/mcp/dist/cli.js gate --stdin` (becomes `npx -y @codai/axiom-mcp gate --stdin` after the npm publish). |
+| `.github/hooks/axiom-gate.json` | Copilot CLI hook registration → `axiom gate --stdin` via the global bin (`npm install -g @codai/axiom-mcp`; p50 157 ms). Not `npx`: p50 7.8 s warm, over the 5 s fail-open timeout. |
 | `.gitignore` | `.axiom/*` runtime state ignored; `profiles/` and `gate-profile.json` tracked. |
 
 ## Why only 7 guards in `guard.external`
@@ -72,4 +72,5 @@ six guards all returned `ok`.
 1. Review + commit the staged brivio files (explicit paths; shared clone).
 2. Fix the 4 vacuous assertions, re-run step 2.
 3. After `@codai/axiom-mcp@2.0.0` is on npm, switch `.github/hooks/axiom-gate.json`
-   to `npx -y @codai/axiom-mcp gate --stdin` and add `.vscode/mcp.json` server `axiom`.
+   to the global `axiom` bin (done 2026-09-19) and add `.vscode/mcp.json` server `axiom`
+   (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` — fine for a long-lived server).

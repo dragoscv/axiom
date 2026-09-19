@@ -80,10 +80,11 @@ reason.
 
 ## Wiring
 
-All three snippets assume `@codai/axiom-mcp` is on the path (`npx -y @codai/axiom-mcp gate --stdin`)
-or a global install (`axiom gate --stdin`). `npx` adds ~300 ms of resolution on a cold cache; for a
-hook that runs on every tool call prefer a global/`pnpm add -g` install or point `exec` at
-`node <path>/dist/cli.js`.
+**Install globally first** — `npm install -g @codai/axiom-mcp` (or `pnpm add -g`) — and call the
+`axiom` bin. Do **not** put `npx -y @codai/axiom-mcp` in a hook: measured 2026-09-19 on Windows,
+`npx` resolution alone is **p50 7.8 s / max 15 s even with a warm cache**, versus **p50 157 ms**
+for the global bin and 124 ms for `node dist/cli.js`. Every harness kills a hook at its timeout
+(5 s here) and then **fails open**, so an `npx` gate is a gate that never runs.
 
 ### Copilot CLI / VS Code — `~/.copilot/hooks/axiom-gate.json` (user) or `.github/hooks/axiom-gate.json` (repo)
 
@@ -94,8 +95,8 @@ hook that runs on every tool call prefer a global/`pnpm add -g` install or point
     "preToolUse": [
       {
         "type": "command",
-        "exec": "node",
-        "args": ["C:/Users/you/AppData/Roaming/npm/node_modules/@codai/axiom-mcp/dist/cli.js", "gate", "--stdin"],
+        "exec": "axiom",
+        "args": ["gate", "--stdin"],
         "timeoutSec": 5
       }
     ]
@@ -103,13 +104,13 @@ hook that runs on every tool call prefer a global/`pnpm add -g` install or point
 }
 ```
 
-Or, mirroring the shell form used by the other house hooks:
+Or, mirroring the shell form used by the other house hooks (same bin, resolved through the shell):
 
 ```json
 {
   "type": "command",
-  "bash": "npx -y @codai/axiom-mcp gate --stdin",
-  "powershell": "npx -y @codai/axiom-mcp gate --stdin",
+  "bash": "axiom gate --stdin",
+  "powershell": "axiom gate --stdin",
   "timeoutSec": 5
 }
 ```
@@ -123,7 +124,7 @@ Or, mirroring the shell form used by the other house hooks:
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "npx -y @codai/axiom-mcp gate --stdin", "timeout": 5 }
+          { "type": "command", "command": "axiom gate --stdin", "timeout": 5 }
         ]
       }
     ]

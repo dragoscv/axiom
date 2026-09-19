@@ -15,7 +15,7 @@ repo's own skills.
 | `.axiom/profiles/metu.json` | Profile `metu` extends `default`, `facts.allowRepo: true`, `allowGuards: false`. Checks: `repo.noOverwriteOf` (`.git/**`, `.axiom/**`, `.github/**`, `pnpm-lock.yaml`, `**/*.lock`, `**/drizzle/meta/**`, `.env*`, `**/.env*`), `content.noSecrets`, `path.deny` (`node_modules`, `.next`, `dist`, `.turbo`), `metu.ripple` = 8 `repo.requireCompanion` rules (below). |
 | `.axiom/gate-profile.json` | PreToolUse gate: deny `.git/**`, `.axiom/**`, `.github/**`, lockfiles, `.env*` at any depth, `node_modules`, `.next`, `dist`, `drizzle/**/meta/**`; `noSecrets`; `maxBytes` 262144. |
 | `.vscode/mcp.json` | Server `axiom`: stdio `node E:/gh/axiom/packages/mcp/dist/cli.js mcp --root ${workspaceFolder}` (→ `npx -y @codai/axiom-mcp` after the npm publish). `.vscode/` had no `mcp.json` before; `settings/launch/tasks/extensions` untouched. |
-| `.github/hooks/axiom-gate.json` | Copilot CLI PreToolUse hook → `node E:/gh/axiom/packages/mcp/dist/cli.js gate --stdin` (5 s). Same shape as brivio's; the gate resolves `<cwd>/.axiom/gate-profile.json` itself. |
+| `.github/hooks/axiom-gate.json` | Copilot CLI PreToolUse hook → `axiom gate --stdin` via the global bin (5 s timeout; p50 157 ms). Same shape as brivio's; the gate resolves `<cwd>/.axiom/gate-profile.json` itself. |
 | `.gitignore` | `.axiom/*` runtime state ignored, `!.axiom/profiles/` + `!.axiom/gate-profile.json` tracked; `!.vscode/mcp.json` added (the file had `.vscode/*` ignoring everything not allow-listed). |
 
 ## `metu.ripple` — the skills' checklists as rules
