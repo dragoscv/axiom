@@ -22,6 +22,38 @@ import { pae } from "./pae.js";
 /** DSSE payloadType for an AXIOM `ManifestBody`. */
 export const AXIOM_MANIFEST_PAYLOAD_TYPE: "application/vnd.axiom.manifest+json" =
   "application/vnd.axiom.manifest+json";
+/**
+ * DSSE payloadType for a root-bound manifest signature (S-409). Payload =
+ * `JCS({ manifest, rootId })`: the signature is not transferable to a root that declares a
+ * different `rootId` in its trust store, which closes cross-root replay.
+ */
+export const AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE: "application/vnd.axiom.manifest-bound+json" =
+  "application/vnd.axiom.manifest-bound+json";
+
+/** Body of a root-bound payload. */
+export interface BoundManifestPayload {
+  manifest: unknown;
+  rootId: string;
+}
+
+export function boundPayload(manifest: unknown, rootId: string): BoundManifestPayload {
+  return { manifest, rootId };
+}
+
+/** Sign `JCS({ manifest, rootId })` under the bound payload type (S-409). */
+export function signEnvelopeBound(
+  manifest: unknown,
+  rootId: string,
+  privateKey: KeyObject,
+  keyid?: string,
+): DsseEnvelope {
+  return signEnvelope(
+    boundPayload(manifest, rootId),
+    privateKey,
+    keyid,
+    AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE,
+  );
+}
 
 /** Ed25519 raw key sizes (RFC 8032). */
 export const ED25519_RAW_PUBLIC_BYTES = 32;

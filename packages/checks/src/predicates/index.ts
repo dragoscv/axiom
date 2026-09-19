@@ -36,6 +36,9 @@ export {
   type SignatureVerdict,
   TRUST_FILE_DEFAULT,
   TRUST_STATE_FILE,
+  TRUST_STATE_KEY_FILE,
+  trustStateMac,
+  trustStateMacOk,
   verifyBundleSignatures,
 } from "./signature.js";
 export {

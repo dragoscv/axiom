@@ -129,8 +129,8 @@ axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot>
 axiom emitters [--json]
 axiom keygen  [--out <dir>] [--name <label>]     (ed25519; private key → <dir>/axiom-signing-<id>.key 0600, public entry → stdout)
-axiom sign    <bundle.json> [--key-file <path>] [-o out.json]   (key from --key-file or $AXIOM_SIGNING_KEY)
-axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root .
+axiom sign    <bundle.json> [--key-file <path>] [-o out.json] [--root-id <id>]   (key from --key-file or $AXIOM_SIGNING_KEY; --root-id = root-bound envelope)
+axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root . | root-id [<id>|--clear] --root .
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level warn]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
                                                (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/migrate.md)

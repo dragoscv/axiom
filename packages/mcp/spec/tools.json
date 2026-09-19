@@ -418,8 +418,16 @@
             "type": "object",
             "properties": {
               "payloadType": {
-                "type": "string",
-                "const": "application/vnd.axiom.manifest+json"
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "application/vnd.axiom.manifest+json"
+                  },
+                  {
+                    "type": "string",
+                    "const": "application/vnd.axiom.manifest-bound+json"
+                  }
+                ]
               },
               "payload": {
                 "type": "string",

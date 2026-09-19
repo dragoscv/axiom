@@ -1,8 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { apply, rollback, verifyTree } from "@codai/axiom-apply";
-import { buildApplyAttestation, canonicalize } from "@codai/axiom-canon";
+import { apply, rollback } from "@codai/axiom-apply";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import {
@@ -13,7 +12,7 @@ import {
 } from "@codai/axiom-schema";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EMITTERS, emitterCatalogue } from "./emitters.js";
-import { collectGarbage, type GcOptions, parseDuration } from "./gc.js";
+import type { GcOptions } from "./gc.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import {
   advanceTrustState,
@@ -25,6 +24,7 @@ import {
   signBundle,
   trustAdd,
   trustRemove,
+  trustSetRootId,
   verifyBundleAgainstRoot,
 } from "./keys.js";
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
@@ -58,8 +58,9 @@ Usage:
 	axiom schema <${SCHEMA_KINDS.join("|")}>
   axiom emitters [--json]                  (template emitters available to \`compile\`)
   axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
-  axiom sign <bundle.json> [--key-file <path>] [-o <out.json>]   (private key from --key-file or $${SIGNING_KEY_ENV})
+  axiom sign <bundle.json> [--key-file <path>] [-o <out.json>] [--root-id <id>]   (private key from --key-file or $${SIGNING_KEY_ENV}; --root-id = root-bound envelope)
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
+  axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/signing.md)
   axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level ...]   (PreToolUse hook; fail-closed; exit 0 allow / 2 deny)
     axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
                                            (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
@@ -285,53 +286,17 @@ async function cmdVerifyTree(
     return EXIT_FAIL;
   }
   const bundle = parseBundleFile(raw);
-  const r = await verifyTree(treeRoot, bundle, { pre });
-  const result: Record<string, unknown> = {
-    ok: r.ok,
-    manifestDigest: r.manifestDigest,
-    canonical: structural.canonical,
-    root: r.root,
-    tree: r.tree,
-    paths: r.paths.length,
-    mismatches: r.mismatches,
-  };
-  if (r.preImageMissing === true)
-    result.note =
-      "manifest carries no preImage (compiled without a root); --pre cannot be verified";
-  if (r.ok && attestOut !== undefined) {
-    const source: Record<string, string> = {};
-    const env = process.env;
-    if (env.GITHUB_REPOSITORY) source.repository = env.GITHUB_REPOSITORY;
-    if (env.GITHUB_REF) source.ref = env.GITHUB_REF;
-    if (env.GITHUB_SHA) source.sha = env.GITHUB_SHA;
-    if (env.GITHUB_RUN_ID) source.runId = env.GITHUB_RUN_ID;
-    const statement = buildApplyAttestation({
-      subjectName: bundle.manifest.name,
-      manifestDigestHex: bundle.manifestDigest.slice("sha256:".length),
-      planDigestHex: bundle.manifest.planDigest.slice("sha256:".length),
-      profile: bundle.manifest.profile,
-      tree: r.tree,
-      paths: r.paths,
-      ...(bundle.manifest.preImage === undefined ? {} : { preImage: bundle.manifest.preImage }),
-      axiomVersion: bundle.manifest.toolchain.axiom,
-      ...(Object.keys(source).length === 0 ? {} : { source }),
-    });
-    // JCS so the attestation bytes are deterministic for the same inputs (A2A/in-toto practice).
-    // Two files: the full in-toto Statement for standalone use, and the bare predicate for
-    // `actions/attest` (which builds the Statement itself from `predicate-path` + subject).
-    const statementFile = path.resolve(attestOut);
-    const predicateFile = statementFile.replace(/(\.intoto)?\.json$/i, "") + ".predicate.json";
-    await writeFile(statementFile, `${canonicalize(statement)}\n`, "utf8");
-    await writeFile(predicateFile, `${canonicalize(statement.predicate)}\n`, "utf8");
-    result.attestation = {
-      file: statementFile,
-      predicateFile,
-      predicateType: statement.predicateType,
-      subjects: statement.subject.length,
-    };
-  }
+  const { verifyTreeCli } = await import("./verify-tree-lazy.js");
+  const { ok, result } = await verifyTreeCli(
+    bundle,
+    treeRoot,
+    pre,
+    attestOut,
+    structural.canonical,
+    process.env,
+  );
   out(result);
-  return r.ok ? EXIT_OK : EXIT_FAIL;
+  return ok ? EXIT_OK : EXIT_FAIL;
 }
 
 async function loadProfileFor(rootReal: string, name: string) {
@@ -457,6 +422,8 @@ async function cmdGc(argv: string[]): Promise<number> {
     throw new UsageError("--keep must be all-manifests|journal");
   }
   const gcOpts: GcOptions = { keep, dryRun: values["dry-run"] === true };
+  // CLI-only and rare, like `migrate`: loaded on demand to keep the eager bundle small.
+  const { collectGarbage, parseDuration } = await import("./gc-lazy.js");
   if (values["older-than"] !== undefined) {
     const ms = parseDuration(values["older-than"]);
     if (ms === undefined) throw new UsageError("--older-than must be <n>(ms|s|m|h|d)");
@@ -509,19 +476,21 @@ async function cmdSign(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     "key-file": { type: "string" },
     out: { type: "string", short: "o" },
+    "root-id": { type: "string" },
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("sign: <bundle.json> is required");
   const bundle = parseBundleFile(await readJson(file));
   const src: Parameters<typeof signBundle>[1] = {};
   if (values["key-file"] !== undefined) src.keyFile = values["key-file"];
-  const { bundle: signed, keyid } = await signBundle(bundle, src);
+  const { bundle: signed, keyid } = await signBundle(bundle, src, values["root-id"]);
   const target = values.out ?? file;
   await writeFile(path.resolve(target), `${JSON.stringify(signed, null, 2)}\n`, "utf8");
   out({
     manifestDigest: signed.manifestDigest,
     keyid,
     signatures: signed.signatures?.length ?? 0,
+    ...(values["root-id"] === undefined ? {} : { rootId: values["root-id"], bound: true }),
     out: target,
   });
   return EXIT_OK;
@@ -529,12 +498,32 @@ async function cmdSign(argv: string[]): Promise<number> {
 
 async function cmdTrust(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
-  const { values, positionals } = opts(rest, { root: { type: "string" } });
+  const { values, positionals } = opts(rest, {
+    root: { type: "string" },
+    clear: { type: "boolean" },
+  });
   const rootReal = await realRootArg(values.root);
   switch (sub) {
     case "list": {
       const store = await loadTrustStore(rootReal);
       out(store ?? { version: 1, keys: [] });
+      return EXIT_OK;
+    }
+    case "root-id": {
+      // S-409: `trust root-id <id> --root .` binds the store; `--clear` removes the binding.
+      const id = positionals[0];
+      if (values.clear === true) {
+        const store = await trustSetRootId(rootReal, undefined);
+        out({ rootId: null, keys: store.keys.length });
+        return EXIT_OK;
+      }
+      if (id === undefined) {
+        const store = await loadTrustStore(rootReal);
+        out({ rootId: store?.rootId ?? null });
+        return EXIT_OK;
+      }
+      const store = await trustSetRootId(rootReal, id);
+      out({ rootId: store.rootId, keys: store.keys.length });
       return EXIT_OK;
     }
     case "add": {
@@ -553,7 +542,7 @@ async function cmdTrust(argv: string[]): Promise<number> {
       return EXIT_OK;
     }
     default:
-      throw new UsageError("trust: subcommand must be add|remove|list");
+      throw new UsageError("trust: subcommand must be add|remove|list|root-id");
   }
 }
 

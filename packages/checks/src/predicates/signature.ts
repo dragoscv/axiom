@@ -5,7 +5,14 @@
  *
  * Fail-closed: no root / no trust file / unreadable JSON → provider error, never pass.
  */
-import { sha256Hex, verifyEnvelope } from "@codai/axiom-canon";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE,
+  AXIOM_MANIFEST_PAYLOAD_TYPE,
+  canonicalize,
+  sha256Hex,
+  verifyEnvelope,
+} from "@codai/axiom-canon";
 import {
   type Finding,
   type ManifestSignature,
@@ -21,7 +28,29 @@ import { finding } from "./util.js";
 export const PREDICATE_ID = "manifest.requireSigned" as const;
 export const TRUST_FILE_DEFAULT = ".axiom/trust/keys.json";
 export const TRUST_STATE_FILE = ".axiom/trust/state.json";
+/**
+ * Per-root secret for the state MAC (S-409). 32 random bytes, hex, mode 0600, created by the
+ * first `advanceTrustState`. A `state.json` next to a key must carry a matching `mac`; an
+ * attacker who can edit `state.json` but not read the key cannot lower `lastCounter`.
+ */
+export const TRUST_STATE_KEY_FILE = ".axiom/trust/state.key";
 const TRUST_FILE_MAX = 256 * 1024;
+
+/** HMAC-SHA256(hex) over `JCS(state without mac)`. */
+export function trustStateMac(state: TrustState, keyHex: string): string {
+  const { mac: _mac, ...rest } = state;
+  return createHmac("sha256", Buffer.from(keyHex.trim(), "hex"))
+    .update(canonicalize(rest), "utf8")
+    .digest("hex");
+}
+
+/** Constant-time compare of two hex MACs. */
+export function trustStateMacOk(state: TrustState, keyHex: string): boolean {
+  if (state.mac === undefined) return false;
+  const a = Buffer.from(state.mac, "hex");
+  const b = Buffer.from(trustStateMac(state, keyHex), "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export const SIGNATURE_FINDING_IDS = {
   missing: "signature.missing",
@@ -29,6 +58,8 @@ export const SIGNATURE_FINDING_IDS = {
   bad: "signature.bad",
   notCanonical: "signature.notCanonical",
   rollback: "signature.rollback",
+  /** The trust store declares a `rootId` and this envelope is unbound or bound to another root (S-409). */
+  unbound: "signature.unbound",
 } as const;
 
 export const RequireSignedParams = z
@@ -147,7 +178,52 @@ export async function loadTrustState(
       ),
     };
   }
+  // S-409: when the root holds a state key, the state must be authenticated by it.
+  const k = await readTextFile(ctx, TRUST_STATE_KEY_FILE);
+  if ("error" in k) {
+    return {
+      finding: providerError(
+        "ERR_TRUST_STATE_CORRUPT",
+        `trust state key ${TRUST_STATE_KEY_FILE}: ${k.error}`,
+      ),
+    };
+  }
+  if ("value" in k) {
+    if (!/^[0-9a-f]{64}$/.test(k.value.trim())) {
+      return {
+        finding: providerError(
+          "ERR_TRUST_STATE_CORRUPT",
+          `trust state key ${TRUST_STATE_KEY_FILE} is not 32 hex bytes`,
+        ),
+      };
+    }
+    if (!trustStateMacOk(parsed.data, k.value)) {
+      return {
+        finding: providerError(
+          "ERR_TRUST_STATE_CORRUPT",
+          `trust state ${TRUST_STATE_FILE} failed its MAC (edited by hand, or state.key rotated)`,
+          { reason: parsed.data.mac === undefined ? "NO_MAC" : "BAD_MAC" },
+        ),
+      };
+    }
+  }
   return { state: parsed.data };
+}
+
+async function readTextFile(
+  ctx: FactContext,
+  rel: string,
+): Promise<{ value: string } | { missing: true } | { error: string }> {
+  const repo = ctx.facts.repo;
+  if (repo === undefined) return { error: "no root" };
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await repo.read(rel, 4096);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  if (bytes === undefined) return { missing: true };
+  return { value: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
 }
 
 export interface SignatureVerdict {
@@ -173,17 +249,72 @@ export function verifyBundleSignatures(
   );
   for (const [i, env] of envs.entries()) {
     const payload = Buffer.from(env.payload, "base64");
-    const payloadDigest = `sha256:${sha256Hex(payload)}`;
-    if (payloadDigest !== bundle.manifestDigest) {
-      findings.push(
-        fail("signature.bad", `signatures[${i}] signs a different manifest`, {
-          reason: "PAYLOAD_MISMATCH",
-          payloadDigest,
-        }),
-      );
-      continue;
+    if (env.payloadType === AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE) {
+      // Bound payload: `JCS({ manifest, rootId })`. The manifest inside must be THIS
+      // manifest (its JCS digest is the manifestDigest) and the rootId must be the store's.
+      let parsed: { manifest?: unknown; rootId?: unknown } | undefined;
+      try {
+        parsed = JSON.parse(payload.toString("utf8")) as { manifest?: unknown; rootId?: unknown };
+      } catch {
+        parsed = undefined;
+      }
+      const innerDigest =
+        parsed?.manifest === undefined
+          ? undefined
+          : `sha256:${sha256Hex(Buffer.from(canonicalize(parsed.manifest), "utf8"))}`;
+      if (innerDigest !== bundle.manifestDigest) {
+        findings.push(
+          fail("signature.bad", `signatures[${i}] signs a different manifest`, {
+            reason: "PAYLOAD_MISMATCH",
+            ...(innerDigest === undefined ? {} : { payloadDigest: innerDigest }),
+          }),
+        );
+        continue;
+      }
+      if (store.rootId !== undefined && parsed?.rootId !== store.rootId) {
+        findings.push(
+          fail("signature.unbound", `signatures[${i}] is bound to another root`, {
+            reason: "ROOT_MISMATCH",
+            index: i,
+            expected: store.rootId,
+            got: typeof parsed?.rootId === "string" ? parsed.rootId : null,
+          }),
+        );
+        continue;
+      }
+    } else {
+      const payloadDigest = `sha256:${sha256Hex(payload)}`;
+      if (payloadDigest !== bundle.manifestDigest) {
+        findings.push(
+          fail("signature.bad", `signatures[${i}] signs a different manifest`, {
+            reason: "PAYLOAD_MISMATCH",
+            payloadDigest,
+          }),
+        );
+        continue;
+      }
+      if (store.rootId !== undefined) {
+        findings.push(
+          fail(
+            "signature.unbound",
+            `signatures[${i}] is not bound to a root; this trust store requires rootId ${store.rootId}`,
+            {
+              reason: "UNBOUND",
+              index: i,
+              expected: store.rootId,
+            },
+          ),
+        );
+        continue;
+      }
     }
-    const r = verifyEnvelope(env, eligible);
+    const r = verifyEnvelope(
+      env,
+      eligible,
+      env.payloadType === AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE
+        ? AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE
+        : AXIOM_MANIFEST_PAYLOAD_TYPE,
+    );
     if (r.ok) {
       for (const k of r.keyids) keyids.add(k);
       continue;

@@ -9,6 +9,7 @@ export {
   verifyCanonical,
 } from "./digest.js";
 export type {
+  BoundManifestPayload,
   DsseEnvelope,
   DsseSignature,
   EnvelopeFailure,
@@ -17,7 +18,9 @@ export type {
   VerifyEnvelopeResult,
 } from "./dsse.js";
 export {
+  AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE,
   AXIOM_MANIFEST_PAYLOAD_TYPE,
+  boundPayload,
   ED25519_RAW_PUBLIC_BYTES,
   ED25519_SEED_BYTES,
   generateKeyPair,
@@ -26,6 +29,7 @@ export {
   publicKeyBase64,
   publicKeyFrom,
   signEnvelope,
+  signEnvelopeBound,
   verifyEnvelope,
 } from "./dsse.js";
 export { CanonicalizeError, canonicalize } from "./jcs.js";

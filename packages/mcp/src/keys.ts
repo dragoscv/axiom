@@ -4,6 +4,7 @@
  * Private keys are read ONLY from `AXIOM_SIGNING_KEY` (base64 PKCS#8 or raw seed) or
  * `--key-file <path>`; they are never written to stdout and never stored under a root.
  */
+import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -13,12 +14,21 @@ import {
   publicKeyBase64,
   publicKeyFrom,
   signEnvelope,
+  signEnvelopeBound,
 } from "@codai/axiom-canon";
-import { TRUST_FILE_DEFAULT, TRUST_STATE_FILE, verifyBundleSignatures } from "@codai/axiom-checks";
+import {
+  TRUST_FILE_DEFAULT,
+  TRUST_STATE_FILE,
+  TRUST_STATE_KEY_FILE,
+  trustStateMac,
+  trustStateMacOk,
+  verifyBundleSignatures,
+} from "@codai/axiom-checks";
 import {
   AxiomError,
   type ManifestBundle,
   type ManifestSignature,
+  RootIdSchema,
   type TrustedKey,
   TrustedKeySchema,
   type TrustState,
@@ -34,6 +44,9 @@ export function trustFilePath(root: string, rel: string = TRUST_FILE_DEFAULT): s
 }
 export function trustStatePath(root: string): string {
   return path.join(root, ...TRUST_STATE_FILE.split("/"));
+}
+export function trustStateKeyPath(root: string): string {
+  return path.join(root, ...TRUST_STATE_KEY_FILE.split("/"));
 }
 
 async function writeJsonAtomic(file: string, value: unknown, mode?: number): Promise<void> {
@@ -127,14 +140,31 @@ export async function loadSigningKey(src: SigningKeySource) {
 
 // --- sign / verify ------------------------------------------------------------------
 
-/** Append a detached signature over `bundle.manifest`. Idempotent per key (same key → replaced). */
+/**
+ * Append a detached signature over `bundle.manifest`. Idempotent per key (same key → replaced).
+ * With `rootId` (S-409) the envelope is root-bound: payload `JCS({ manifest, rootId })` under
+ * `application/vnd.axiom.manifest-bound+json`, valid only for a trust store declaring that id.
+ */
 export async function signBundle(
   bundle: ManifestBundle,
   src: SigningKeySource,
+  rootId?: string,
 ): Promise<{ bundle: ManifestBundle; keyid: string }> {
   const key = await loadSigningKey(src);
   const keyid = keyidFor(key);
-  const env = signEnvelope(bundle.manifest, key, keyid) as ManifestSignature;
+  if (rootId !== undefined) {
+    const p = RootIdSchema.safeParse(rootId);
+    if (!p.success) {
+      throw new AxiomError("ERR_INVALID_PROFILE", "invalid rootId", {
+        details: { issues: p.error.issues.map((i) => i.message) },
+      });
+    }
+  }
+  const env = (
+    rootId === undefined
+      ? signEnvelope(bundle.manifest, key, keyid)
+      : signEnvelopeBound(bundle.manifest, rootId, key, keyid)
+  ) as ManifestSignature;
   const others = (bundle.signatures ?? []).filter(
     (s) => !s.signatures.some((x) => x.keyid === keyid),
   );
@@ -252,7 +282,61 @@ export async function trustRemove(
   return next;
 }
 
+/**
+ * Set (or clear with `undefined`) the trust store's `rootId` (S-409). Creates the store when
+ * missing. Once set, only root-bound signatures carrying this id verify.
+ */
+export async function trustSetRootId(
+  root: string,
+  rootId: string | undefined,
+  rel: string = TRUST_FILE_DEFAULT,
+): Promise<TrustStore> {
+  const store = (await loadTrustStore(root, rel)) ?? { version: 1 as const, keys: [] };
+  const next: TrustStore = { ...store };
+  if (rootId === undefined) delete next.rootId;
+  else {
+    const p = RootIdSchema.safeParse(rootId);
+    if (!p.success) {
+      throw new AxiomError("ERR_INVALID_PROFILE", "invalid rootId", {
+        details: { issues: p.error.issues.map((i) => i.message) },
+      });
+    }
+    next.rootId = p.data;
+  }
+  await writeJsonAtomic(trustFilePath(root, rel), next);
+  return next;
+}
+
 // --- anti-rollback state ------------------------------------------------------------
+
+async function loadStateKey(root: string): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = await readFile(trustStateKeyPath(root), "utf8");
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return undefined;
+    throw err;
+  }
+  const hex = text.trim();
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new AxiomError("ERR_TRUST_STATE_CORRUPT", `${TRUST_STATE_KEY_FILE} is not 32 hex bytes`);
+  }
+  return hex;
+}
+
+/** Create `.axiom/trust/state.key` (32 random bytes, hex, 0600) when absent; return the key. */
+async function ensureStateKey(root: string): Promise<string> {
+  const existing = await loadStateKey(root);
+  if (existing !== undefined) return existing;
+  const hex = randomBytes(32).toString("hex");
+  const file = trustStateKeyPath(root);
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  await writeFile(tmp, `${hex}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(tmp, 0o600).catch(() => undefined);
+  await rename(tmp, file);
+  return hex;
+}
 
 export async function loadTrustState(root: string): Promise<TrustState | undefined> {
   let raw: unknown;
@@ -272,6 +356,15 @@ export async function loadTrustState(root: string): Promise<TrustState | undefin
     throw new AxiomError("ERR_TRUST_STATE_CORRUPT", `${TRUST_STATE_FILE} is invalid`, {
       details: { issues: parsed.error.issues.slice(0, 5).map((i) => i.message) },
     });
+  // S-409: a state file next to a state key must be authenticated by it.
+  const keyHex = await loadStateKey(root);
+  if (keyHex !== undefined && !trustStateMacOk(parsed.data, keyHex)) {
+    throw new AxiomError(
+      "ERR_TRUST_STATE_CORRUPT",
+      `${TRUST_STATE_FILE} failed its MAC (edited by hand, or ${TRUST_STATE_KEY_FILE} rotated)`,
+      { details: { reason: parsed.data.mac === undefined ? "NO_MAC" : "BAD_MAC" } },
+    );
+  }
   return parsed.data;
 }
 
@@ -288,16 +381,18 @@ export async function advanceTrustState(
   if (counter === undefined) return undefined;
   const cur = await loadTrustState(root);
   if (cur !== undefined && cur.lastCounter >= counter) return cur;
-  const next: TrustState = {
+  const keyHex = await ensureStateKey(root);
+  const unsigned: TrustState = {
     version: 1,
     lastCounter: counter,
     manifestDigest: bundle.manifestDigest,
   };
+  const next: TrustState = { ...unsigned, mac: trustStateMac(unsigned, keyHex) };
   await writeJsonAtomic(trustStatePath(root), next);
   return next;
 }
 
-/** Test helper / `trust reset`: remove the state file. */
+/** Test helper / `trust reset`: remove the state file (the state key is kept). */
 export async function resetTrustState(root: string): Promise<void> {
   await rm(trustStatePath(root), { force: true });
 }

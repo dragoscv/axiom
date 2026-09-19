@@ -1,12 +1,24 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalDigestRef, generateKeyPair, sha256Hex, signEnvelope } from "@codai/axiom-canon";
+import {
+  canonicalDigestRef,
+  generateKeyPair,
+  sha256Hex,
+  signEnvelope,
+  signEnvelopeBound,
+} from "@codai/axiom-canon";
 import type { ManifestBundle, TrustStore } from "@codai/axiom-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runChecks } from "../run.js";
 import { makeBundle, profileWith } from "../test-helpers.test-helpers.js";
-import { RequireSignedParams, TRUST_STATE_FILE, verifyBundleSignatures } from "./signature.js";
+import {
+  RequireSignedParams,
+  TRUST_STATE_FILE,
+  TRUST_STATE_KEY_FILE,
+  trustStateMac,
+  verifyBundleSignatures,
+} from "./signature.js";
 
 const signer = generateKeyPair();
 const other = generateKeyPair();
@@ -29,6 +41,8 @@ async function writeTrust(s: unknown, state?: unknown, file = ".axiom/trust/keys
   const stateFile = join(root, ...TRUST_STATE_FILE.split("/"));
   if (state === undefined) await rm(stateFile, { force: true });
   else await writeFile(stateFile, JSON.stringify(state), "utf8");
+  // Tests in this file that do not exercise the MAC run without a state key.
+  await rm(join(root, ...TRUST_STATE_KEY_FILE.split("/")), { force: true });
 }
 
 function bundleWith(counter?: number, keys = [signer]): ManifestBundle {
@@ -262,5 +276,116 @@ describe("manifest.requireSigned — antiRollback", () => {
   it("antiRollback: false ignores the state entirely", async () => {
     await writeTrust(store, { version: 1, lastCounter: 100 });
     expect((await run(bundleWith(1), {})).verdict).toBe("pass");
+  });
+});
+
+describe("S-409 — root-bound signatures", () => {
+  const ROOT_A = "github:dragoscv/brivio";
+  const ROOT_B = "github:dragoscv/metu";
+  function boundBundle(rootId: string, counter?: number): ManifestBundle {
+    const b = bundleWith(counter, []);
+    return { ...b, signatures: [signEnvelopeBound(b.manifest, rootId, signer.privateKey)] };
+  }
+
+  it("store without rootId accepts both unbound and bound envelopes (any rootId)", async () => {
+    await writeTrust(store);
+    expect((await run(bundleWith(), {})).verdict).toBe("pass");
+    expect((await run(boundBundle(ROOT_A), {})).verdict).toBe("pass");
+    expect((await run(boundBundle(ROOT_B), {})).verdict).toBe("pass");
+  });
+
+  it("store WITH rootId: only envelopes bound to that id verify; unbound → signature.unbound (UNBOUND); other root → signature.unbound (ROOT_MISMATCH)", async () => {
+    await writeTrust({ ...store, rootId: ROOT_A });
+    expect((await run(boundBundle(ROOT_A), {})).verdict).toBe("pass");
+    const unbound = await run(bundleWith(), {});
+    expect(unbound.verdict).toBe("fail");
+    expect(unbound.ids).toContain("signature.unbound");
+    expect(unbound.findings.find((f) => f.id === "signature.unbound")?.facts).toMatchObject({
+      reason: "UNBOUND",
+      expected: ROOT_A,
+    });
+    const replayed = await run(boundBundle(ROOT_B), {});
+    expect(replayed.verdict).toBe("fail");
+    expect(replayed.findings.find((f) => f.id === "signature.unbound")?.facts).toMatchObject({
+      reason: "ROOT_MISMATCH",
+      expected: ROOT_A,
+      got: ROOT_B,
+    });
+  });
+
+  it("a bound envelope over a different manifest, or with its rootId edited after signing, is rejected", async () => {
+    await writeTrust({ ...store, rootId: ROOT_A });
+    const good = boundBundle(ROOT_A);
+    const otherManifest = bundleWith(undefined, []);
+    otherManifest.manifest.name = "other";
+    otherManifest.manifestDigest = canonicalDigestRef(otherManifest.manifest);
+    // transplant A's bound envelope onto another manifest
+    const transplanted: ManifestBundle = { ...otherManifest, signatures: good.signatures };
+    expect((await run(transplanted, {})).ids).toEqual(["signature.bad"]);
+    // edit rootId inside the payload (re-encode) — signature no longer matches
+    const env = good.signatures?.[0];
+    if (env === undefined) throw new Error("no env");
+    const payload = JSON.parse(Buffer.from(env.payload, "base64").toString("utf8")) as {
+      manifest: unknown;
+      rootId: string;
+    };
+    payload.rootId = ROOT_A; // same id, but re-serialised with different key order
+    const reordered = Buffer.from(
+      JSON.stringify({ rootId: payload.rootId, manifest: payload.manifest }),
+    ).toString("base64");
+    const tampered: ManifestBundle = { ...good, signatures: [{ ...env, payload: reordered }] };
+    const r = await run(tampered, {});
+    expect(r.verdict).toBe("fail");
+    expect(r.ids.some((id) => id === "signature.notCanonical" || id === "signature.bad")).toBe(
+      true,
+    );
+  });
+
+  it("verifyBundleSignatures (pure) reports the bound keyid", () => {
+    const b = boundBundle(ROOT_A, 5);
+    const v = verifyBundleSignatures(b, { ...store, rootId: ROOT_A }, 5);
+    expect(v.findings).toEqual([]);
+    expect(v.keyids).toEqual([signer.keyid]);
+  });
+});
+
+describe("S-409 — authenticated trust state (state.key MAC)", () => {
+  const KEY = "ab".repeat(32);
+  async function writeState(state: Record<string, unknown>, withKey = KEY) {
+    await writeTrust(store);
+    await writeFile(join(root, ...TRUST_STATE_KEY_FILE.split("/")), `${withKey}\n`, "utf8");
+    await writeFile(join(root, ...TRUST_STATE_FILE.split("/")), JSON.stringify(state), "utf8");
+  }
+
+  it("state with a valid MAC is honoured (rollback still detected)", async () => {
+    const unsigned = { version: 1 as const, lastCounter: 7 };
+    await writeState({ ...unsigned, mac: trustStateMac(unsigned, KEY) });
+    expect((await run(bundleWith(7), { antiRollback: true })).ids).toEqual(["signature.rollback"]);
+    expect((await run(bundleWith(8), { antiRollback: true })).verdict).toBe("pass");
+  });
+
+  it("hand-lowered lastCounter (MAC no longer matches) → error ERR_TRUST_STATE_CORRUPT, never pass", async () => {
+    const unsigned = { version: 1 as const, lastCounter: 7 };
+    await writeState({ version: 1, lastCounter: 1, mac: trustStateMac(unsigned, KEY) });
+    const r = await run(bundleWith(2), { antiRollback: true });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts).toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+      reason: "BAD_MAC",
+    });
+  });
+
+  it("state without mac while a key exists → error (NO_MAC); malformed key → error", async () => {
+    await writeState({ version: 1, lastCounter: 7 });
+    const noMac = await run(bundleWith(8), { antiRollback: true });
+    expect(noMac.verdict).toBe("error");
+    expect(noMac.findings[0]?.facts.reason).toBe("NO_MAC");
+    await writeState({ version: 1, lastCounter: 7 }, "not-hex");
+    expect((await run(bundleWith(8), { antiRollback: true })).verdict).toBe("error");
+  });
+
+  it("no state key on disk → legacy unauthenticated state still works", async () => {
+    await writeTrust(store, { version: 1, lastCounter: 7 });
+    expect((await run(bundleWith(8), { antiRollback: true })).verdict).toBe("pass");
   });
 });

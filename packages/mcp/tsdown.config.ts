@@ -52,7 +52,17 @@ export default defineConfig([
       // Same for `./gate-lazy.js`: the hook must not pay for the SDK/server code.
       // And `./http-lazy.js`: the Streamable HTTP transport is opt-in (`--http`).
       // And `./migrate-lazy.js`: `axiom migrate v1` is CLI-only and rare.
-      neverBundle: [/^node:/, /axm-lazy/, /gate-lazy/, /http-lazy/, /migrate-lazy/],
+      // And `./verify-tree-lazy.js`: `axiom verify --tree` (+ attestation) is CI-only.
+      // And `./gc-lazy.js`: `axiom gc` is CLI-only and rare.
+      neverBundle: [
+        /^node:/,
+        /axm-lazy/,
+        /gate-lazy/,
+        /http-lazy/,
+        /migrate-lazy/,
+        /verify-tree-lazy/,
+        /gc-lazy/,
+      ],
     },
   },
   {
@@ -98,6 +108,30 @@ export default defineConfig([
     ...shared,
     // Standalone `axiom migrate v1` chunk: v1 manifest → Plan (schema + zod + plan CAS writer).
     entry: { "migrate-lazy": "src/migrate-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone `axiom verify --tree` chunk (S-403): tree digests + in-toto apply attestation.
+    entry: { "verify-tree-lazy": "src/verify-tree-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone `axiom gc` chunk (CAS garbage collection; CLI only).
+    entry: { "gc-lazy": "src/gc-lazy.ts" },
     dts: false,
     clean: false,
     plugins: [stripRegionMarkers],

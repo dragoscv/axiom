@@ -20,12 +20,12 @@ What signing defends against:
 
 What it deliberately does **not** defend against:
 
-- **Cross-root replay.** The root path is *not* bound into the payload (a manifest is
-  root-relative by design, so the same signed bundle is meant to be applicable to several
-  clones). A bundle signed for repo A is therefore a valid signed bundle for repo B if B
-  trusts the same key. Per-root trust stores and per-root counters are the mitigation; if
-  you need hard binding, put the target identity in `plan.metadata` and check it with
-  `expr.cel`.
+- **Cross-root replay, unless you bind.** By default the root is *not* in the payload (a
+  manifest is root-relative by design, so one signed bundle may legitimately be applied to
+  several clones). A bundle signed for repo A is then a valid signed bundle for repo B if B
+  trusts the same key. **S-409 closes this when you opt in**: set a `rootId` on the trust
+  store (`axiom trust root-id github:org/repo --root .`) and sign with `--root-id`; the
+  store then accepts only envelopes bound to that id (see *Root-bound signatures*).
 - **Key compromise before revocation.** Whatever the key signs until you remove it is
   trusted.
 - **Availability.** A missing or corrupt trust store fails **closed**
@@ -100,6 +100,72 @@ The in-toto attestation (`bundle.attestation` / `bundle.envelope`,
   `axiom keygen` writes the private key to a file with mode `0600` and prints only the
   public entry and the file path.
 
+## Root-bound signatures (S-409)
+
+A second `payloadType`, `application/vnd.axiom.manifest-bound+json`, signs
+`JCS({ manifest, rootId })` instead of `JCS(manifest)`. `rootId` is an operator-chosen
+identity for the target (`github:dragoscv/brivio`, a UUID, …; `[A-Za-z0-9][A-Za-z0-9._:/@-]*`,
+≤ 200 chars). `manifestDigest` is unchanged — the binding lives in the envelope only.
+
+| trust store | unbound envelope | bound to `rootId` X | bound to another root |
+|---|---|---|---|
+| no `rootId` | accepted | accepted | accepted |
+| `rootId: X` | `signature.unbound` (`UNBOUND`) | accepted | `signature.unbound` (`ROOT_MISMATCH`) |
+
+Verification of a bound envelope re-derives the inner manifest's JCS digest and requires it to
+equal `manifestDigest` (transplanting a bound envelope onto another manifest is
+`signature.bad`), then compares `rootId` to the store's before checking the Ed25519 signature.
+
+```sh
+axiom trust root-id github:dragoscv/brivio --root /repo     # bind the store (idempotent)
+axiom trust root-id --root /repo                            # show
+axiom sign bundle.json --key-file k.key --root-id github:dragoscv/brivio
+axiom trust root-id --clear --root /repo                    # back to "any"
+```
+
+When the same manifest must be applied to several roots, sign it once per root (the
+envelopes coexist in `signatures[]`; each store verifies only its own).
+
+## Authenticated trust state (S-409)
+
+`advanceTrustState` (after every `status: "applied"`) creates `.axiom/trust/state.key` (32
+random bytes, hex, mode `0600`) on first use and writes `state.json` with
+`mac = HMAC-SHA256(state.key, JCS(state without mac))`. Whenever a `state.key` exists, both
+the predicate and the CLI/MCP refuse a `state.json` whose MAC is missing or wrong
+(`ERR_TRUST_STATE_CORRUPT`, `reason: NO_MAC | BAD_MAC`) — an attacker who can edit
+`state.json` but not read `state.key` can no longer lower `lastCounter` to replay an old
+bundle. Roots without a `state.key` (created before 2.2) keep working unauthenticated until
+their next apply creates one. Protect `state.key` like the trust store itself; never commit
+it. `axiom trust reset` style removal of `state.json` keeps the key.
+
+## CI key ceremony
+
+The private key must never exist on a developer machine that also runs the agent.
+
+1. On a clean runner (or an ephemeral container): `axiom keygen --out ./k --name ci-<repo>`.
+   Copy the **file contents** into a GitHub **repository secret** `AXIOM_SIGNING_KEY`
+   (Settings → Secrets and variables → Actions), then delete `./k`. The public entry
+   (`publicEntry` on stdout) is the only thing that leaves the runner.
+2. Commit the public entry: `axiom trust add ci-pub.json --root .` and, if you want binding,
+   `axiom trust root-id github:<owner>/<repo> --root .`. Commit `.axiom/trust/keys.json`; never
+   commit `state.json`, `state.key` or any `*.key`.
+3. In the signing job:
+
+   ```yaml
+   - run: axiom sign bundle.json --root-id github:${{ github.repository }}
+     env:
+       AXIOM_SIGNING_KEY: ${{ secrets.AXIOM_SIGNING_KEY }}
+   ```
+
+   `sign` reads the key from the env var only in that step; nothing is written to disk and
+   the CLI never prints key material. Restrict the secret to a protected environment
+   (`environment: release`) so pull requests from forks cannot use it.
+4. Rotation: `keygen` a new key, `trust add` it with `notBefore: <current counter + 1>`,
+   update the secret, `trust remove` the old keyid. Whatever the old key signed before
+   removal stays applied; `notBefore` stops the new key from being used to replay old
+   counters.
+5. Compromise: `trust remove <keyid>` first (blocks further applies), then rotate.
+
 ## Anti-rollback counter
 
 `Plan.counter` (int ≥ 0, optional) is copied verbatim into `ManifestBody.counter`, so it is
@@ -143,6 +209,7 @@ manifest hash). AXIOM keeps only the monotonic rule and makes it strict:
 | `signature.bad` | signature does not verify under the hinted key, or the payload does not hash to `manifestDigest` (`facts.reason: PAYLOAD_MISMATCH`) |
 | `signature.notCanonical` | payload is not byte-identical to its own JCS form |
 | `signature.rollback` | `antiRollback` and: no `counter` (`NO_COUNTER`), `counter ≤ lastCounter` (`ROLLBACK`), or `counter < minCounter` (`BELOW_MIN`) |
+| `signature.unbound` | the store has a `rootId` and the envelope is unbound (`UNBOUND`) or bound to another root (`ROOT_MISMATCH`) |
 
 Provider errors (`verdict: error`, never pass): no root, trust file missing
 (`ERR_NOT_FOUND`), unreadable/invalid trust file (`ERR_PROVIDER_FAILED`), corrupt
@@ -191,8 +258,9 @@ Over MCP, `axiom_manifest_verify { bundle, root }` reports the same `signatures`
 ## Limitations
 
 - Ed25519 only; no RSA/ECDSA, no certificates, no Sigstore/Fulcio, no timestamps.
-- Root identity is not bound into the payload (see threat model: cross-root replay).
-- `state.json` is per root and not itself signed; an attacker with write access to
-  `.axiom/trust/` can reset it — the trust directory needs the same protection as the
-  repository's CI configuration.
-- No key rotation ceremony beyond add/remove + `notBefore`.
+- Root binding is opt-in (`rootId` on the store); an unbound store accepts any root.
+- `state.json` is authenticated by a per-root `state.key`, not signed by the trust keys: an
+  attacker who can read **and** write `.axiom/trust/` can still delete both files and start
+  the counter over — `minCounter` on the store bounds that. The trust directory needs the same
+  protection as the repository's CI configuration.
+- Key rotation is add/remove + `notBefore` (ceremony above); no automatic expiry.

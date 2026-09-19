@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { canonicalDigestRef, generateKeyPair, keyidFor, signEnvelope } from "@codai/axiom-canon";
+import { trustStateMac } from "@codai/axiom-checks";
 import { compilePlan } from "@codai/axiom-plan";
 import type { ApplyResult, ManifestBundle, TrustState } from "@codai/axiom-schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,10 +17,13 @@ import {
   loadTrustStore,
   parsePublicEntry,
   profileWantsAntiRollback,
+  resetTrustState,
   SIGNING_KEY_ENV,
   signBundle,
   trustAdd,
   trustRemove,
+  trustSetRootId,
+  trustStateKeyPath,
   trustStatePath,
   verifyBundleAgainstRoot,
 } from "./keys.js";
@@ -203,6 +207,86 @@ describe("keys.ts (unit)", () => {
     const onDisk = JSON.parse(await readFile(trustStatePath(repo.root), "utf8")) as TrustState;
     expect(onDisk.lastCounter).toBe(9);
     expect(onDisk.manifestDigest).toMatch(/^sha256:/);
+  });
+
+  it("S-409: advanceTrustState creates state.key (0600) and writes a MAC; a hand-lowered state is ERR_TRUST_STATE_CORRUPT; the key survives reset", async () => {
+    const s5 = await advanceTrustState(repo.root, await compiled(5));
+    expect(s5?.mac).toMatch(/^[0-9a-f]{64}$/);
+    const keyFile = trustStateKeyPath(repo.root);
+    const keyHex = (await readFile(keyFile, "utf8")).trim();
+    expect(keyHex).toMatch(/^[0-9a-f]{64}$/);
+    if (process.platform !== "win32") expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
+    const onDisk = JSON.parse(await readFile(trustStatePath(repo.root), "utf8")) as TrustState;
+    expect(onDisk.mac).toBe(
+      trustStateMac({ version: 1, lastCounter: 5, manifestDigest: onDisk.manifestDigest }, keyHex),
+    );
+    expect(await loadTrustState(repo.root)).toMatchObject({ lastCounter: 5 });
+    // second advance reuses the same key
+    await advanceTrustState(repo.root, await compiled(6));
+    expect((await readFile(keyFile, "utf8")).trim()).toBe(keyHex);
+    // attacker lowers lastCounter without the key
+    await writeFile(
+      trustStatePath(repo.root),
+      JSON.stringify({ ...onDisk, lastCounter: 1 }),
+      "utf8",
+    );
+    await expect(loadTrustState(repo.root)).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    await expect(advanceTrustState(repo.root, await compiled(2))).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    // ...or strips the mac
+    const { mac: _m, ...noMac } = onDisk;
+    await writeFile(trustStatePath(repo.root), JSON.stringify(noMac), "utf8");
+    await expect(loadTrustState(repo.root)).rejects.toMatchObject({
+      code: "ERR_TRUST_STATE_CORRUPT",
+    });
+    // reset keeps the key; the next advance is MAC'd with it again
+    await resetTrustState(repo.root);
+    expect(existsSync(keyFile)).toBe(true);
+    const s9 = await advanceTrustState(repo.root, await compiled(9));
+    expect(s9?.mac).toBe(
+      trustStateMac({ version: 1, lastCounter: 9, manifestDigest: s9?.manifestDigest }, keyHex),
+    );
+  });
+
+  it("S-409: signBundle --root-id produces a bound envelope; verifyBundleAgainstRoot enforces the store's rootId; trustSetRootId validates and clears", async () => {
+    const kp = generateKeyPair();
+    const src = { keyFile: join(repo.root, "k.key") };
+    await writeFile(src.keyFile, kp.privateKeyBase64, "utf8");
+    await trustAdd(repo.root, {
+      keyid: kp.keyid,
+      alg: "ed25519",
+      publicKey: kp.publicKeyBase64,
+    });
+    const b = await compiled(1);
+    const bound = (await signBundle(b, src, "github:dragoscv/axiom")).bundle;
+    expect(bound.signatures?.[0]?.payloadType).toBe("application/vnd.axiom.manifest-bound+json");
+    expect(bound.manifestDigest).toBe(b.manifestDigest);
+    const unbound = (await signBundle(b, src)).bundle;
+    // store without rootId: both ok
+    expect((await verifyBundleAgainstRoot(repo.root, bound))?.ok).toBe(true);
+    expect((await verifyBundleAgainstRoot(repo.root, unbound))?.ok).toBe(true);
+    // bind the store
+    const store = await trustSetRootId(repo.root, "github:dragoscv/axiom");
+    expect(store.rootId).toBe("github:dragoscv/axiom");
+    expect((await verifyBundleAgainstRoot(repo.root, bound))?.ok).toBe(true);
+    const rej = await verifyBundleAgainstRoot(repo.root, unbound);
+    expect(rej?.ok).toBe(false);
+    expect(rej?.code).toBe("ERR_SIGNATURE_INVALID");
+    expect(rej?.findings.map((f) => f.id)).toContain("signature.unbound");
+    const otherRoot = (await signBundle(b, src, "github:someone/else")).bundle;
+    expect((await verifyBundleAgainstRoot(repo.root, otherRoot))?.ok).toBe(false);
+    // invalid ids are refused, clear removes the binding
+    await expect(signBundle(b, src, "bad id with spaces")).rejects.toMatchObject({
+      code: "ERR_INVALID_PROFILE",
+    });
+    await expect(trustSetRootId(repo.root, "")).rejects.toMatchObject({
+      code: "ERR_INVALID_PROFILE",
+    });
+    expect((await trustSetRootId(repo.root, undefined)).rootId).toBeUndefined();
+    expect((await verifyBundleAgainstRoot(repo.root, unbound))?.ok).toBe(true);
   });
 
   it("profileWantsAntiRollback reads the predicate params", () => {
@@ -425,6 +509,38 @@ describe.skipIf(!hasDist)("cli: keygen → sign → trust add → verify --root"
     expect(JSON.parse(v3.stdout).signatures.findings.map((f: { id: string }) => f.id)).toEqual([
       "signature.unknownKey",
     ]);
+
+    // S-409: bind the store to a rootId; the unbound envelope is now refused, a --root-id one passes
+    await writeFile(bundleFile, JSON.stringify(bundle));
+    const rid = await run(["trust", "root-id", "github:dragoscv/axiom", "--root", repo.root]);
+    expect(rid.code, rid.stderr).toBe(0);
+    expect(JSON.parse(rid.stdout).rootId).toBe("github:dragoscv/axiom");
+    expect(JSON.parse((await run(["trust", "root-id", "--root", repo.root])).stdout).rootId).toBe(
+      "github:dragoscv/axiom",
+    );
+    const vUnbound = await run(["verify", bundleFile, "--root", repo.root]);
+    expect(vUnbound.code).toBe(1);
+    expect(
+      JSON.parse(vUnbound.stdout).signatures.findings.map((f: { id: string }) => f.id),
+    ).toEqual(["signature.unbound"]);
+    const sgBound = await run([
+      "sign",
+      bundleFile,
+      "--key-file",
+      kgOut.privateKeyFile,
+      "--root-id",
+      "github:dragoscv/axiom",
+    ]);
+    expect(sgBound.code, sgBound.stderr).toBe(0);
+    expect(JSON.parse(sgBound.stdout)).toMatchObject({
+      bound: true,
+      rootId: "github:dragoscv/axiom",
+    });
+    const vBound = await run(["verify", bundleFile, "--root", repo.root]);
+    expect(vBound.code, vBound.stdout).toBe(0);
+    expect(JSON.parse(vBound.stdout).signatures.keyids).toEqual([kgOut.publicEntry.keyid]);
+    const cleared = await run(["trust", "root-id", "--clear", "--root", repo.root]);
+    expect(JSON.parse(cleared.stdout).rootId).toBeNull();
 
     const tr = await run(["trust", "remove", kgOut.publicEntry.keyid, "--root", repo.root]);
     expect(tr.code).toBe(0);

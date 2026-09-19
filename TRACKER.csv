@@ -61,7 +61,7 @@ S-405,story,4,MCP SDK v2 behind adapter.ts; 2026 wire default,todo,agent,D-19,co
 S-406,story,4,tasks extension: long guard.external + chunked plan build,todo,agent,S-405,brivio full guard suite (75) runs through AXIOM; sealed digest == one-shot digest,
 S-407,story,4,Idempotency + error-code hygiene (drifted create; 7 untested codes; split overloaded codes),done,agent,,every ERROR_CODE raised and asserted; corrupt-journal recovery test,2026-09-20 55 codes all raised+asserted (guard enforces); vitest 1081; ERR_FACT_DISABLED + ERR_TRUST_STATE_CORRUPT added
 S-408,story,4,Predicate quality: noSecrets PAN/UUID; requireCompanion mustChange; route-group escape; guard evidence,done,agent,,metu zero-UUID fixture passes; mustChange fails on existing-only companion,2026-09-20 Luhn + UUID scrub; property tests; vitest 1102
-S-409,story,4,Signing hardening: root-bound payload; signed state.json; CI key ceremony,todo,agent,,cross-root replay test fails closed,
+S-409,story,4,Signing hardening: root-bound payload; signed state.json; CI key ceremony,done,agent,,cross-root replay test fails closed,2026-09-20 signature.unbound (UNBOUND/ROOT_MISMATCH) + state.key HMAC; eager bundle 947.1/950 KB after gc+verify-tree lazy chunks
 S-410,story,4,Doc/code drift sweep + check-stale-markers guard,done,agent,,guard green; LSP hover for template/pr correct,2026-09-20 17/17 guards; 251 files scanned; 5 v1 docs archived
 S-411,story,4,expr.cedar fact provider (cedar-wasm),todo,agent,S-405,vector suite like cel-vectors; offline; ACS mapping doc,
 S-412,story,4,VS Code extension on Marketplace,todo,owner,,ext install codai.axiom-axm works,needs publisher account (owner)

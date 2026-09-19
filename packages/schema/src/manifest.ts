@@ -167,14 +167,32 @@ export const DsseEnvelopeSchema = z
 
 /** DSSE payloadType of a signed `ManifestBody` (D-16). */
 export const AXIOM_MANIFEST_PAYLOAD_TYPE = "application/vnd.axiom.manifest+json" as const;
+/**
+ * DSSE payloadType of a **root-bound** signature (S-409): the payload is
+ * `JCS({ manifest, rootId })`, so the same key's signature over the same manifest is not
+ * valid for a root whose trust store declares a different `rootId`.
+ */
+export const AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE =
+  "application/vnd.axiom.manifest-bound+json" as const;
+/** Operator-chosen root identity, e.g. `github:dragoscv/brivio` or a UUID. */
+export const RootIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "rootId: letters, digits, . _ : / @ - only");
 
 /**
  * DSSE envelope whose payload is `base64(JCS(manifest))`, signed with Ed25519 (D-16).
  * Lives outside the canonical body: `manifestDigest` is unchanged whether signed or not.
+ * With `payloadType` = `AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE` the payload is
+ * `base64(JCS({ manifest, rootId }))` (S-409).
  */
 export const ManifestSignatureSchema = z
   .object({
-    payloadType: z.literal(AXIOM_MANIFEST_PAYLOAD_TYPE),
+    payloadType: z.union([
+      z.literal(AXIOM_MANIFEST_PAYLOAD_TYPE),
+      z.literal(AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE),
+    ]),
     payload: z.base64(),
     signatures: z
       .array(z.object({ keyid: z.string().optional(), sig: z.base64() }).strict())
@@ -202,6 +220,11 @@ export const TrustStoreSchema = z
     keys: z.array(TrustedKeySchema),
     /** Floor for `counter` when no state has been recorded yet. */
     minCounter: z.int().nonnegative().optional(),
+    /**
+     * When set, only root-bound signatures carrying this exact id count (S-409): an
+     * unbound or differently-bound envelope is `signature.unbound`. Absent → both accepted.
+     */
+    rootId: RootIdSchema.optional(),
   })
   .strict();
 
@@ -212,6 +235,15 @@ export const TrustStateSchema = z
     lastCounter: z.int().nonnegative(),
     /** Digest of the manifest that advanced `lastCounter` (informational). */
     manifestDigest: DigestRefSchema.optional(),
+    /**
+     * HMAC-SHA256 (hex) over `JCS(state without mac)` keyed by `.axiom/trust/state.key`
+     * (S-409). Written by every `advanceTrustState`; a state with a key on disk but a
+     * missing/wrong mac is `ERR_TRUST_STATE_CORRUPT`.
+     */
+    mac: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   })
   .strict();
 
