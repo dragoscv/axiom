@@ -261,6 +261,38 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
+            },
+            "preImage": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "sha256": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      },
+                      {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -840,6 +872,14 @@
             ],
             "additionalProperties": false
           }
+        },
+        "preImage": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "drifted",
+            "unverified"
+          ]
         }
       },
       "required": [

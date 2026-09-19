@@ -148,13 +148,55 @@ describe("compilePlan — determinism", () => {
   it("inline vs cas store → same manifestDigest, different blobs", async () => {
     const root = await tmp();
     const p = plan([inline("a.txt", "hello"), inline("b.bin", "world")]);
-    const inl = await compilePlan(p);
+    // Both against the same root: transport must not change the digest. (Without a root the
+    // manifest carries no `preImage` and therefore legitimately differs — see S-402 tests.)
+    const inl = await compilePlan(p, { root });
     const cas = await compilePlan(p, { store: "cas", root });
     expect(cas.bundle.manifestDigest).toBe(inl.bundle.manifestDigest);
     expect(Object.keys(inl.bundle.blobs)).toHaveLength(2);
     expect(cas.bundle.blobs).toEqual({});
     const { readFile } = await import("node:fs/promises");
     expect((await readFile(casPath(root, sha256Hex("hello")))).toString()).toBe("hello");
+  });
+
+  describe("pre-image binding (S-402)", () => {
+    it("with a root, manifest.preImage lists every artifact path (sorted) with sha256 or absent", async () => {
+      const root = await tmp();
+      await writeFile(join(root, "b.txt"), "old b");
+      const { bundle } = await compilePlan(
+        plan([inline("b.txt", "new b"), inline("a.txt", "a"), { path: "z.txt", op: "delete" }]),
+        { root },
+      );
+      expect(bundle.manifest.preImage).toEqual([
+        { path: "a.txt", sha256: "absent" },
+        { path: "b.txt", sha256: sha256Hex("old b") },
+        { path: "z.txt", sha256: "absent" },
+      ]);
+    });
+    it("without a root (and no reader) there is no preImage; the same plan against two trees has two manifestDigests but one planDigest", async () => {
+      const p = plan([inline("f.txt", "x")]);
+      const none = await compilePlan(p);
+      expect(none.bundle.manifest.preImage).toBeUndefined();
+      const r1 = await tmp();
+      const r2 = await tmp();
+      await writeFile(join(r2, "f.txt"), "pre-existing");
+      const c1 = await compilePlan(p, { root: r1 });
+      const c2 = await compilePlan(p, { root: r2 });
+      expect(c1.bundle.manifest.planDigest).toBe(c2.bundle.manifest.planDigest);
+      expect(c1.bundle.manifestDigest).not.toBe(c2.bundle.manifestDigest);
+      expect(c1.bundle.manifestDigest).not.toBe(none.bundle.manifestDigest);
+      // Same tree twice → identical manifest.
+      expect((await compilePlan(p, { root: r1 })).bundle.manifestDigest).toBe(
+        c1.bundle.manifestDigest,
+      );
+    });
+    it("a directory or symlink at an artifact path counts as absent (apply rejects the write itself)", async () => {
+      const root = await tmp();
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(root, "dir.txt"));
+      const { bundle } = await compilePlan(plan([inline("dir.txt", "x")]), { root });
+      expect(bundle.manifest.preImage).toEqual([{ path: "dir.txt", sha256: "absent" }]);
+    });
   });
 
   it("a cas source is read back, re-hashed and inlined into blobs", async () => {

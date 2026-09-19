@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compilePlan } from "@codai/axiom-plan";
@@ -37,17 +37,24 @@ export async function listGoldenCases(dir: string = GOLDEN_DIR): Promise<GoldenC
 export async function compileGolden(planPath: string): Promise<GoldenExpected> {
   const plan: unknown = JSON.parse(await readFile(planPath, "utf8"));
   const preimageDir = planPath.replace(/\.plan\.json$/, ".preimage");
-  const { bundle } = await compilePlan(plan, {
-    toolchain: { axiom: "2.0.0" },
-    readPreImage: async (rel) => {
+  const hasPreimage = await stat(preimageDir).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  const opts: Parameters<typeof compilePlan>[1] = { toolchain: { axiom: "2.0.0" } };
+  if (hasPreimage) {
+    // Only fixtures that ship a tree get a pre-image reader, so root-less fixtures
+    // (plan-basic) keep their digest and pre-image binding is pinned separately.
+    opts.readPreImage = async (rel) => {
       try {
         return new Uint8Array(await readFile(join(preimageDir, ...rel.split("/"))));
       } catch (err) {
         if ((err as { code?: string }).code === "ENOENT") return undefined;
         throw err;
       }
-    },
-  });
+    };
+  }
+  const { bundle } = await compilePlan(plan, opts);
   return {
     manifestDigest: bundle.manifestDigest,
     planDigest: bundle.manifest.planDigest,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CheckRefSchema } from "./check.js";
-import { DigestRefSchema, DigestSchema } from "./digest.js";
+import { DigestRefSchema, DigestSchema, Sha256HexSchema } from "./digest.js";
 import { RelPathSchema } from "./path.js";
 import { ApiVersionSchema, ArtifactModeSchema, ArtifactOpSchema, PlanNameSchema } from "./plan.js";
 
@@ -65,6 +65,18 @@ export const ToolchainSchema = z
   })
   .strict();
 
+/**
+ * What compile saw on disk for one artifact path (S-402): the sha256 of the existing file
+ * or `absent`. Binds a manifest — and every CheckReport/attestation over it — to the tree
+ * it was produced against; `apply` refuses a different tree with `ERR_PREIMAGE_CHANGED`.
+ */
+export const PreImageEntrySchema = z
+  .object({
+    path: RelPathSchema,
+    sha256: z.union([Sha256HexSchema, z.literal("absent")]),
+  })
+  .strict();
+
 /** The exact object that is JCS-canonicalised and sha256-hashed into `manifestDigest`. */
 export const ManifestBodySchema = z
   .object({
@@ -84,9 +96,23 @@ export const ManifestBodySchema = z
      * signature binds it. Verified by `manifest.requireSigned { antiRollback: true }`.
      */
     counter: z.int().nonnegative().optional(),
+    /**
+     * Pre-image of every artifact path at compile time (S-402), sorted by path, unique;
+     * present when compile had a root (or a pre-image reader). Part of the canonical body:
+     * the same Plan compiled against a different tree is a different manifest.
+     */
+    preImage: z.array(PreImageEntrySchema).optional(),
   })
   .strict()
   .superRefine((m, ctx) => {
+    if (m.preImage !== undefined && !isSortedUnique(m.preImage.map((p) => p.path))) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["preImage"],
+        message: "preImage must be sorted by path (UTF-8 byte order) and unique",
+        params: { code: "ERR_NOT_CANONICAL" },
+      });
+    }
     if (!isSortedUnique(m.artifacts.map((a) => a.path))) {
       ctx.addIssue({
         code: "custom",
@@ -217,6 +243,7 @@ export const ManifestBundleSchema = z
 
 export type ManifestArtifact = z.infer<typeof ManifestArtifactSchema>;
 export type Toolchain = z.infer<typeof ToolchainSchema>;
+export type PreImageEntry = z.infer<typeof PreImageEntrySchema>;
 export type ManifestBody = z.infer<typeof ManifestBodySchema>;
 export type Blob = z.infer<typeof BlobSchema>;
 export type InTotoStatementLoose = z.infer<typeof InTotoStatementLooseSchema>;

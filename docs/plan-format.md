@@ -202,6 +202,7 @@ hashed; everything else is transport.
 | `checks` | `CheckRef[]` | **sorted by id, unique** (`ERR_NOT_CANONICAL`) |
 | `toolchain` | `{ axiom: string, emitters: record<string,string> }` | versions that produced the bundle; keys sorted by JCS |
 | `counter` | int ≥ 0 | optional; anti-rollback counter — inside the hash, so a signature binds it (`manifest.requireSigned { antiRollback }`) |
+| `preImage` | `{ path: RelPath, sha256: hex \| "absent" }[]` | optional; sorted by path, unique. What compile saw on disk for **every** artifact path (S-402). Present whenever compile had a root (or an injected pre-image reader); inside the hash, so the same Plan compiled against two different trees yields two `manifestDigest`s while `planDigest` stays equal. `check` reports `preImage: verified \| drifted \| unverified`; `apply` refuses a first apply on a drifted tree with `ERR_PREIMAGE_CHANGED` (a re-apply of an applied digest is exempt — its own writes changed the tree; see `drifted`). |
 
 No timestamps, no invocation ids, no absolute paths. Two compiles of the same
 plan on different operating systems yield the same `manifestDigest`; this is
@@ -260,6 +261,7 @@ Built-in profiles and their check lists: [checks.md](checks.md#built-in-profiles
 | `factsDigest` | `DigestRef` | sha256(JCS(all facts)) so a report can be re-derived |
 | `durationMs` | int ≥ 0 | |
 | `providers` | `{ name, status: ok \| skipped \| error, ms }[]` | `manifest`, `content`, `repo`, `guard` |
+| `preImage` | `verified \| drifted \| unverified` | optional; `verified` = every `ManifestBody.preImage` entry matched the tree under `root`; `drifted` = at least one differed (an `error` finding `manifest.preImage` with `facts.code: ERR_PREIMAGE_CHANGED` per path, verdict `error`); `unverified` = no root or the manifest has no `preImage` |
 
 `Finding`: `{ id, severity, predicate, message, path?: RelPath, facts: record }`.
 Provider failures carry `facts.code` (an error code) and `facts.__provider: true`.
@@ -316,7 +318,7 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_ROOT_NOT_DIR` | root does not exist or is not a directory |
 | `ERR_CONFIRM_DIGEST_MISMATCH` | `confirmDigest !== bundle.manifestDigest` |
 | `ERR_CHECKS_FAILED` | pre-apply check verdict was not `pass` |
-| `ERR_PREIMAGE_CHANGED` | a file changed between staging and commit (TOCTOU guard) |
+| `ERR_PREIMAGE_CHANGED` | the tree differs from `ManifestBody.preImage` at check/apply time (S-402, `details.phase: prepare`), or a file changed between staging and commit (TOCTOU guard) |
 | `ERR_JOURNAL_CORRUPT` | journal file unreadable or fails schema |
 | `ERR_EBUSY` | rename kept failing (Windows open handle) after retries |
 | `ERR_INVALID_PLAN` | Plan fails schema (details carry Zod issues) |

@@ -71,7 +71,7 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 | `axiom_plan_validate` | READ | `{ plan }` | `{ ok, planDigest?, errors[] }` |
 | `axiom_plan_compile` | ACT | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (writes only under `<root>/.axiom/` — CAS blobs and the stored manifest — when a root is given) |
 | `axiom_manifest_verify` | READ | `{ bundle, root? }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` only when `root` has `.axiom/trust/keys.json`; `code` is `ERR_SIGNATURE_MISSING` \| `ERR_SIGNATURE_INVALID` when not `ok` |
-| `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`) |
+| `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`, `preImage: verified\|drifted\|unverified`) |
 | `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
 | `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
 | `axiom_rollback` | SENSITIVE | `{ root, manifestDigest }` | `{ status:"rolled-back", phase, steps }` |

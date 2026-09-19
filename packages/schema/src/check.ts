@@ -48,6 +48,13 @@ export const CheckReportSchema = z
     factsDigest: DigestRefSchema,
     durationMs: z.int().nonnegative(),
     providers: z.array(ProviderStatusSchema),
+    /**
+     * S-402: how the manifest's `preImage` related to the tree at check time.
+     * `verified` = every entry matched; `drifted` = at least one differed (an `error`
+     * finding `ERR_PREIMAGE_CHANGED` is also emitted); `unverified` = no root, or the
+     * manifest carries no `preImage`.
+     */
+    preImage: z.enum(["verified", "drifted", "unverified"]).optional(),
   })
   .strict();
 

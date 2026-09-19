@@ -115,6 +115,14 @@
         ],
         "additionalProperties": false
       }
+    },
+    "preImage": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "drifted",
+        "unverified"
+      ]
     }
   },
   "required": [

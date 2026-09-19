@@ -291,6 +291,23 @@ async function prepare(
   }
   const caseInsensitive = await probeCaseInsensitive(rootReal);
 
+  // S-402: a manifest compiled against a tree names that tree. On a FIRST apply the
+  // declared pre-images must still hold; a re-apply (marker present) is exempt — the
+  // manifest's own writes changed the tree, and drift is handled by `drifted`.
+  if (!reapply && manifest.preImage !== undefined) {
+    for (const p of manifest.preImage) {
+      const { abs } = await resolveContained(rootReal, p.path);
+      const now = await fileDigestOrAbsent(abs);
+      if (now !== p.sha256) {
+        throw new AxiomError(
+          "ERR_PREIMAGE_CHANGED",
+          "tree differs from the manifest pre-image (compiled against a different tree)",
+          { path: p.path, details: { expected: p.sha256, actual: now, phase: "prepare" } },
+        );
+      }
+    }
+  }
+
   // Containment + target type + pre-image capture, all before any write.
   const files: StagedFile[] = [];
   for (const a of manifest.artifacts) {

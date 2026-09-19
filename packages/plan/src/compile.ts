@@ -19,6 +19,7 @@ import {
   type Plan,
   type PlanArtifact,
   PlanSchema,
+  type PreImageEntry,
   type Toolchain,
 } from "@codai/axiom-schema";
 import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
@@ -224,9 +225,22 @@ async function defaultReadPreImage(root: string, relPath: string): Promise<Uint8
   try {
     return new Uint8Array(await readFile(join(root, ...relPath.split("/"))));
   } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return undefined;
+    const code = (err as { code?: string }).code;
+    // ENOTDIR: a path segment is a file; EISDIR: the target is a directory → "absent" as a
+    // regular file. apply's containment checks reject the write itself.
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return undefined;
     throw err;
   }
+}
+
+/** Pre-image reader in effect: injected, or `<root>/<path>` from disk, or none. */
+function preImageReader(
+  opts: CompileOptions,
+): ((relPath: string) => Promise<Uint8Array | undefined>) | undefined {
+  if (opts.readPreImage !== undefined) return opts.readPreImage;
+  if (opts.root === undefined) return undefined;
+  const root = opts.root;
+  return (rel) => defaultReadPreImage(root, rel);
 }
 
 async function applyPatchSource(
@@ -234,11 +248,7 @@ async function applyPatchSource(
   src: { format: "unified" | "v4a" | "search-replace"; preImage: string; body: string },
   opts: CompileOptions,
 ): Promise<SourceBytes> {
-  const read =
-    opts.readPreImage ??
-    (opts.root === undefined
-      ? undefined
-      : (rel: string) => defaultReadPreImage(opts.root as string, rel));
+  const read = preImageReader(opts);
   if (read === undefined) {
     throw new AxiomError("ERR_PATCH_PREIMAGE", "patch source needs a root to read the pre-image", {
       path: a.path,
@@ -410,6 +420,20 @@ export async function compilePlan(
   const planDigest = canonicalDigestRef(digestOnlyPlan(plan, digests));
   const toolchain = splitToolchain(opts.toolchain, usedEmitters);
 
+  // S-402: bind the manifest to the tree it was compiled against. Sorted like artifacts.
+  const read = preImageReader(opts);
+  let preImage: PreImageEntry[] | undefined;
+  if (read !== undefined) {
+    preImage = [];
+    for (const r of resolved) {
+      const cur = await read(r.artifact.path);
+      preImage.push({
+        path: r.artifact.path,
+        sha256: cur === undefined ? "absent" : sha256Hex(cur),
+      });
+    }
+  }
+
   const body: ManifestBody = {
     apiVersion: plan.apiVersion,
     kind: "Manifest",
@@ -421,6 +445,7 @@ export async function compilePlan(
     toolchain,
   };
   if (plan.counter !== undefined) body.counter = plan.counter;
+  if (preImage !== undefined) body.preImage = preImage;
   const manifestDigest = canonicalDigestRef(body);
 
   const blobs: Record<DigestRef, Blob> = {};

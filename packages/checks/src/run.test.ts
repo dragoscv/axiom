@@ -1,3 +1,4 @@
+import { sha256Hex } from "@codai/axiom-canon";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { builtinRegistry, PredicateRegistry } from "./registry.js";
@@ -128,6 +129,68 @@ describe("runChecks verdict matrix", () => {
     expect(r.findings).toEqual([]);
     expect(r.manifestDigest).toBe(b.manifestDigest);
     expect(r.factsDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+});
+
+describe("pre-image binding (S-402)", () => {
+  const pass = profileWith([
+    { id: "x", predicate: "path.allow", params: { globs: ["**"] }, severity: "error" },
+  ]);
+  async function root(files: Record<string, string>): Promise<string> {
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { dirname, join } = await import("node:path");
+    const r = await mkdtemp(join(tmpdir(), "axiom-preimage-"));
+    for (const [p, c] of Object.entries(files)) {
+      await mkdir(dirname(join(r, p)), { recursive: true });
+      await writeFile(join(r, p), c);
+    }
+    return r;
+  }
+  const withPre = (
+    bundle: ReturnType<typeof makeBundle>,
+    pre: { path: string; sha256: string }[],
+  ) => {
+    const manifest = { ...bundle.manifest, preImage: pre };
+    return { ...bundle, manifest };
+  };
+
+  it("unverified without a root or without manifest.preImage", async () => {
+    const r1 = await runChecks({ bundle: b, profile: pass });
+    expect(r1.preImage).toBe("unverified");
+    const r = await root({});
+    const r2 = await runChecks({ bundle: b, profile: pass, root: r });
+    expect(r2.preImage).toBe("unverified");
+  });
+
+  it("verified when every entry matches the tree (absent and existing)", async () => {
+    const r = await root({ "src/b.ts": "old" });
+    const bundle = withPre(b, [
+      { path: "src/a.ts", sha256: "absent" },
+      { path: "src/b.ts", sha256: sha256Hex("old") },
+    ]);
+    const rep = await runChecks({ bundle, profile: pass, root: r });
+    expect(rep.preImage).toBe("verified");
+    expect(rep.verdict).toBe("pass");
+  });
+
+  it("drifted → verdict error with an ERR_PREIMAGE_CHANGED finding per path, even when checks pass", async () => {
+    const r = await root({ "src/a.ts": "someone wrote this" });
+    const bundle = withPre(b, [
+      { path: "src/a.ts", sha256: "absent" },
+      { path: "src/b.ts", sha256: sha256Hex("never existed") },
+    ]);
+    const rep = await runChecks({ bundle, profile: pass, root: r });
+    expect(rep.preImage).toBe("drifted");
+    expect(rep.verdict).toBe("error");
+    const f = rep.findings.filter((x) => x.id === "manifest.preImage");
+    expect(f.map((x) => x.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(f[0]?.facts).toMatchObject({
+      code: "ERR_PREIMAGE_CHANGED",
+      expected: "absent",
+      actual: sha256Hex("someone wrote this"),
+    });
+    expect(f[1]?.facts).toMatchObject({ code: "ERR_PREIMAGE_CHANGED", actual: "absent" });
   });
 });
 

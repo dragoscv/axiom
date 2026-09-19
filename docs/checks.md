@@ -36,6 +36,14 @@ Repo predicates (`repo.*`) need a `root`; when the run has none, or the profile
 sets `facts.allowRepo: false`, they are **skipped** (provider status `skipped`),
 not failed — there is nothing to check against.
 
+**Pre-image (S-402).** When a `root` is given and the manifest carries
+`preImage[]`, `runChecks` first compares every entry with the tree. Any
+difference emits an `error` finding `manifest.preImage` (`facts.code:
+ERR_PREIMAGE_CHANGED`, `expected`, `actual`) per path, forces `verdict: error`
+and sets `report.preImage: "drifted"`; otherwise `"verified"`. Without a root or
+without `preImage` the report says `"unverified"`. A stored `CheckReport`
+therefore names the tree it judged.
+
 Predicates run sequentially in merged order; findings are sorted by
 `(severity, id, path)`; `factsDigest = sha256(JCS(facts))` lets a report be
 replayed.

@@ -1,5 +1,6 @@
 export { contentReader } from "./facts/content.js";
 export { deriveManifestFacts, extOf } from "./facts/manifest.js";
+export { currentPreImage, type PreImageDrift, verifyPreImage } from "./facts/preimage.js";
 export { createRepoFacts, type RepoFactsOptions } from "./facts/repo.js";
 export * from "./predicates/index.js";
 export {

@@ -60,6 +60,14 @@ not `ERR_EXISTS`: it is committed as an overwrite and the foreign bytes are
 backed up under `.axiom/backup/<hex>/` like any pre-image. Without the marker a
 `create` over an existing file is still `ERR_EXISTS`.
 
+**Pre-image binding (S-402).** A manifest compiled with a root carries
+`preImage[]` — the sha256 (or `absent`) of every artifact path as compile saw
+it. On a *first* apply (no applied marker) every entry is re-verified before
+staging; a mismatch is `ERR_PREIMAGE_CHANGED` with `details.phase: "prepare"`
+and nothing is written. This is separate from the in-transaction TOCTOU check
+(same code, no `phase`), which compares against what *staging* captured. A
+manifest without `preImage` (compiled without a root) skips this step.
+
 **Rollback failure is its own error.** When a commit step fails and the scoped
 rollback also fails, the result is `status: failed` with `error.code:
 ERR_ROLLBACK` (the original error is in the message and `details`), the journal

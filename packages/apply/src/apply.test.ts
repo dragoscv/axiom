@@ -514,6 +514,51 @@ describe("TOCTOU and rollback", () => {
 });
 
 describe("error-code hygiene (S-407)", () => {
+  it("S-402: a manifest compiled against tree A is refused on tree B with ERR_PREIMAGE_CHANGED before any write; re-apply of an applied digest is exempt", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "cfg.json": "{}" });
+    const bundle = makeBundle([
+      { path: "cfg.json", content: '{"v":2}', op: "overwrite" },
+      { path: "new.txt", content: "n" },
+    ]);
+    // Simulate compile-time binding (S-402): what compile saw on disk.
+    const bound = {
+      ...bundle,
+      manifest: {
+        ...bundle.manifest,
+        preImage: [
+          { path: "cfg.json", sha256: sha256Hex("{}") },
+          { path: "new.txt", sha256: "absent" as const },
+        ],
+      },
+    };
+    const { canonicalDigestRef } = await import("@codai/axiom-canon");
+    const boundBundle = { ...bound, manifestDigest: canonicalDigestRef(bound.manifest) };
+
+    // Tree drifted after compile (someone edited cfg.json) → refused, nothing written.
+    await writeTree(root, { "cfg.json": '{"edited":true}' });
+    const before = await snapshot(root);
+    const r = await fsApply(boundBundle, root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_PREIMAGE_CHANGED");
+    expect(r.error?.path).toBe("cfg.json");
+    expect(await snapshot(root)).toEqual(before);
+    expect(await exists(root, "new.txt")).toBe(false);
+
+    // Restore the tree the manifest was compiled against → applies.
+    await writeTree(root, { "cfg.json": "{}" });
+    const ok = await fsApply(boundBundle, root);
+    expect(ok.status).toBe("applied");
+    // Re-apply: the tree now differs from preImage (our own writes), but the applied marker
+    // makes this a noop / drifted re-apply, not ERR_PREIMAGE_CHANGED.
+    const again = await fsApply(boundBundle, root);
+    expect(again.status).toBe("noop");
+    await writeTree(root, { "new.txt": "hand edit" });
+    const re = await fsApply(boundBundle, root);
+    expect(re.status).toBe("applied");
+    expect(re.drifted).toEqual(["new.txt"]);
+  });
+
   it("ERR_ROLLBACK when the commit fails AND the rollback fails; original error kept in the message", async () => {
     const root = await mkRoot();
     await writeTree(root, { "a.txt": "a0" });

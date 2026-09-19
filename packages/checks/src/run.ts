@@ -13,6 +13,7 @@ import {
 } from "@codai/axiom-schema";
 import { contentReader } from "./facts/content.js";
 import { deriveManifestFacts } from "./facts/manifest.js";
+import { verifyPreImage } from "./facts/preimage.js";
 import { createRepoFacts } from "./facts/repo.js";
 import { mergeChecks } from "./profile.js";
 import { builtinRegistry, type PredicateRegistry } from "./registry.js";
@@ -124,6 +125,30 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
     }
   } else {
     providers.push({ name: "repo", status: "skipped", ms: 0 });
+  }
+
+  // S-402: the manifest names the tree it was compiled against; a check against a different
+  // tree is judging something that will not be applied → `error` finding, verdict error.
+  let preImageStatus: CheckReport["preImage"] = "unverified";
+  if (opts.root !== undefined && bundle.manifest.preImage !== undefined) {
+    const drifted = await verifyPreImage(opts.root, bundle.manifest.preImage);
+    preImageStatus = drifted.length === 0 ? "verified" : "drifted";
+    for (const d of drifted) {
+      providerFailed = true;
+      findings.push({
+        id: "manifest.preImage",
+        severity: "error",
+        predicate: "manifest.preImage",
+        message: `tree differs from the manifest pre-image (expected ${d.expected}, found ${d.actual})`,
+        path: d.path,
+        facts: {
+          code: "ERR_PREIMAGE_CHANGED",
+          __provider: true,
+          expected: d.expected,
+          actual: d.actual,
+        },
+      });
+    }
   }
   const guardsEnabled =
     opts.allowGuards === true && profile.facts.allowGuards && opts.root !== undefined;
@@ -257,5 +282,6 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
     }),
     durationMs: ms(t0),
     providers,
+    preImage: preImageStatus,
   };
 }
