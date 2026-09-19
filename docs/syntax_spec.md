@@ -44,7 +44,7 @@ where `Ident` is expected (`plan check { … }` names a plan `check`).
 | `inline <<T … T` | `source: {type:"inline", encoding:"utf8", content}` | see heredoc rules |
 | `cas "sha256:…"` | `source: {type:"cas", digest}` | |
 | `ref "uri" "sha256:…"` | `source: {type:"ref", uri, digest}` | `file:`/`https:` only |
-| `template e.m "t" {…}` | `source: {type:"template", emitter, template, params}` | v2.1 reserved; compile rejects |
+| `template e.m "t" {…}` | `source: {type:"template", emitter, template, params}` | rendered at compile time by a registered emitter (see [emitters.md](emitters.md)) |
 | `check ID using g.name {…}` | `checks[]: {id, predicate, params, severity:"error"}` | params default `{}`; unknown predicate ids are accepted here — the checks registry decides at runtime |
 | `meta {…}` | `metadata` | `{}` when omitted |
 

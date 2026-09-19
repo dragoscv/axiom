@@ -62,7 +62,7 @@ S-406,story,4,tasks extension: long guard.external + chunked plan build,todo,age
 S-407,story,4,Idempotency + error-code hygiene (drifted create; 7 untested codes; split overloaded codes),todo,agent,,every ERROR_CODE raised and asserted; corrupt-journal recovery test,
 S-408,story,4,Predicate quality: noSecrets PAN/UUID; requireCompanion mustChange; route-group escape; guard evidence,todo,agent,,metu zero-UUID fixture passes; mustChange fails on existing-only companion,
 S-409,story,4,Signing hardening: root-bound payload; signed state.json; CI key ceremony,todo,agent,,cross-root replay test fails closed,
-S-410,story,4,Doc/code drift sweep + check-stale-markers guard,todo,agent,,guard green; LSP hover for template/pr correct,
+S-410,story,4,Doc/code drift sweep + check-stale-markers guard,done,agent,,guard green; LSP hover for template/pr correct,2026-09-20 17/17 guards; 251 files scanned; 5 v1 docs archived
 S-411,story,4,expr.cedar fact provider (cedar-wasm),todo,agent,S-405,vector suite like cel-vectors; offline; ACS mapping doc,
 S-412,story,4,VS Code extension on Marketplace,todo,owner,,ext install codai.axiom-axm works,needs publisher account (owner)
 S-413,story,4,2.1.0 repair + release-complete guard + bootstrap -Missing,done,agent,D-22,check-release-complete green: 9 tagged versions on registry,2026-09-20 published interactively (no provenance); trusted publishing --allow-publish = owner step before v2.2.0 tag

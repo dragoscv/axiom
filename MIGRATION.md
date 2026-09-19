@@ -26,22 +26,22 @@ choice. There is nothing in a v1 manifest whose integrity v2 could vouch for.
 
 | v1 | v2 |
 |----|----|
-| `.axm` agent file | `Plan` JSON (`apiVersion: "axiom.dev/v2"`, `kind: "Plan"`). A `.axm` v2 grammar that compiles 1:1 to `Plan` is a v2.1 deliverable (S-204). |
+| `.axm` agent file | `Plan` JSON (`apiVersion: "axiom.dev/v2"`, `kind: "Plan"`). The `.axm` v2 grammar compiles 1:1 to `Plan` (`axiom axm parse`, `axiom_axm_parse`; [docs/syntax_spec.md](docs/syntax_spec.md)). |
 | IR (`agents[]`, `version`) | No IR. The `Plan` is the input; the `ManifestBundle` is the canonical output. |
-| Emitters (`webapp`, `apiservice`, `docker`, `batch`) | Removed. **Your agent writes the content** and puts it in `artifacts[].source` (`inline`, or `cas` for large trees). Optional template emitters may return as a separate v2.1 plugin (S-207) — not in core. |
+| Emitters (`webapp`, `apiservice`, `docker`, `batch`) | Removed. **Your agent writes the content** and puts it in `artifacts[].source` (`inline`, or `cas` for large trees). Optional template emitters exist as a separate plugin, `@codai/axiom-emitters-web` (`source: {type:"template"}`; [docs/emitters.md](docs/emitters.md)) — not in core. |
 | `manifest.json` with `contentUtf8` / `contentBase64` | `ManifestBundle`: a JCS-canonical `manifest` body holding only digests, plus `blobs` (inline side-channel) or a CAS under `<root>/.axiom/cas/`. |
 | `irHash`, `buildId`, `createdAt: deterministic-…` | `manifestDigest = sha256(JCS(manifest))`, `planDigest`, per-artifact `digest.sha256`. No timestamps inside anything hashed. |
 | Profiles with `constraints` (`max_dependencies`, `frontend_bundle_kb`, …) | `Profile` with `checks[]` of typed predicates (`deps.max`, `content.maxBytes`, `path.deny`, …). See [docs/checks.md](docs/checks.md). |
 | Capabilities `net("http")`, `fs("./path")`, `ai("provider")` | `Plan.capabilities` is a plain enum list (`fs`, `net`, `secret`, `ai`, `compute`, `git`) recorded in the manifest; enforcement is by checks, not by a capability sandbox. |
-| HTTP server on `:3411` (`POST /parse`, `/generate`, `/check`, `/apply`, …) | MCP **stdio** server: `npx @codai/axiom-mcp mcp --root <dir>`. Streamable HTTP is v2.1 (S-206). |
+| HTTP server on `:3411` (`POST /parse`, `/generate`, `/check`, `/apply`, …) | MCP **stdio** server: `npx @codai/axiom-mcp mcp --root <dir>`; streamable HTTP via `axiom mcp --root <dir> --http <host:port>` ([docs/mcp_api.md](docs/mcp_api.md)). |
 | `axiom_generate` | `axiom_plan_compile` |
 | `axiom_check` | `axiom_check` (same name; input is a `ManifestBundle`, output is a `CheckReport` with `verdict: pass\|fail\|error`) |
 | `axiom_apply` (mode `fs` / `pr`) | `axiom_apply` — **requires `confirmDigest === bundle.manifestDigest`** and a `root` inside the server's `--root` allowlist. `mode: "pr"` creates a branch and commits the touched paths without a shell (no push, no PR creation). |
-| `axiom_reverse` / reverse-IR | Removed. `axiom_repo_snapshot` is planned for v2.2 (S-304). |
+| `axiom_reverse` / reverse-IR | Replaced by `axiom_repo_snapshot` (digest-only snapshot of a root subtree; no content). |
 | `axiom_diff` (JSON-Patch between IRs) | `axiom_manifest_diff` (added / removed / changed artifacts between two manifests). |
 | `AXIOM_REPO_ROOT` env var, `.git` walk-up | Removed. Roots are an explicit `--root` allowlist; no `cwd` or env fallback. |
 | `postinstall` writing `~/.mcp/servers/axiom.json` | Removed. No install-time side effects. |
-| `vscode-bridge` | Removed. A Langium LSP + VS Code extension is v2.1 (S-205). |
+| `vscode-bridge` | Removed. `@codai/axiom-axm-lsp` (hand-written `vscode-languageserver`, D-14) + the `axiom-axm` VS Code extension replace it. |
 
 ## Tooling — `axiom migrate v1`
 

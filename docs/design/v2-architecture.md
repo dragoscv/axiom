@@ -30,9 +30,10 @@ axiom/
     checks/        @codai/axiom-checks      Predicate registry, fact providers, profiles, external guard runner. deps: schema, canon, picomatch
     apply/         @codai/axiom-apply       Containment, staging, 2PC, journal, dry-run/diff, git PR (spawn args). deps: schema, canon, diff
     mcp/           @codai/axiom-mcp         MCP server (stdio + streamable HTTP) + CLI + `gate` hook mode. THE ONLY PUBLISHED BIN. deps: all above + @modelcontextprotocol/sdk
-    axm/           @codai/axiom-axm         (v2.1) Chevrotain lexer/parser .axm → Plan. deps: chevrotain 13.2
-    axm-lsp/       @codai/axiom-axm-lsp     (v2.1) Langium 4.4 grammar + LSP + VS Code ext. deps: langium
-    emitters-web/  @codai/axiom-emitters-web (v2.1) Optional Next.js/Hono templates as a separate plugin
+    axm/           @codai/axiom-axm         Chevrotain lexer/parser .axm → Plan. deps: chevrotain 13.2
+    axm-lsp/       @codai/axiom-axm-lsp     Hand-written LSP over `vscode-languageserver` reusing parseAxm (D-14, not Langium). deps: axm, vscode-languageserver
+    vscode-axm/    private                  VS Code extension bundling axm-lsp (S-412: Marketplace)
+    emitters-web/  @codai/axiom-emitters-web Optional Next.js/Hono templates as a separate plugin
     conformance/   private                  MCP conformance harness (spawns HTTP server, runs @modelcontextprotocol/conformance)
     testkit/       private                  golden fixtures, fast-check arbitraries, tmp-repo helpers
 ```
@@ -344,7 +345,7 @@ HereDoc     = "<<", Ident, NEWLINE, { ANY }, NEWLINE, Ident ;
 QualIdent   = Ident, { ".", Ident } ;          Digest = '"sha256:' 64*HEXDIG '"' ;
 Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" … "*/" ;
 ```
-`@codai/axiom-axm`: Chevrotain 13.2 **[V]** lexer + CST parser + visitor → `Plan`, diagnostics with `{line,col}`. `@codai/axiom-axm-lsp`: Langium 4.4 **[V]** grammar (`.langium`) generated from the same EBNF, LSP server + VS Code extension (replaces the 5-line `vscode-bridge` **[src]**). Langium bundles chevrotain ~13.2 **[V]** so there is one chevrotain major — a second reason to not adopt `cel-js` (pins 11 **[V]**).
+`@codai/axiom-axm`: Chevrotain 13.2 **[V]** lexer + CST parser + visitor → `Plan`, diagnostics with `{line,col}`. `@codai/axiom-axm-lsp`: **as built (D-14, 2026-09-18)** a hand-written `vscode-languageserver` 10 server that reuses `parseAxm` for diagnostics, completions and hover — *not* Langium: every Langium service is derived from a `.langium` grammar AST, so adopting it would have meant a second grammar that drifts from `packages/axm` (see `packages/axm-lsp/README.md`). The VS Code extension (`packages/vscode-axm`) bundles the server and replaces the 5-line `vscode-bridge` **[src]**. `expr.cel` uses `@marcbachmann/cel-js` 8 (zero deps), so the chevrotain-major concern below is moot.
 
 ---
 

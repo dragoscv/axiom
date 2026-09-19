@@ -214,7 +214,7 @@ Every resolved blob is re-hashed; a mismatch is `ERR_DIGEST_MISMATCH` (or
 | `extends` | profile name | optional; resolved parent-first, cycles → `ERR_INVALID_PROFILE` |
 | `checks` | `CheckRef[]` | child entries replace parent entries with the same `id` |
 | `limits` | `{ maxArtifacts?, maxTotalBytes?, maxBlobBytes? }` | positive ints; merged shallowly over the parent |
-| `facts` | `{ allowRepo: bool = true, allowGuards: bool = false }` | `allowRepo=false` skips repo predicates; `allowGuards` gates `guard.external` (v2.1) |
+| `facts` | `{ allowRepo: bool = true, allowGuards: bool = false }` | `allowRepo=false` skips repo predicates; `allowGuards` gates `guard.external` |
 
 Built-in profiles and their check lists: [checks.md](checks.md#built-in-profiles).
 
@@ -240,13 +240,13 @@ Provider failures carry `facts.code` (an error code) and `facts.__provider: true
 |-------|------|-------|
 | `apiVersion`, `kind` | literals | `"axiom.dev/v2"`, `"ApplyResult"` |
 | `manifestDigest` | `DigestRef` | |
-| `mode` | `dry-run \| fs \| pr` | `pr` is reserved for v2.1 |
+| `mode` | `dry-run \| fs \| pr` | `pr` = fs apply + branch + commit of exactly the touched paths (no push); see [apply.md](apply.md#pr-mode) |
 | `status` | `applied \| noop \| rolled-back \| failed` | `failed` requires `error` |
 | `root` | string | absolute, realpath'd, as authorised |
 | `files` | `{ path, op, digest?, status: written \| deleted \| unchanged \| skipped }[]` | empty on failure before phase 2 |
 | `diff` | string | dry-run only; unified diff capped at 1 MiB |
 | `journal` | string | path of `.axiom/journal/<hex>.json` when phase 2 started |
-| `git` | `{ branch, commit?, compareUrl? }` | v2.1 |
+| `git` | `{ branch, commit?, compareUrl? }` | `pr` mode only |
 | `error` | `{ code: ErrorCode, message, path? }` | present on `failed` and `rolled-back` |
 
 ### Journal (`.axiom/journal/<hex>.json`)
@@ -294,8 +294,8 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_PREDICATE_UNKNOWN` | `CheckRef.predicate` is not registered |
 | `ERR_PREDICATE_PARAMS` | `CheckRef.params` fail the predicate's schema |
 | `ERR_PROVIDER_FAILED` | a fact provider or predicate threw |
-| `ERR_GUARD_TIMEOUT` | external guard exceeded `timeoutMs` (v2.1) |
-| `ERR_GUARD_OUTPUT` | external guard stdout was not a valid `GuardOutput` (v2.1) |
+| `ERR_GUARD_TIMEOUT` | external guard exceeded `timeoutMs` |
+| `ERR_GUARD_OUTPUT` | external guard stdout was not a valid `GuardOutput` |
 | `ERR_EMITTER_UNKNOWN` | `template` source names an emitter that is not in the compile-time registry (or no registry was given) |
 | `ERR_TEMPLATE_UNKNOWN` | the emitter exists but has no template with that name |
 | `ERR_TEMPLATE_PARAMS` | `template.params` fail the template's Zod schema (details carry `issues`) |
@@ -304,5 +304,5 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_NET_DENIED` | `ref` refused by policy: not `https:` (`file:` without `--allow-file`), credentials in the URI, host not in `--net-allow` |
 | `ERR_NET_FAILED` | `ref` fetch failed: timeout, redirect, network error, non-2xx (`status`) |
 | `ERR_NOT_CANONICAL` | manifest not sorted/unique, or `manifestDigest` does not match the recomputed hash |
-| `ERR_UNSUPPORTED_OP` | v2.1+ feature used without its gate (`guard.external` without `--allow-guards`) |
+| `ERR_UNSUPPORTED_OP` | a gated feature used without its gate (`guard.external` without `--allow-guards`; `template` source without an emitter registry) |
 | `ERR_INTERNAL` | invariant violation inside AXIOM; please report |

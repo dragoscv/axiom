@@ -79,7 +79,7 @@ export const KEYWORDS: Readonly<Record<string, KeywordDoc>> = {
   },
   template: {
     depth: 2,
-    doc: '`template emitter.name "template" {…}` — reserved for v2.1 emitters; compile rejects it today.',
+    doc: '`template emitter.name "template" {…}` — rendered at compile time by a registered emitter (e.g. `web.next-page` from @codai/axiom-emitters-web); the JSON object is the template `params`.',
     snippet: 'template ${1:emitter} "${2:template}" {$0}',
   },
   cas: {

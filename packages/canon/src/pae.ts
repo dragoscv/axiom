@@ -5,7 +5,7 @@
  *   PAE(type, payload) = "DSSEv1" SP LEN(type) SP type SP LEN(payload) SP payload
  *
  * Lifted from codai/packages/rules-core/src/envelope.ts (MIT, same author).
- * Signing/verification arrives in v2.2.
+ * Used by `dsse.ts` (`signEnvelope` / `verifyEnvelope`, D-16).
  */
 
 /** DSSE payloadType for in-toto Statements. */

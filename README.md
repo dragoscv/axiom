@@ -146,21 +146,23 @@ is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on 
 
 ## Status and roadmap
 
-**v2.0 (this release).** `schema`, `canon`, `plan` (inline + CAS), `checks`
-(15 built-in predicates — 16 with `expr.cel` in v2.2, three profiles, no external guards), `apply` (fs +
-dry-run + journal/rollback + idempotency; no git PR mode), `mcp` (stdio, 9
-tools, `axiom://` resources), CLI verbs, repo guards, CI on three OSes.
+**Shipped (2.1.0).** `schema`, `canon`, `plan` (inline + CAS + digest-pinned
+`ref` with `--allow-net`, `template` sources via [emitters](docs/emitters.md)),
+`checks` (15 built-in predicates incl. `expr.cel`, `guard.external` and
+`manifest.requireSigned`; three profiles), `apply` (fs + dry-run + journal/rollback
++ idempotency + `pr` mode with a spawn args array, no shell), `mcp` (stdio and
+streamable HTTP, 11 tools, `axiom://` resources), `axiom gate --stdin` hook mode,
+`.axm` DSL (Chevrotain) with an LSP + VS Code extension, DSSE/Ed25519 signing with
+key pinning + anti-rollback ([docs/signing.md](docs/signing.md)), `axiom gc` for the
+CAS ([docs/cas.md](docs/cas.md)), `axiom migrate v1` ([docs/migrate.md](docs/migrate.md)),
+`axiom_repo_snapshot`, repo guards, CI on three OSes.
 
-**v2.1.** `.axm` DSL (Chevrotain) compiling 1:1 to `Plan`, Langium LSP, git PR
-mode (spawn args array), `guard.external` predicate, `axiom gate --stdin` hook
-mode, streamable HTTP transport, optional template emitters.
-
-**v2.2.** CEL predicates (`expr.cel`, done), DSSE/Ed25519 signing with
-`manifest.requireSigned` + key pinning + anti-rollback (done — see
-[docs/signing.md](docs/signing.md); `axiom keygen | sign | trust | verify --root`),
-`ref` sources with `--allow-net` + `axiom gc` for the CAS (done — see
-[docs/cas.md](docs/cas.md)), `axiom migrate v1` (done — v1 manifest → Plan, lossless
-paths/bytes, dropped fields recorded in `metadata.migration`; [docs/migrate.md](docs/migrate.md)).
+**Next (2.2.0).** `patch` artifact source (unified / V4A / search-replace, exact
+match), pre-image binding in the manifest + `axiom verify --tree` and a GitHub
+action with in-toto attestations, fail-closed gate v2 with the OWASP ACS verdict
+vocabulary, MCP 2026-07-28 wire via SDK v2, `tasks` for long guards and chunked
+plan builds, `expr.cedar`, VS Code Marketplace publish. Details and status in
+[PLAN.md](PLAN.md) Phase 4.
 
 Decisions and stories live in [PLAN.md](PLAN.md) and [TRACKER.csv](TRACKER.csv).
 

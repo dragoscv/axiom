@@ -1,9 +1,9 @@
 # Checks: predicates and profiles (v2)
 
 `@codai/axiom-checks` runs a list of `CheckRef`s over a `ManifestBundle` and
-returns a `CheckReport`. There is no expression language in v2.0: every check is
-a **typed predicate** with a Zod-validated `params` object. CEL predicates are a
-v2.2 item (S-301).
+returns a `CheckReport`. Every check is a **typed predicate** with a
+Zod-validated `params` object; `expr.cel` (S-301) is one such predicate whose
+param is a CEL expression evaluated over the same facts.
 
 ```json
 { "id": "no-env", "predicate": "path.deny", "params": { "globs": [".env*"] }, "severity": "error" }

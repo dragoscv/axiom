@@ -38,8 +38,10 @@ export const PlanArtifactSourceSchema = z.discriminatedUnion("type", [
       digest: DigestRefSchema,
     })
     .strict(),
-  // Reserved: accepted by the schema so v2.0 tooling can parse v2.1 plans,
-  // but no v2.0 engine resolves it (compile rejects with ERR_UNSUPPORTED_OP).
+  // Template source (D-13, S-207): resolved at compile time by an injected
+  // EmitterRegistry (e.g. @codai/axiom-emitters-web); `params` are part of the
+  // planDigest, the emitter version only of the manifestDigest. Without a
+  // registry entry compile fails with ERR_UNSUPPORTED_OP.
   z
     .object({
       type: z.literal("template"),
@@ -48,7 +50,7 @@ export const PlanArtifactSourceSchema = z.discriminatedUnion("type", [
       params: z.record(z.string(), z.json()).default({}),
     })
     .strict()
-    .describe("v2.1"),
+    .describe("template source rendered by a registered emitter at compile time"),
 ]);
 
 export const PlanArtifactSchema = z

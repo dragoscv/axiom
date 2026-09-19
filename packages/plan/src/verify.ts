@@ -18,7 +18,12 @@ export interface VerifyResult {
   manifestDigest?: DigestRef;
   /** Manifest is sorted/unique per §2.4 and `manifestDigest` equals sha256(JCS(manifest)). */
   canonical: boolean;
-  /** v2.0 never verifies DSSE signatures; a policy can still require one. */
+  /**
+   * Always `false` here: structural verification has no trust store. Signature
+   * verification needs a root (`.axiom/trust/keys.json`) and is layered on top by
+   * `axiom verify --root` / `axiom_manifest_verify` (mcp `keys.ts`) and by the
+   * `signature.*` predicates in `@codai/axiom-checks`.
+   */
   signed: false;
   /** Artifacts whose digest has no inline blob. Not an error — apply resolves via CAS/ref. */
   missing: string[];

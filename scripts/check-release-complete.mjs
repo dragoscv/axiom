@@ -14,7 +14,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { readJson, REPO_ROOT, report, STRICT, workspacePackages } from "./_guard-lib.mjs";
+import { REPO_ROOT, readJson, report, STRICT, workspacePackages } from "./_guard-lib.mjs";
 
 const REGISTRY = process.env.NPM_CONFIG_REGISTRY ?? "https://registry.npmjs.org";
 const TIMEOUT_MS = 8_000;

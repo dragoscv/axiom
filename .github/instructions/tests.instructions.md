@@ -17,7 +17,7 @@ Run one package with `pnpm --filter @codai/axiom-<pkg> test`; everything with
   fails a test with no `expect(`/`fc.assert(`, and any
   `expect(true).toBe(true)` / `indexOf(...) < .length` tautology.
 - **`.skip`/`.todo` need a reason** — a comment on the same or previous line
-  naming the blocker or tracker id (`// S-201: PR mode lands in v2.1`).
+  naming the blocker or tracker id (`// S-401: patch source not yet in schema`).
 - **Filesystem tests use a fresh tmp root** (`mkdtemp` under `os.tmpdir()`,
   removed in `afterEach`). Never write into the repo, never depend on `cwd`.
 - **Invariants are properties.** Use `fast-check` (`fc.assert(fc.property(...))`)

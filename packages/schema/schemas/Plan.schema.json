@@ -173,7 +173,7 @@
                   "template"
                 ],
                 "additionalProperties": false,
-                "description": "v2.1"
+                "description": "template source rendered by a registered emitter at compile time"
               }
             ]
           }
