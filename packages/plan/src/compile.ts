@@ -23,6 +23,7 @@ import {
 } from "@codai/axiom-schema";
 import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
 import { casGet, casPut } from "./cas.js";
+import { applyPatchText } from "./patch.js";
 import { type RefNetOptions, resolveRef } from "./ref.js";
 import type { EmitterRegistry } from "./template.js";
 
@@ -48,6 +49,13 @@ export interface CompileOptions {
    * resolves offline, anything else is `ERR_NET_DISABLED`. Needs `root`.
    */
   net?: RefNetOptions;
+  /**
+   * Pre-image reader for `patch` sources: current bytes of `relPath` under the root, or
+   * `undefined` when absent. Defaults to reading `<root>/<relPath>` from disk; tests and
+   * the gate may inject one. Without a root and without this, patch sources fail
+   * `ERR_PATCH_PREIMAGE`.
+   */
+  readPreImage?: (relPath: string) => Promise<Uint8Array | undefined>;
 }
 
 export interface CompileResult {
@@ -205,7 +213,78 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Sou
     }
     case "template":
       return renderTemplate(a, src, opts);
+    case "patch":
+      return applyPatchSource(a, src, opts);
   }
+}
+
+async function defaultReadPreImage(root: string, relPath: string): Promise<Uint8Array | undefined> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  try {
+    return new Uint8Array(await readFile(join(root, ...relPath.split("/"))));
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+async function applyPatchSource(
+  a: PlanArtifact,
+  src: { format: "unified" | "v4a" | "search-replace"; preImage: string; body: string },
+  opts: CompileOptions,
+): Promise<SourceBytes> {
+  const read =
+    opts.readPreImage ??
+    (opts.root === undefined
+      ? undefined
+      : (rel: string) => defaultReadPreImage(opts.root as string, rel));
+  if (read === undefined) {
+    throw new AxiomError("ERR_PATCH_PREIMAGE", "patch source needs a root to read the pre-image", {
+      path: a.path,
+      details: { preImage: src.preImage },
+    });
+  }
+  const current = await read(a.path);
+  const actual = current === undefined ? "absent" : `sha256:${sha256Hex(current)}`;
+  if (actual !== src.preImage) {
+    throw new AxiomError(
+      "ERR_PATCH_PREIMAGE",
+      current === undefined
+        ? "patch pre-image is absent under the root"
+        : "file under the root does not match the patch pre-image",
+      { path: a.path, details: { expected: src.preImage, actual } },
+    );
+  }
+  let text: string;
+  try {
+    text = current === undefined ? "" : new TextDecoder("utf-8", { fatal: true }).decode(current);
+  } catch {
+    throw new AxiomError("ERR_PATCH_PREIMAGE", "patch pre-image is not valid UTF-8", {
+      path: a.path,
+    });
+  }
+  let out: string;
+  try {
+    out = applyPatchText(src.format, src.body, text);
+  } catch (err) {
+    if (err instanceof AxiomError) {
+      throw new AxiomError(err.code, err.message, {
+        path: a.path,
+        cause: err,
+        ...(err.details === undefined ? {} : { details: err.details }),
+      });
+    }
+    throw err;
+  }
+  const bytes = utf8Bytes(out);
+  if (bytes.length > INLINE_CONTENT_MAX) {
+    throw new AxiomError("ERR_BLOB_TOO_LARGE", `patched content is ${bytes.length} bytes`, {
+      path: a.path,
+      details: { bytes: bytes.length, max: INLINE_CONTENT_MAX },
+    });
+  }
+  return { bytes };
 }
 
 async function resolveArtifact(a: PlanArtifact, opts: CompileOptions): Promise<Resolved> {
@@ -242,16 +321,22 @@ function digestOnlyPlan(plan: Plan, digests: ReadonlyMap<string, string>): Recor
       const out: Record<string, unknown> = { path: a.path, mode: a.mode, op: a.op };
       if (a.source !== undefined) {
         const digest = `sha256:${digests.get(a.path) ?? ""}`;
-        out.source =
-          a.source.type === "template"
-            ? {
-                type: "template",
-                emitter: a.source.emitter,
-                template: a.source.template,
-                params: a.source.params,
-                digest,
-              }
-            : { type: a.source.type, digest };
+        if (a.source.type === "template") {
+          out.source = {
+            type: "template",
+            emitter: a.source.emitter,
+            template: a.source.template,
+            params: a.source.params,
+            digest,
+          };
+        } else if (a.source.type === "patch") {
+          // D-17 acceptance: a patch plan and the equivalent inline plan must have the same
+          // planDigest — the plan digest is about *what content lands*, not how it was
+          // expressed. The pre-image is bound by S-402 (`ManifestBody.preImage`), not here.
+          out.source = { type: "inline", digest };
+        } else {
+          out.source = { type: a.source.type, digest };
+        }
       }
       return out;
     });

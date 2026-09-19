@@ -191,6 +191,42 @@ describe("EBNF productions", () => {
     });
   });
 
+  it("source patch: Format (Digest | absent) HereDoc → Plan patch source; body gets its final newline back", () => {
+    const d = `"sha256:${"d".repeat(64)}"`;
+    const src = wrap(
+      `intent "x"\nartifact "a" { op overwrite patch unified ${d} <<P\n@@ -1,1 +1,1 @@\n-old\n+new\nP\n }\nartifact "b" { patch v4a absent <<P\n*** Begin Patch\n*** Add File: b\n+hi\n*** End Patch\nP\n }\nartifact "c" { patch search-replace absent <<P\n<<<<<<< SEARCH\n=======\nx\n>>>>>>> REPLACE\nP\n }`,
+    );
+    const r = parseAxm(src);
+    expect(r.diagnostics.filter((x) => x.severity === "error")).toEqual([]);
+    expect(r.plan?.artifacts[0]?.source).toEqual({
+      type: "patch",
+      format: "unified",
+      preImage: `sha256:${"d".repeat(64)}`,
+      body: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+    });
+    expect(r.plan?.artifacts[1]?.source).toMatchObject({
+      type: "patch",
+      format: "v4a",
+      preImage: "absent",
+    });
+    expect(r.plan?.artifacts[2]?.source).toMatchObject({ type: "patch", format: "search-replace" });
+    // formatAxm round-trips byte-for-byte through parseAxm
+    const again = parseAxm(formatAxm(r.plan as Plan));
+    expect(again.plan).toEqual(r.plan);
+  });
+
+  it("source patch: unknown format → schema error at the format token; bad pre-image word → error", () => {
+    const bad = firstError(
+      wrap('intent "x"\nartifact "a" { patch fuzzy absent <<P\n-x\n+y\nP\n }'),
+    );
+    expect(bad.range.start).toEqual({ line: 4, column: 22 });
+    const word = firstError(
+      wrap('intent "x"\nartifact "a" { patch unified missing <<P\n-x\n+y\nP\n }'),
+    );
+    expect(word.message).toMatch(/absent/);
+    expect(word.range.start).toEqual({ line: 4, column: 30 });
+  });
+
   it("check: id using QualIdent [Json]; params default {}; malformed predicate → schema error at predicate", () => {
     const p = parseAxm(
       minimal('check a using content.noSecrets\ncheck b using path.deny {"globs":["x"]}'),

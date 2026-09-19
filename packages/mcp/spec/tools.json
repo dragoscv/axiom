@@ -186,7 +186,8 @@
                       "inline",
                       "template",
                       "cas",
-                      "ref"
+                      "ref",
+                      "patch"
                     ]
                   }
                 },
@@ -600,6 +601,9 @@
                   "ERR_EMITTER_UNKNOWN",
                   "ERR_TEMPLATE_UNKNOWN",
                   "ERR_TEMPLATE_PARAMS",
+                  "ERR_PATCH_FORMAT",
+                  "ERR_PATCH_PREIMAGE",
+                  "ERR_PATCH_NO_MATCH",
                   "ERR_GIT_NOT_FOUND",
                   "ERR_GIT_NOT_REPO",
                   "ERR_GIT_DIRTY",
@@ -1093,6 +1097,9 @@
                 "ERR_EMITTER_UNKNOWN",
                 "ERR_TEMPLATE_UNKNOWN",
                 "ERR_TEMPLATE_PARAMS",
+                "ERR_PATCH_FORMAT",
+                "ERR_PATCH_PREIMAGE",
+                "ERR_PATCH_NO_MATCH",
                 "ERR_GIT_NOT_FOUND",
                 "ERR_GIT_NOT_REPO",
                 "ERR_GIT_DIRTY",
@@ -1365,6 +1372,9 @@
                 "ERR_EMITTER_UNKNOWN",
                 "ERR_TEMPLATE_UNKNOWN",
                 "ERR_TEMPLATE_PARAMS",
+                "ERR_PATCH_FORMAT",
+                "ERR_PATCH_PREIMAGE",
+                "ERR_PATCH_NO_MATCH",
                 "ERR_GIT_NOT_FOUND",
                 "ERR_GIT_NOT_REPO",
                 "ERR_GIT_DIRTY",
@@ -1783,6 +1793,48 @@
                         ],
                         "additionalProperties": false,
                         "description": "template source rendered by a registered emitter at compile time"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "patch"
+                          },
+                          "format": {
+                            "type": "string",
+                            "enum": [
+                              "unified",
+                              "v4a",
+                              "search-replace"
+                            ]
+                          },
+                          "preImage": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^sha256:[a-f0-9]{64}$",
+                                "description": "sha256:<64 lowercase hex>"
+                              },
+                              {
+                                "type": "string",
+                                "const": "absent"
+                              }
+                            ]
+                          },
+                          "body": {
+                            "type": "string",
+                            "maxLength": 262144
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "format",
+                          "preImage",
+                          "body"
+                        ],
+                        "additionalProperties": false,
+                        "description": "patch applied at compile time to the pre-image named by its digest"
                       }
                     ]
                   }
@@ -1911,6 +1963,9 @@
                   "ERR_EMITTER_UNKNOWN",
                   "ERR_TEMPLATE_UNKNOWN",
                   "ERR_TEMPLATE_PARAMS",
+                  "ERR_PATCH_FORMAT",
+                  "ERR_PATCH_PREIMAGE",
+                  "ERR_PATCH_NO_MATCH",
                   "ERR_GIT_NOT_FOUND",
                   "ERR_GIT_NOT_REPO",
                   "ERR_GIT_DIRTY",

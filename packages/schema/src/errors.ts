@@ -51,10 +51,17 @@ export const ERROR_CODES = [
   "ERR_TRUST_STATE_CORRUPT",
   /** Rollback of a partially committed apply itself failed; the tree may be inconsistent. */
   "ERR_ROLLBACK",
-  // template sources (v2.1)
+  // template sources
   "ERR_EMITTER_UNKNOWN",
   "ERR_TEMPLATE_UNKNOWN",
   "ERR_TEMPLATE_PARAMS",
+  // patch sources (D-17)
+  /** Patch body is not parseable in the declared format. */
+  "ERR_PATCH_FORMAT",
+  /** The file under the root does not hash to the declared `preImage`. */
+  "ERR_PATCH_PREIMAGE",
+  /** A hunk's context / search block did not match exactly once. */
+  "ERR_PATCH_NO_MATCH",
   // git (PR mode)
   "ERR_GIT_NOT_FOUND",
   "ERR_GIT_NOT_REPO",

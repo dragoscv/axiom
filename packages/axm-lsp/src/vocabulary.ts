@@ -82,6 +82,11 @@ export const KEYWORDS: Readonly<Record<string, KeywordDoc>> = {
     doc: '`template emitter.name "template" {…}` — rendered at compile time by a registered emitter (e.g. `web.next-page` from @codai/axiom-emitters-web); the JSON object is the template `params`.',
     snippet: 'template ${1:emitter} "${2:template}" {$0}',
   },
+  patch: {
+    depth: 2,
+    doc: '`patch unified|v4a|search-replace "sha256:<pre-image>"|absent <<TERM … TERM` — a diff applied at compile time to the file under the root, which must hash to the pre-image; exact matching only (D-17).',
+    snippet: "patch ${1|unified,v4a,search-replace|} ${2:absent} <<${3:EOF}\n$0\n${3:EOF}",
+  },
   cas: {
     depth: 2,
     doc: '`cas "sha256:<64 hex>"` — content addressed from the `.axiom/cas` store.',

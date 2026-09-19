@@ -53,6 +53,7 @@ export const ModeKw = keyword("ModeKw", "mode");
 export const OpKw = keyword("OpKw", "op");
 export const Inline = keyword("Inline", "inline");
 export const Template = keyword("Template", "template");
+export const Patch = keyword("Patch", "patch");
 export const Cas = keyword("Cas", "cas");
 export const Ref = keyword("Ref", "ref");
 export const Check = keyword("Check", "check");
@@ -242,6 +243,7 @@ export const allTokens = [
   OpKw,
   Inline,
   Template,
+  Patch,
   Cas,
   Ref,
   Check,

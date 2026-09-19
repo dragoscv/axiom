@@ -374,6 +374,129 @@ describe("compilePlan — sources", () => {
   });
 });
 
+describe("compilePlan — patch sources (D-17)", () => {
+  const pre = "line one\nline two\nline three\n";
+  const preDigest = `sha256:${sha256Hex(pre)}` as const;
+  const patchArtifact = (
+    body: string,
+    extra: Partial<{
+      preImage: string;
+      format: "unified" | "v4a" | "search-replace";
+      path: string;
+    }> = {},
+  ): PlanInput["artifacts"][number] => ({
+    path: extra.path ?? "notes.txt",
+    op: "overwrite",
+    source: {
+      type: "patch",
+      format: extra.format ?? "unified",
+      preImage: (extra.preImage ?? preDigest) as `sha256:${string}`,
+      body,
+    },
+  });
+  const body = "@@ -1,3 +1,3 @@\n line one\n-line two\n+LINE TWO\n line three\n";
+
+  it("reads the pre-image from the root, applies, and content-addresses the RESULT (origin: patch)", async () => {
+    const root = await tmp();
+    await writeFile(join(root, "notes.txt"), pre);
+    const { bundle } = await compilePlan(plan([patchArtifact(body)]), { root });
+    const a = bundle.manifest.artifacts[0];
+    expect(a?.origin).toBe("patch");
+    const expected = "line one\nLINE TWO\nline three\n";
+    expect(a?.digest?.sha256).toBe(sha256Hex(expected));
+    expect(a?.bytes).toBe(Buffer.byteLength(expected));
+    // the blob is the full patched content, not the diff
+    const blob = bundle.blobs[`sha256:${sha256Hex(expected)}`];
+    expect(blob).toMatchObject({ encoding: "utf8", data: expected });
+  });
+
+  it("planDigest equals the equivalent inline plan's; manifestDigest differs only by origin", async () => {
+    const root = await tmp();
+    await writeFile(join(root, "notes.txt"), pre);
+    const viaPatch = await compilePlan(plan([patchArtifact(body)]), { root });
+    const viaInline = await compilePlan(
+      plan([
+        {
+          path: "notes.txt",
+          op: "overwrite",
+          source: { type: "inline", content: "line one\nLINE TWO\nline three\n" },
+        },
+      ]),
+    );
+    expect(viaPatch.bundle.manifest.planDigest).toBe(viaInline.bundle.manifest.planDigest);
+    expect(viaPatch.bundle.manifest.artifacts[0]?.digest).toEqual(
+      viaInline.bundle.manifest.artifacts[0]?.digest,
+    );
+  });
+
+  it("ERR_PATCH_PREIMAGE when the file under the root differs, is absent, or no root/reader is given", async () => {
+    const root = await tmp();
+    await writeFile(join(root, "notes.txt"), `${pre}extra\n`);
+    const e1 = await expectAxiom(
+      compilePlan(plan([patchArtifact(body)]), { root }),
+      "ERR_PATCH_PREIMAGE",
+    );
+    expect(e1.path).toBe("notes.txt");
+    expect(e1.details).toMatchObject({ expected: preDigest });
+    const empty = await tmp();
+    const e2 = await expectAxiom(
+      compilePlan(plan([patchArtifact(body)]), { root: empty }),
+      "ERR_PATCH_PREIMAGE",
+    );
+    expect(e2.details).toMatchObject({ actual: "absent" });
+    await expectAxiom(compilePlan(plan([patchArtifact(body)])), "ERR_PATCH_PREIMAGE");
+    // absent declared but file exists
+    await writeFile(join(empty, "notes.txt"), pre);
+    await expectAxiom(
+      compilePlan(plan([patchArtifact(body, { preImage: "absent" })]), { root: empty }),
+      "ERR_PATCH_PREIMAGE",
+    );
+  });
+
+  it("ERR_PATCH_NO_MATCH and ERR_PATCH_FORMAT carry the artifact path", async () => {
+    const root = await tmp();
+    await writeFile(join(root, "notes.txt"), pre);
+    const nm = await expectAxiom(
+      compilePlan(plan([patchArtifact("@@ -1,2 +1,2 @@\n line one\n-nope\n+x\n")]), { root }),
+      "ERR_PATCH_NO_MATCH",
+    );
+    expect(nm.path).toBe("notes.txt");
+    const fm = await expectAxiom(
+      compilePlan(plan([patchArtifact("garbage", { format: "v4a" })]), { root }),
+      "ERR_PATCH_FORMAT",
+    );
+    expect(fm.path).toBe("notes.txt");
+  });
+
+  it("injected readPreImage lets a gate compile patches without touching disk; `absent` + v4a Add File creates", async () => {
+    const files = new Map<string, string>([["notes.txt", pre]]);
+    const readPreImage = async (rel: string) => {
+      const v = files.get(rel);
+      return v === undefined ? undefined : new TextEncoder().encode(v);
+    };
+    const add = "*** Begin Patch\n*** Add File: new.md\n+# New\n*** End Patch\n";
+    const { bundle } = await compilePlan(
+      plan([
+        patchArtifact(body),
+        { path: "new.md", source: { type: "patch", format: "v4a", preImage: "absent", body: add } },
+      ]),
+      { readPreImage },
+    );
+    expect(bundle.manifest.artifacts.map((a) => a.path)).toEqual(["new.md", "notes.txt"]);
+    expect(bundle.manifest.artifacts[0]?.digest?.sha256).toBe(sha256Hex("# New\n"));
+  });
+
+  it("ERR_PATCH_PREIMAGE when the pre-image is not UTF-8 (binary files cannot be patched)", async () => {
+    const root = await tmp();
+    const bin = Buffer.from([0xff, 0xfe, 0x00, 0x01]);
+    await writeFile(join(root, "notes.txt"), bin);
+    await expectAxiom(
+      compilePlan(plan([patchArtifact(body, { preImage: `sha256:${sha256Hex(bin)}` })]), { root }),
+      "ERR_PATCH_PREIMAGE",
+    );
+  });
+});
+
 describe("compilePlan — template sources", () => {
   const strParams = {
     safeParse(input: unknown) {

@@ -51,6 +51,22 @@ export const PlanArtifactSourceSchema = z.discriminatedUnion("type", [
     })
     .strict()
     .describe("template source rendered by a registered emitter at compile time"),
+  // Patch source (D-17, S-401): the agent ships a diff instead of the whole file.
+  // Compile reads the current file under the root, requires its sha256 to equal
+  // `preImage` (ERR_PATCH_PREIMAGE), applies the patch with EXACT matching only
+  // (ERR_PATCH_NO_MATCH) and content-addresses the result — so Manifest, checks and
+  // apply never see a patch, only bytes. Fuzzy matching is deliberately absent: two
+  // machines must derive identical content from one Plan.
+  z
+    .object({
+      type: z.literal("patch"),
+      format: z.enum(["unified", "v4a", "search-replace"]),
+      /** sha256 of the file the patch was authored against, or `absent` for a new file. */
+      preImage: z.union([DigestRefSchema, z.literal("absent")]),
+      body: z.string().max(INLINE_CONTENT_MAX),
+    })
+    .strict()
+    .describe("patch applied at compile time to the pre-image named by its digest"),
 ]);
 
 export const PlanArtifactSchema = z

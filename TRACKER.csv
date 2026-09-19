@@ -53,7 +53,7 @@ D-20,decision,4,verify --tree scope: manifest paths + preImage set (A),done,owne
 D-21,decision,4,in-toto predicate axiom.dev/attestation/apply/v1 + actions/attest opt-in,done,owner,,answer recorded in PLAN.md §1,2026-09-19
 D-22,decision,4,2.1.0 repair: manual -Missing publish now (A) + trusted publishing --allow-publish for 2.2.0 (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 B; revised 2026-09-20 A now + B before v2.2.0 tag
 D-23,decision,4,2.2.0 scope = S-401..S-414 (all four extras in),done,owner,,answer recorded in PLAN.md §1,2026-09-19 ~12 agent-days
-S-401,story,4,patch artifact source (unified/v4a/search-replace; exact applier),todo,agent,D-17,golden fixture + property: patch plan digest == equivalent inline plan digest,
+S-401,story,4,patch artifact source (unified/v4a/search-replace; exact applier),done,agent,D-17,golden fixture + property: patch plan digest == equivalent inline plan digest,2026-09-20 plan-patch planDigest == plan-patch-inline (bbde5073); vitest 1132
 S-402,story,4,preImage[] in ManifestBody; check records; apply re-verifies,todo,agent,S-401,ERR_PREIMAGE_CHANGED across separate check/apply calls; golden re-pinned,
 S-403,story,4,axiom verify --tree + axiom-verify-action + in-toto attestation,todo,agent,S-402,action fails a PR with a drifted tree; gh attestation verify passes,
 S-404,story,4,Gate v2: fail-closed; V4A; hookSpecificOutput; ACS vocabulary; shell scan,todo,agent,D-18,unknown tool -> deny; echo x > .env -> deny; e2e p95 recorded,

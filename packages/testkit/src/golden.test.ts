@@ -21,4 +21,17 @@ describe("golden manifests", async () => {
       expect(actual).toEqual(expected);
     });
   }
+
+  it("D-17: a patch plan and its inline twin share planDigest and artifact digests (only origin differs)", async () => {
+    const byName = new Map(cases.map((c) => [c.name, c]));
+    const patch = byName.get("plan-patch");
+    const inline = byName.get("plan-patch-inline");
+    if (patch === undefined || inline === undefined) throw new Error("golden twins missing");
+    const a = await compileGolden(patch.planPath);
+    const b = await compileGolden(inline.planPath);
+    expect(a.planDigest).toBe(b.planDigest);
+    expect(a.artifacts).toEqual(b.artifacts);
+    // manifestDigest differs because `origin` (patch vs inline) is recorded per artifact.
+    expect(a.manifestDigest).not.toBe(b.manifestDigest);
+  });
 });

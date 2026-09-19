@@ -1,0 +1,47 @@
+{
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Plan",
+  "name": "golden-patch",
+  "intent": "One patch source per format (unified, v4a, search-replace) plus a v4a Add File against an absent pre-image. Pins D-17 exact-match semantics and that the planDigest equals the inline-equivalent plan (see plan-patch-inline).",
+  "artifacts": [
+    {
+      "path": "src/greet.ts",
+      "op": "overwrite",
+      "source": {
+        "type": "patch",
+        "format": "unified",
+        "preImage": "sha256:f375e907c8a692cb5e7db0868915aad3bdac62c8c408e8441299ca38dcd8bff6",
+        "body": "--- a/src/greet.ts\n+++ b/src/greet.ts\n@@ -1,5 +1,5 @@\n export function greet(name: string): string {\n-  return `Hello, ${name}!`;\n+  return `Hello, ${name}! Welcome.`;\n }\n \n-export const VERSION = \"1.0.0\";\n+export const VERSION = \"1.1.0\";\n"
+      }
+    },
+    {
+      "path": "README.md",
+      "op": "overwrite",
+      "source": {
+        "type": "patch",
+        "format": "v4a",
+        "preImage": "sha256:33e9347f6320823d8dace9985408ef14a1c590caa7f81338facd7ac4aaa87c10",
+        "body": "*** Begin Patch\n*** Update File: README.md\n@@ ## Usage\n-Run it.\n+Run it with `pnpm start`.\n+\n+## License\n+\n+MIT\n*** End Patch\n"
+      }
+    },
+    {
+      "path": "CHANGELOG.md",
+      "source": {
+        "type": "patch",
+        "format": "v4a",
+        "preImage": "absent",
+        "body": "*** Begin Patch\n*** Add File: CHANGELOG.md\n+# Changelog\n+\n+## 1.1.0\n+\n+- greet: welcome suffix\n*** End Patch\n"
+      }
+    },
+    {
+      "path": "src/greet.ts.bak",
+      "source": {
+        "type": "patch",
+        "format": "search-replace",
+        "preImage": "absent",
+        "body": "<<<<<<< SEARCH\n=======\nbackup of greet\n>>>>>>> REPLACE\n"
+      }
+    }
+  ],
+  "checks": []
+}

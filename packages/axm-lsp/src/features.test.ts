@@ -149,7 +149,7 @@ describe("completion", () => {
 
   it("offers artifact-body keywords inside an artifact", () => {
     const got = labels(MINIMAL, "op create\n    ");
-    expect(got).toEqual(["mode", "op", "inline", "template", "cas", "ref"]);
+    expect(got).toEqual(["mode", "op", "inline", "template", "patch", "cas", "ref"]);
   });
 
   it("offers file-level keywords at depth 0", () => {

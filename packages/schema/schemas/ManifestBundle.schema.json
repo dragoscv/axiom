@@ -81,7 +81,8 @@
                   "inline",
                   "template",
                   "cas",
-                  "ref"
+                  "ref",
+                  "patch"
                 ]
               }
             },

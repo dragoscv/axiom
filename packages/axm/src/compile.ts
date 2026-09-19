@@ -296,6 +296,34 @@ class Compiler {
       };
       return out;
     }
+    const patch = first(nodes(ctx, "patchSource"));
+    if (patch !== undefined) {
+      const pc = patch.children as Children;
+      const f = first(tokens(pc, "format"));
+      const d = first(tokens(pc, "preImage"));
+      const ab = first(tokens(pc, "absent"));
+      const h = first(tokens(pc, "body"));
+      this.at(`${path}.format`, tokenRange(f));
+      this.at(`${path}.preImage`, tokenRange(d ?? ab ?? f));
+      this.at(`${path}.body`, tokenRange(h));
+      if (ab !== undefined && ab.image !== "absent") {
+        this.error(
+          'patch pre-image must be a "sha256:…" digest or the word absent',
+          tokenRange(ab),
+        );
+      }
+      const payload = h?.payload as HereDocPayload | undefined;
+      // The heredoc strips the newline before the terminator; patch bodies are line-oriented,
+      // so give the parsers a terminated last line.
+      const body = payload === undefined ? "" : `${payload.content}\n`;
+      return {
+        type: "patch",
+        format: (f?.image ?? "") as "unified",
+        preImage:
+          d !== undefined ? (decodeString(d.image) as `sha256:${string}`) : ("absent" as const),
+        body,
+      };
+    }
     return undefined;
   }
 

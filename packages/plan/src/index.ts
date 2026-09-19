@@ -9,6 +9,17 @@ export {
 } from "./compile.js";
 export { diffManifests, type ManifestChange, type ManifestDiff } from "./diff.js";
 export {
+  applyParsedPatch,
+  applyPatchText,
+  type Hunk,
+  type ParsedPatch,
+  type PatchFormat,
+  parsePatch,
+  parseSearchReplace,
+  parseUnified,
+  parseV4A,
+} from "./patch.js";
+export {
   hostAllowed,
   REF_BYTES_MAX,
   REF_TIMEOUT_MS,

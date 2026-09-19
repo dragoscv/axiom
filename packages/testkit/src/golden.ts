@@ -29,10 +29,25 @@ export async function listGoldenCases(dir: string = GOLDEN_DIR): Promise<GoldenC
     });
 }
 
-/** Compile a golden plan with a fixed toolchain; no clock, so the output is fully deterministic. */
+/**
+ * Compile a golden plan with a fixed toolchain; no clock, so the output is fully deterministic.
+ * `patch` sources read their pre-image from `<name>.preimage/<relPath>` next to the plan
+ * (absent file → `absent`), so a fixture stays self-contained and never touches a real root.
+ */
 export async function compileGolden(planPath: string): Promise<GoldenExpected> {
   const plan: unknown = JSON.parse(await readFile(planPath, "utf8"));
-  const { bundle } = await compilePlan(plan, { toolchain: { axiom: "2.0.0" } });
+  const preimageDir = planPath.replace(/\.plan\.json$/, ".preimage");
+  const { bundle } = await compilePlan(plan, {
+    toolchain: { axiom: "2.0.0" },
+    readPreImage: async (rel) => {
+      try {
+        return new Uint8Array(await readFile(join(preimageDir, ...rel.split("/"))));
+      } catch (err) {
+        if ((err as { code?: string }).code === "ENOENT") return undefined;
+        throw err;
+      }
+    },
+  });
   return {
     manifestDigest: bundle.manifestDigest,
     planDigest: bundle.manifest.planDigest,

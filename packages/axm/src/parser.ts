@@ -8,7 +8,8 @@
  *   PlanItem    = "intent" String | "profile" Ident | "capabilities" "[" [Cap {"," Cap}] "]"
  *               | "artifact" String ArtifactBody | "check" Ident "using" QualIdent [Json] | "meta" Json ;
  *   ArtifactBody= "{", { "mode" Mode | "op" Op | Source }, "}" ;
- *   Source      = "inline" HereDoc | "template" QualIdent String [Json] | "cas" Digest | "ref" String Digest ;
+ *   Source      = "inline" HereDoc | "template" QualIdent String [Json] | "cas" Digest | "ref" String Digest
+ *               | "patch" Format ( Digest | "absent" ) HereDoc ;      Format = unified | v4a | search-replace
  *   QualIdent   = Ident, { ".", Ident } ;
  */
 import { CstParser, type IToken } from "chevrotain";
@@ -103,7 +104,18 @@ export class AxmParser extends CstParser {
       { ALT: () => this.SUBRULE(this.templateSource) },
       { ALT: () => this.SUBRULE(this.casSource) },
       { ALT: () => this.SUBRULE(this.refSource) },
+      { ALT: () => this.SUBRULE(this.patchSource) },
     ]);
+  });
+
+  public patchSource = this.RULE("patchSource", () => {
+    this.CONSUME(T.Patch);
+    this.CONSUME(T.IdentLike, { LABEL: "format" });
+    this.OR([
+      { ALT: () => this.CONSUME(T.Digest, { LABEL: "preImage" }) },
+      { ALT: () => this.CONSUME2(T.IdentLike, { LABEL: "absent" }) },
+    ]);
+    this.CONSUME(T.HereDoc, { LABEL: "body" });
   });
 
   public inlineSource = this.RULE("inlineSource", () => {

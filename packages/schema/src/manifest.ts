@@ -44,7 +44,7 @@ export const ManifestArtifactSchema = z
     /** Absent only for `delete`. */
     digest: DigestSchema.optional(),
     bytes: z.int().nonnegative().optional(),
-    origin: z.enum(["inline", "template", "cas", "ref"]).optional(),
+    origin: z.enum(["inline", "template", "cas", "ref", "patch"]).optional(),
   })
   .strict()
   .superRefine((a, ctx) => {

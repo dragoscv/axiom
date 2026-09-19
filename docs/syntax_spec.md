@@ -22,7 +22,9 @@ PlanItem    = "intent", String                        (* required, once *)
             | "meta", Json ;                          (* JSON object, once *)
 Cap         = "fs" | "net" | "secret" | "ai" | "compute" | "git" ;
 ArtifactBody= "{", { "mode", ("0644"|"0755") | "op", ("create"|"overwrite"|"delete") | Source }, "}" ;
-Source      = "inline", HereDoc | "template", QualIdent, String, [ Json ] | "cas", Digest | "ref", String, Digest ;
+Source      = "inline", HereDoc | "template", QualIdent, String, [ Json ] | "cas", Digest | "ref", String, Digest
+            | "patch", Format, ( Digest | "absent" ), HereDoc ;
+Format      = "unified" | "v4a" | "search-replace" ;
 HereDoc     = "<<", Ident, NEWLINE, { ANY }, NEWLINE, Ident ;
 QualIdent   = Ident, { ".", Ident } ;          Digest = '"sha256:' 64*HEXDIG '"' ;
 Ident       = ? [A-Za-z0-9_][A-Za-z0-9_-]* ? ; String = ? JSON string ? ;
@@ -45,6 +47,7 @@ where `Ident` is expected (`plan check { … }` names a plan `check`).
 | `cas "sha256:…"` | `source: {type:"cas", digest}` | |
 | `ref "uri" "sha256:…"` | `source: {type:"ref", uri, digest}` | `file:`/`https:` only |
 | `template e.m "t" {…}` | `source: {type:"template", emitter, template, params}` | rendered at compile time by a registered emitter (see [emitters.md](emitters.md)) |
+| `patch unified "sha256:…" <<P … P` | `source: {type:"patch", format, preImage, body}` | `body` is the heredoc plus a final newline (patches are line-oriented); `absent` in place of the digest for a new file; exact matching only ([plan-format.md](plan-format.md#patch-sources)) |
 | `check ID using g.name {…}` | `checks[]: {id, predicate, params, severity:"error"}` | params default `{}`; unknown predicate ids are accepted here — the checks registry decides at runtime |
 | `meta {…}` | `metadata` | `{}` when omitted |
 

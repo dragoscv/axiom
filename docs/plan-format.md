@@ -91,6 +91,7 @@ Op semantics at apply time:
 | `cas` | `digest: DigestRef` | Bytes must already be at `<root>/.axiom/cas/sha256/<aa>/<hex>`; missing → `ERR_BLOB_MISSING`. |
 | `ref` | `uri: url` (`file:` or `https:` only), `digest: DigestRef` | Pinned external content. Resolved from the CAS when the digest is already there; otherwise fetched **only** with `--allow-net` (see [Ref sources](#ref-sources)). Needs a `root`; without one → `ERR_REF_OFFLINE`. |
 | `template` | `emitter: string`, `template: string`, `params: record` (default `{}`) | Rendered at compile time by an emitter from the caller-supplied `EmitterRegistry` (see [Template sources](#template-sources)); the rendered bytes then follow the `inline` path. No registry / unknown emitter → `ERR_EMITTER_UNKNOWN`; unknown template → `ERR_TEMPLATE_UNKNOWN`; bad params → `ERR_TEMPLATE_PARAMS`. |
+| `patch` | `format: unified \| v4a \| search-replace`, `preImage: DigestRef \| "absent"`, `body: string` (≤ 256 KiB) | A diff instead of the whole file (see [Patch sources](#patch-sources)). Compile reads the file under the root, requires its sha256 to equal `preImage` (`ERR_PATCH_PREIMAGE`), applies the patch with exact matching only (`ERR_PATCH_NO_MATCH`), and content-addresses the *result*; unparseable body → `ERR_PATCH_FORMAT`. Needs a root (or an injected pre-image reader). |
 
 ### Ref sources
 
@@ -141,6 +142,35 @@ Digest rules: `params` are inputs, so they are hashed into `planDigest`
 toolchain, so it is hashed into `manifestDigest` only. Rendered output must be deterministic —
 see [emitters.md](emitters.md) for the contract, the `web` catalogue and how to author one.
 
+### Patch sources
+
+`{ type: "patch", format, preImage, body }` lets an agent ship what it already produces — a
+diff — instead of the whole file. Three formats are parsed into one hunk model:
+
+| `format` | Accepted text |
+|----------|---------------|
+| `unified` | `@@ -a,b +c,d @@` hunks with ` `/`-`/`+` lines; `---`/`+++` headers optional; `\ No newline at end of file` honoured |
+| `v4a` | OpenAI/Codex `apply_patch` text for **one** file: `*** Begin Patch` … `*** Update File: p` with `@@`/`@@ <context>` chunks and `*** End of File`, or `*** Add File: p` with `+` lines (requires `preImage: "absent"`). `*** Move to:` and multi-file patches are rejected |
+| `search-replace` | Aider blocks `<<<<<<< SEARCH` … `=======` … `>>>>>>> REPLACE`; optional ``` fences |
+
+**Matching is exact (D-17).** Each hunk's block (context + removed lines) must occur exactly
+once at or after the previous hunk; a `unified` line-number hint disambiguates identical
+blocks, a `v4a` `@@ <line>` anchor must itself match once and the block is searched after it.
+No whitespace trimming, no fuzz factor: two machines must derive identical bytes from one
+Plan or the manifest is not content-addressed. Agents that want tolerance apply it *before*
+emitting the Plan.
+
+**Pre-image binding.** `preImage` is the sha256 of the file the diff was authored against
+(`"absent"` for a new file). Compile reads `<root>/<path>` and fails `ERR_PATCH_PREIMAGE`
+when it does not hash to that value, so a stale diff can never be applied to a moved target.
+The pre-image must be UTF-8 text.
+
+**Digests.** The Manifest never sees the patch: the artifact carries the digest of the
+*patched* bytes, `origin: "patch"`, and the blob is the full content. `planDigest` treats a
+patch source exactly like an inline source with the same result — a Plan expressed as
+diffs and the same Plan expressed inline have the **same** `planDigest` (golden fixtures
+`plan-patch` / `plan-patch-inline`); only `manifestDigest` differs, through `origin`.
+
 ### `CheckRef`
 
 | Field | Type | Constraint |
@@ -187,7 +217,7 @@ ubuntu/windows/macos in CI.
 | `mode` | `0644 \| 0755` | |
 | `digest` | `Digest` | required unless `op` is `delete` (`ERR_INVALID_MANIFEST`); sha256 of the exact bytes written — no newline or BOM normalisation |
 | `bytes` | int ≥ 0 | optional; decoded size |
-| `origin` | `inline \| template \| cas \| ref` | optional; where the bytes came from |
+| `origin` | `inline \| template \| cas \| ref \| patch` | optional; where the bytes came from |
 
 ### `ManifestBundle` — what moves between tools
 
@@ -305,6 +335,9 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_EMITTER_UNKNOWN` | `template` source names an emitter that is not in the compile-time registry (or no registry was given) |
 | `ERR_TEMPLATE_UNKNOWN` | the emitter exists but has no template with that name |
 | `ERR_TEMPLATE_PARAMS` | `template.params` fail the template's Zod schema (details carry `issues`) |
+| `ERR_PATCH_FORMAT` | `patch.body` is not parseable in the declared `format` (details: `format`, `line`) |
+| `ERR_PATCH_PREIMAGE` | the file under the root does not hash to `patch.preImage` (or is absent / not UTF-8 / no root given); details carry `expected`, `actual` |
+| `ERR_PATCH_NO_MATCH` | a hunk's block or `@@` anchor did not match exactly once (details: `hunk`, `matches`, `searchedFromLine`, `block`) |
 | `ERR_REF_OFFLINE` | `ref` source compiled without a root, or applied while its blob is not in the CAS |
 | `ERR_NET_DISABLED` | `ref` not in the CAS and `--allow-net` not given (details: `host`, redacted `uri`) |
 | `ERR_NET_DENIED` | `ref` refused by policy: not `https:` (`file:` without `--allow-file`), credentials in the URI, host not in `--net-allow` |

@@ -1,0 +1,22 @@
+{
+  "manifestDigest": "sha256:5d577b0513ea0773a9798091d3f4e7d864574400cc04430c84c4dddb3a104605",
+  "planDigest": "sha256:bbde50734d06574bc07f8ec403d6497f35f8a5833131ea77fb14e6198bc02e25",
+  "artifacts": [
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "f30f460aa44bf01d2fbfd6f94d17512a3eb3db27fb4f5a9cd451e0e118421c64"
+    },
+    {
+      "path": "README.md",
+      "sha256": "1dc04c51de4bff754c5002b2845b880727f6cc5c4a0763fc9b0061d8b6abf1bf"
+    },
+    {
+      "path": "src/greet.ts",
+      "sha256": "247c88e218c510d9618a11d3384a5040afe25a08b8e4613946c5cd4859288c4b"
+    },
+    {
+      "path": "src/greet.ts.bak",
+      "sha256": "8822f95085d9137058abe292218d5bb40dd4dd77ba94f8ae28ccc2638af422b5"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Plan",
+  "name": "golden-patch",
+  "intent": "One patch source per format (unified, v4a, search-replace) plus a v4a Add File against an absent pre-image. Pins D-17 exact-match semantics and that the planDigest equals the inline-equivalent plan (see plan-patch-inline).",
+  "artifacts": [
+    {
+      "path": "src/greet.ts",
+      "op": "overwrite",
+      "source": {
+        "type": "inline",
+        "content": "export function greet(name: string): string {\n  return `Hello, ${name}! Welcome.`;\n}\n\nexport const VERSION = \"1.1.0\";\n"
+      }
+    },
+    {
+      "path": "README.md",
+      "op": "overwrite",
+      "source": {
+        "type": "inline",
+        "content": "# demo\n\nIntro paragraph.\n\n## Usage\n\nRun it with `pnpm start`.\n\n## License\n\nMIT\n"
+      }
+    },
+    {
+      "path": "CHANGELOG.md",
+      "source": {
+        "type": "inline",
+        "content": "# Changelog\n\n## 1.1.0\n\n- greet: welcome suffix\n"
+      }
+    },
+    {
+      "path": "src/greet.ts.bak",
+      "source": {
+        "type": "inline",
+        "content": "backup of greet\n"
+      }
+    }
+  ],
+  "checks": []
+}

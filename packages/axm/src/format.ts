@@ -47,6 +47,12 @@ function source(a: PlanArtifact, indent: string): string | undefined {
       }
       return `${indent}template ${s.emitter} ${str(s.template)} ${JSON.stringify(s.params)}`;
     }
+    case "patch": {
+      // The parser re-adds the newline the heredoc strips, so drop exactly one here.
+      const body = s.body.endsWith("\n") ? s.body.slice(0, -1) : s.body;
+      const pre = s.preImage === "absent" ? "absent" : str(s.preImage);
+      return `${indent}patch ${s.format} ${pre} ${hereDoc(body)}`;
+    }
   }
 }
 
