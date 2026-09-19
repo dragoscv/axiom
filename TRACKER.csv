@@ -46,3 +46,24 @@ D-13,decision,0,Template emitters as v2.1 plugin,done,owner,,answer recorded,del
 D-14,decision,2,LSP: hand-written vscode-languageserver (B) not Langium (A),done,agent,S-204,rationale in packages/axm-lsp/README.md,Langium derives all services from a .langium Grammar AST -> second grammar that can drift; .axm is small enough to hand-write completion/hover/symbols
 D-16,decision,3,Manifest signing: detached DSSE/Ed25519 over JCS body + per-root trust store + integer counter (A),done,agent,S-302,rationale in PLAN.md D-16,envelope outside canonical body so manifestDigest unchanged; keyid = full hex sha256(raw 32-byte pubkey) treated as hint; private key only via AXIOM_SIGNING_KEY or --key-file; state advanced only on applied; ported from codai rules-core acceptManifest minus EXPIRED/UNBOUND (no clock in hashed data); root not bound into payload by design
 D-15,decision,3,CEL engine: @marcbachmann/cel-js 8.0.0 (A) not own subset (B),done,agent,S-301,rationale in PLAN.md D-15,cel-js lib has no Date.now/Math.random; timestamp/duration family denied via function allowlist; unlistedVariablesAreDyn=false + limits (depth 24 / 2000 nodes) + 100 ms budget + literal RE2-safe matches; lazy import keeps eager MCP bundle at 880.2 KB
+D-17,decision,4,patch source matching: exact only (A),done,owner,,answer recorded in PLAN.md §1,2026-09-19 rec A; formats unified/v4a/search-replace
+D-18,decision,4,gate default fail-closed for writes + shell write-primitive scan (A),done,owner,,answer recorded in PLAN.md §1,2026-09-19 rec A; OWASP ACS #32
+D-19,decision,4,MCP 2026-07-28 wire default in 2.2.0 with --wire 2025 fallback (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 owner chose B over rec A
+D-20,decision,4,verify --tree scope: manifest paths + preImage set (A),done,owner,,answer recorded in PLAN.md §1,2026-09-19 rec A
+D-21,decision,4,in-toto predicate axiom.dev/attestation/apply/v1 + actions/attest opt-in,done,owner,,answer recorded in PLAN.md §1,2026-09-19
+D-22,decision,4,2.1.0 repair via trusted publishing --allow-publish then re-run release.yml (B),done,owner,,answer recorded in PLAN.md §1,2026-09-19 owner step; axm-lsp@2.1.0 uninstallable until done
+D-23,decision,4,2.2.0 scope = S-401..S-414 (all four extras in),done,owner,,answer recorded in PLAN.md §1,2026-09-19 ~12 agent-days
+S-401,story,4,patch artifact source (unified/v4a/search-replace; exact applier),todo,agent,D-17,golden fixture + property: patch plan digest == equivalent inline plan digest,
+S-402,story,4,preImage[] in ManifestBody; check records; apply re-verifies,todo,agent,S-401,ERR_PREIMAGE_CHANGED across separate check/apply calls; golden re-pinned,
+S-403,story,4,axiom verify --tree + axiom-verify-action + in-toto attestation,todo,agent,S-402,action fails a PR with a drifted tree; gh attestation verify passes,
+S-404,story,4,Gate v2: fail-closed; V4A; hookSpecificOutput; ACS vocabulary; shell scan,todo,agent,D-18,unknown tool -> deny; echo x > .env -> deny; e2e p95 recorded,
+S-405,story,4,MCP SDK v2 behind adapter.ts; 2026 wire default,todo,agent,D-19,conformance --requirements 2026-07-28 green on scored scenarios; --wire 2025 smoke,
+S-406,story,4,tasks extension: long guard.external + chunked plan build,todo,agent,S-405,brivio full guard suite (75) runs through AXIOM; sealed digest == one-shot digest,
+S-407,story,4,Idempotency + error-code hygiene (drifted create; 7 untested codes; split overloaded codes),todo,agent,,every ERROR_CODE raised and asserted; corrupt-journal recovery test,
+S-408,story,4,Predicate quality: noSecrets PAN/UUID; requireCompanion mustChange; route-group escape; guard evidence,todo,agent,,metu zero-UUID fixture passes; mustChange fails on existing-only companion,
+S-409,story,4,Signing hardening: root-bound payload; signed state.json; CI key ceremony,todo,agent,,cross-root replay test fails closed,
+S-410,story,4,Doc/code drift sweep + check-stale-markers guard,todo,agent,,guard green; LSP hover for template/pr correct,
+S-411,story,4,expr.cedar fact provider (cedar-wasm),todo,agent,S-405,vector suite like cel-vectors; offline; ACS mapping doc,
+S-412,story,4,VS Code extension on Marketplace,todo,owner,,ext install codai.axiom-axm works,needs publisher account (owner)
+S-413,story,4,2.1.0 repair + release-complete guard + bootstrap -Missing,todo,owner,D-22,npm view every pkg@2.1.0 dist.attestations present,
+S-414,story,4,codai AXIOM_APPLY default-on after eval arm,todo,agent,S-401;S-404,eval arm numbers in docs/integration/codai.md; default flipped only if not worse,
