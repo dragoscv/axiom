@@ -15,7 +15,7 @@ S-001,story,0,Commit uncommitted 1.0.21-1.0.24 tree,done,agent,,git status clean
 S-002,story,0,Archive root reports/scratch/outputs to docs/archive/v1,done,agent,D-08,root contains only living files,
 S-003,story,0,Fix pnpm-workspace allowBuilds; relocate/delete workflows/ci.yml,done,agent,,pnpm install clean,
 S-004,story,0,Write PLAN.md + TRACKER.csv,done,agent,,both files exist and agree,
-S-005,story,0,Tag v1.0.24-final; deprecate 1.x after 2.0.0,blocked,owner,S-109,npm deprecate output,owner: npm login; scripts/release-bootstrap.ps1 -Publish (CI publish 404 - trusted publishing is per package); add trusted publishers; then deprecate 1.x
+S-005,story,0,Tag v1.0.24-final; deprecate 1.x after 2.0.0,done,owner,S-109,npm deprecate output,2026-09-19: 2.0.0 published manually (7 pkgs; npx @codai/axiom-mcp@2.0.0 --version = 2.0.0); all 51 1.x versions across 8 v1 packages deprecated (verified from raw registry JSON)
 S-101,story,1,Workspace reset (catalog TS7 tsdown Biome Vitest5 Changesets),done,agent,D-06,lint typecheck test build green Win+Ubuntu,
 S-102,story,1,schema package,done,agent,S-101,schema tests 100%; json-schema fresh guard,
 S-103,story,1,canon package (JCS sha256 in-toto),done,agent,S-101,RFC8785 vectors; fast-check roundtrip,

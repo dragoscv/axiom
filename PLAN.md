@@ -90,7 +90,7 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 | S-002 | `git mv` all root reports/scratch/outputs to `docs/archive/v1/`; add `.gitignore` for `out*/`, `test-results/`, `*-app/`, `.axiom/` | todo |
 | S-003 | Fix `pnpm-workspace.yaml` (`allowBuilds` placeholder), move `workflows/ci.yml` under `.github/` or delete | todo |
 | S-004 | Write `PLAN.md` + `TRACKER.csv` (this) | doing |
-| S-005 | Tag `v1.0.24-final`; `npm deprecate` 1.x after v2.0.0 ships | todo |
+| S-005 | Tag `v1.0.24-final`; `npm deprecate` 1.x after v2.0.0 ships | done |
 
 ### Phase 1 — v2.0.0 (minimal shippable) — est. 9 agent-days
 | ID | Story | Acceptance | Status |
