@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runChecks } from "../run.js";
 import { makeBundle, profileWith } from "../test-helpers.test-helpers.js";
-import { SECRET_PATTERNS } from "./content.js";
+import { cnpValid, SECRET_PATTERNS } from "./content.js";
 
 const one = (predicate: string, params: unknown, severity: "error" | "warn" | "info" = "error") =>
   profileWith([{ id: predicate, predicate, params: params as never, severity }]);
@@ -67,31 +67,147 @@ describe("path.*", () => {
 
 describe("content.noSecrets", () => {
   const samples: Record<string, string> = {
-    cnp: "cnp 1960101123456 here",
-    email: "contact me at john.doe@example.com",
+    cnp: "cnp 1800101221144 here", // valid: S=1 1980-01-01 county 22 control 4
+    email: "contact me at john.doe@gmail.com",
     phoneRo: "call 0722123456",
     card: "card 4111 1111 1111 1111",
-    credentialAssignment: 'password = "hunter22"',
+    credentialAssignment: 'password = "tR0ub4dor&3x9"',
     awsKey: "AKIAIOSFODNN7EXAMPLE",
     githubToken: `ghp_${"a".repeat(36)}`,
     privateKey: "-----BEGIN RSA PRIVATE KEY-----",
     jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc_-123",
     slackToken: "xoxb-1234",
   };
+  const PII = new Set(["cnp", "email", "phoneRo", "card"]);
   it("has a sample for every pattern", () => {
     expect(Object.keys(samples).sort()).toEqual(SECRET_PATTERNS.map((p) => p.name).sort());
+    expect(SECRET_PATTERNS.filter((p) => p.kind === "pii").map((p) => p.name)).toEqual([...PII]);
   });
   for (const [name, text] of Object.entries(samples)) {
-    it(`catches ${name}`, async () => {
+    it(`catches ${name}${PII.has(name) ? " (pii: true)" : ""}`, async () => {
       const b = makeBundle([{ path: "x.txt", content: text }]);
-      const r = await ids(b, "content.noSecrets", {});
+      const r = await ids(b, "content.noSecrets", { pii: true });
       expect(r.verdict).toBe("fail");
       expect(r.ids).toContain(`content.noSecrets.${name}`);
     });
   }
+  it("PII patterns are OFF by default (S-414): secrets still caught, PII not", async () => {
+    for (const name of PII) {
+      const b = makeBundle([{ path: "x.txt", content: samples[name]! }]);
+      const r = await ids(b, "content.noSecrets", {});
+      expect(r.verdict, name).toBe("pass");
+      expect(r.ids).toEqual([]);
+    }
+    for (const name of Object.keys(samples).filter((n) => !PII.has(n))) {
+      const b = makeBundle([{ path: "x.txt", content: samples[name]! }]);
+      expect((await ids(b, "content.noSecrets", {})).ids, name).toContain(
+        `content.noSecrets.${name}`,
+      );
+    }
+  });
   it("passes clean content", async () => {
     const b = makeBundle([{ path: "x.txt", content: "export const a = 1;\n" }]);
     expect((await ids(b, "content.noSecrets", {})).verdict).toBe("pass");
+  });
+  describe("credentialAssignment precision (S-414 OSS corpus: 107/3240 files were false positives)", () => {
+    const clean = [
+      "def f(token: str) -> None: ...", // type annotation
+      'token = var.set("testvalue")', // contextvars — the anyio case
+      "token = TrioBackend.current_token()", // runtime value
+      "token = None",
+      "permissions:\n  token: write", // GitHub Actions YAML
+      "    token=token)",
+      ":param token: the token\n:raises",
+      'password = os.environ["DB_PASSWORD"]',
+      "password = getpass()",
+      'secret = "${SECRET}"', // interpolation
+      'api_key = "<your-api-key>"', // placeholder
+      'password = "changeme"',
+      'password = "hunter2"', // 7 chars
+      'token = "{{ vault_token }}"',
+      'PASSWORD = "my_actual_password"', // alembic tutorial placeholder
+      'secret = "xxxxxxxxxxxx"',
+      "apiKey: config.apiKey,",
+      'password: "password"',
+      'const token = "test_value"',
+    ];
+    for (const text of clean) {
+      it(`does not flag ${JSON.stringify(text)}`, async () => {
+        const b = makeBundle([{ path: "x.py", content: text }]);
+        expect((await ids(b, "content.noSecrets", {})).ids).not.toContain(
+          "content.noSecrets.credentialAssignment",
+        );
+      });
+    }
+    const hot = [
+      'password = "tR0ub4dor&3x9"',
+      "PASSWORD = 'tiger^5HHH-prod'",
+      'api_key: "sk-live-9f8e7d6c5b4a3210"',
+      "client_secret = `Q7v9zL2pX4mK8nR1`",
+      'DB_PASSWORD="S3cure!Pass2026"',
+      "auth_token = 'AbCdEf123456GhIj'",
+      'token: "ya29.a0AfH6SMBx"',
+    ];
+    for (const text of hot) {
+      it(`still flags ${JSON.stringify(text)}`, async () => {
+        const b = makeBundle([{ path: "x.py", content: text }]);
+        expect((await ids(b, "content.noSecrets", {})).ids).toContain(
+          "content.noSecrets.credentialAssignment",
+        );
+      });
+    }
+  });
+  describe("email precision (pii: true)", () => {
+    const clean = [
+      "git clone git@github.com:agronholm/anyio.git",
+      'authors = [{ name = "Jane", email = "jane@example.com" }]',
+      "user@example.org, root@localhost, x@test, y@invalid",
+      "Co-authored-by: bot <12345+bot@users.noreply.github.com>",
+      "noreply@company.io",
+      "icon docset-icon@2x.png",
+      "jane@doe.invalid",
+    ];
+    for (const text of clean) {
+      it(`does not flag ${JSON.stringify(text)}`, async () => {
+        const b = makeBundle([{ path: "x.md", content: text }]);
+        expect((await ids(b, "content.noSecrets", { pii: true })).ids).not.toContain(
+          "content.noSecrets.email",
+        );
+      });
+    }
+    for (const text of ["hs@ox.cx", "alex.gronholm@nextday.fi", "contact: ion.popescu@firma.ro"]) {
+      it(`still flags ${text}`, async () => {
+        const b = makeBundle([{ path: "x.toml", content: text }]);
+        expect((await ids(b, "content.noSecrets", { pii: true })).ids).toContain(
+          "content.noSecrets.email",
+        );
+      });
+    }
+  });
+  describe("cnp precision (pii: true): checksum + date + county", () => {
+    const clean = [
+      "ts = 1000000000000", // epoch ms
+      "isbn 9782070409341",
+      "1234567890123",
+      "1384043025000",
+      "1800101221145", // valid shape, wrong control digit
+      "1801301221144", // month 13
+    ];
+    for (const text of clean) {
+      it(`does not flag ${text}`, async () => {
+        const b = makeBundle([{ path: "x.py", content: text }]);
+        expect((await ids(b, "content.noSecrets", { pii: true })).ids).not.toContain(
+          "content.noSecrets.cnp",
+        );
+      });
+    }
+    it("cnpValid accepts known-valid CNPs and rejects a single-digit change", () => {
+      for (const cnp of ["1800101221144", "2960519400015", "5030101070001"]) {
+        expect(cnpValid(cnp), cnp).toBe(true);
+        const flipped = `${cnp.slice(0, 12)}${(Number(cnp[12]) + 1) % 10}`;
+        expect(cnpValid(flipped), flipped).toBe(false);
+      }
+    });
   });
   describe("card false positives (S-408, metu zero-UUID)", () => {
     const clean = [
@@ -105,7 +221,7 @@ describe("content.noSecrets", () => {
     for (const text of clean) {
       it(`does not flag ${JSON.stringify(text)}`, async () => {
         const b = makeBundle([{ path: "x.ts", content: text }]);
-        const r = await ids(b, "content.noSecrets", {});
+        const r = await ids(b, "content.noSecrets", { pii: true });
         expect(r.ids).not.toContain("content.noSecrets.card");
       });
     }
@@ -119,7 +235,7 @@ describe("content.noSecrets", () => {
     for (const pan of pans) {
       it(`still flags Luhn-valid PAN ${pan}`, async () => {
         const b = makeBundle([{ path: "x.ts", content: `card ${pan} end` }]);
-        const r = await ids(b, "content.noSecrets", {});
+        const r = await ids(b, "content.noSecrets", { pii: true });
         expect(r.ids).toContain("content.noSecrets.card");
       });
     }
@@ -130,7 +246,9 @@ describe("content.noSecrets", () => {
           content: "user 00000000-0000-0000-0000-000000000000 paid with 4111111111111111",
         },
       ]);
-      expect((await ids(b, "content.noSecrets", {})).ids).toContain("content.noSecrets.card");
+      expect((await ids(b, "content.noSecrets", { pii: true })).ids).toContain(
+        "content.noSecrets.card",
+      );
     });
   });
   it("respects disable", async () => {

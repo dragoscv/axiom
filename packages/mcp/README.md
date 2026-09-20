@@ -197,8 +197,10 @@ home dir; `--no-root-discovery` disables), else `--root`, else the process cwd (
 one place where cwd is acceptable: the harness spawns the hook in the project directory and owns
 that value). Relative targets stay relative to `cwd`.
 Profile = `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.axiom/gate-profile.json` →
-built-in `{ deny: [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"], noSecrets: true }`.
-Schema: `{ deny: string[], allow?: string[], noSecrets: boolean, maxBytes?: number }` (strict).
+built-in `{ deny: [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"], noSecrets: true, pii: false }`.
+Schema: `{ deny: string[], allow?: string[], noSecrets: boolean, pii: boolean, maxBytes?: number }` (strict).
+`pii: true` additionally scans for personal data (`cnp`, `email`, `phoneRo`, `card`) — off by default
+since S-414 (maintainer e-mails in `pyproject.toml` denied real edits; see `docs/checks.md`).
 
 `gate` is a separate lazy chunk (`dist/gate-lazy.js`, no MCP SDK): in-process p95 ≈ 5 ms per payload,
 end-to-end ≈ 150–200 ms including node startup; `check-gate-latency` guards p95 ≤ 250 ms.

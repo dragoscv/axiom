@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -186,8 +186,8 @@ describe("gate: profile", () => {
     await home.cleanup();
   });
 
-  it("schema: strict object, defaults deny=[] noSecrets=true", () => {
-    expect(GateProfileSchema.parse({})).toStrictEqual({ deny: [], noSecrets: true });
+  it("schema: strict object, defaults deny=[] noSecrets=true pii=false", () => {
+    expect(GateProfileSchema.parse({})).toStrictEqual({ deny: [], noSecrets: true, pii: false });
     expect(GateProfileSchema.safeParse({ deny: [], extra: 1 }).success).toBe(false);
     expect(GateProfileSchema.safeParse({ maxBytes: 0 }).success).toBe(false);
     expect(GateProfileSchema.safeParse(DEFAULT_GATE_PROFILE).success).toBe(true);
@@ -213,7 +213,7 @@ describe("gate: profile", () => {
     const explicit = join(repo.root, "custom.json");
     await writeFile(explicit, '{"deny":["custom/**"],"noSecrets":false}');
     const r = await loadGateProfile({ root: repo.root, home: home.root, profilePath: explicit });
-    expect(r.profile).toStrictEqual({ deny: ["custom/**"], noSecrets: false });
+    expect(r.profile).toStrictEqual({ deny: ["custom/**"], noSecrets: false, pii: false });
     expect(r.source).toBe(explicit);
   });
 
@@ -288,6 +288,23 @@ describe("gate: decisions", () => {
     expect(r.decision).toBe("deny");
     expect(r.code).toBe("content.noSecrets.awsKey");
     expect(r.path).toBe("src/cfg.ts");
+  });
+
+  it("PII (maintainer e-mail) passes the default gate; `pii: true` in the profile denies it", async () => {
+    const payload = copilot(
+      "create_file",
+      { filePath: "pyproject.toml", content: 'authors = [{ email = "hs@ox.cx" }]' },
+      repo.root,
+    );
+    const allow = await runGate(payload, opts());
+    expect(allow.decision).toBe("allow");
+
+    await mkdir(join(repo.root, ".axiom"), { recursive: true });
+    await writeFile(join(repo.root, ".axiom", "gate-profile.json"), '{"pii":true}');
+    const deny = await runGate(payload, opts());
+    expect(deny.decision).toBe("deny");
+    expect(deny.code).toBe("content.noSecrets.email");
+    await rm(join(repo.root, ".axiom"), { recursive: true, force: true });
   });
 
   it("Copilot apply_patch touching pnpm-lock.yaml → deny path.deny", async () => {

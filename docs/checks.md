@@ -98,11 +98,46 @@ non-fatal) against named regexes. `requires: manifest, content`.
 |-------|------|---------|
 | `disable` | string[] of pattern names | `[]` |
 | `allowPaths` | glob[] of paths to skip | `[]` |
+| `pii` | boolean — also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) | `false` |
 
-Pattern names (`SECRET_PATTERN_NAMES`): `cnp`, `email`, `phoneRo`, `card`,
-`credentialAssignment`, `awsKey`, `githubToken`, `privateKey`, `jwt`,
-`slackToken`. One finding per (artifact, pattern) with id
-`content.noSecrets.<name>` and `facts.pattern`.
+Pattern names (`SECRET_PATTERN_NAMES`), by kind:
+
+- **secret** (always on): `credentialAssignment`, `awsKey`, `githubToken`,
+  `privateKey`, `jwt`, `slackToken`.
+- **pii** (`PII_PATTERN_NAMES`, only with `pii: true`): `cnp`, `email`,
+  `phoneRo`, `card`.
+
+One finding per (artifact, pattern) with id `content.noSecrets.<name>` and
+`facts.pattern`.
+
+**Why PII is opt-in (S-414, 2026-09-20).** Replaying 30 OSS repositories'
+recent commits through the `default` profile rejected real, harmless edits:
+with every pattern on, 110 of 3240 files matched `email` (maintainer addresses
+in `pyproject.toml`, `git@github.com` in CONTRIBUTING, `user@example.com` in
+docs) and 107 matched the old `credentialAssignment` regex (`token: str`,
+`token = var.set(...)`, `token: write` in a workflow). Personal data in a
+source tree is a policy question for the profile owner (brivio and metu set
+`pii: true`); a write gate that refuses every commit touching `pyproject.toml`
+is not usable as a default.
+
+**Precision rules** (all corpus-derived; tests in `predicates.test.ts` pin both
+the false positives that must pass and the true positives that must still fail):
+
+- `credentialAssignment` matches only a **quoted literal ≥ 8 chars** after
+  `password|passwd|pwd|secret|token|api_key|access_key|auth_token|client_secret`
+  (optionally prefixed, `DB_PASSWORD=`), and skips placeholders
+  (`<your-api-key>`, `${SECRET}`, `{{ vault }}`, `%s_upgrades`, `changeme`,
+  `my_actual_password`, `xxxxxxxx`, `password`), interpolations and
+  identifier-shaped values without digits (`"keyring.backends.libsecret"`).
+  Type annotations, `None`, function calls and env lookups never match.
+  Remaining corpus hits: 9/3240 files — every one a real quoted credential in a
+  test or README (`password="password123"`, `WEBHOOK_TOKEN = "abc123def456"`).
+- `email` skips RFC 2606/6761 reserved domains (`example.*`, `.test`,
+  `.invalid`, `localhost`), `*@github.com` (incl. `users.noreply.github.com`),
+  `git@`/`noreply@` locals and asset pseudo-addresses (`icon@2x.png`).
+- `cnp` requires a valid Romanian CNP: month/day range, county 01–52/70 and the
+  mod-11 control digit (weights 279146358279) — epoch-millisecond timestamps,
+  ISBN-13s and big-int test vectors no longer match.
 
 `card` is not a bare digit-run regex: a 13–16-digit run (optional single space /
 hyphen separators) counts only if it passes the **Luhn** checksum, is not a single
@@ -113,7 +148,7 @@ UUIDs and sequential placeholders therefore pass; every real test PAN (Visa
 
 ```json
 { "id": "content.noSecrets", "predicate": "content.noSecrets",
-  "params": { "disable": ["email"], "allowPaths": ["docs/**", "**/*.test.ts"] } }
+  "params": { "pii": true, "disable": ["phoneRo"], "allowPaths": ["docs/**", "**/*.test.ts"] } }
 ```
 
 **Globs and Next.js route groups.** Every glob parameter (`path.*`, `allowPaths`,

@@ -58,6 +58,8 @@ export const GateProfileSchema = z
     allow: z.array(z.string().min(1)).optional(),
     /** Run `content.noSecrets` on the new content when the payload carries it. */
     noSecrets: z.boolean().default(true),
+    /** Also scan for PII (`cnp`, `email`, `phoneRo`, `card`) — `content.noSecrets { pii }`. */
+    pii: z.boolean().default(false),
     /** Run `content.maxBytes` on the new content when the payload carries it. */
     maxBytes: z.int().positive().optional(),
   })
@@ -77,6 +79,7 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
     "**/node_modules/**",
   ],
   noSecrets: true,
+  pii: false,
 };
 
 /** `--profile`, then `<root>/.axiom/gate-profile.json`, then `~/.axiom/gate-profile.json`, then default. */
@@ -702,7 +705,9 @@ export async function runGatePredicates(
     findings.push(...(await pathAllow.run(ctx, { globs: profile.allow })));
   const hasContent = targets.some((t) => t.target.content !== undefined);
   if (hasContent && profile.noSecrets)
-    findings.push(...(await contentNoSecrets.run(ctx, { disable: [], allowPaths: [] })));
+    findings.push(
+      ...(await contentNoSecrets.run(ctx, { disable: [], allowPaths: [], pii: profile.pii })),
+    );
   if (hasContent && profile.maxBytes !== undefined)
     findings.push(...(await contentMaxBytes.run(ctx, { max: profile.maxBytes })));
   const f = findings[0];
