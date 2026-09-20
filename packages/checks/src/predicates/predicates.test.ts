@@ -120,7 +120,8 @@ describe("content.noSecrets", () => {
       ":param token: the token\n:raises",
       'password = os.environ["DB_PASSWORD"]',
       "password = getpass()",
-      'secret = "${SECRET}"', // interpolation
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal `${…}` IS the fixture (shell interpolation placeholder)
+      'secret = "${SECRET}"',
       'api_key = "<your-api-key>"', // placeholder
       'password = "changeme"',
       'password = "hunter2"', // 7 chars

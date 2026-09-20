@@ -4,15 +4,15 @@ codai (`E:\gh\codai`) is the first consumer of AXIOM v2. Three touch points, in 
 
 | surface | status | where (in codai) |
 |---|---|---|
-| SWE harness opt-in write gate (`AXIOM_APPLY=1`) | **landed** 2026-09-18 | `packages/swe-harness/src/axiom-apply.ts` |
+| SWE harness write gate — **default ON** (`AXIOM_APPLY=0` opts out) | **landed** 2026-09-18, default flipped 2026-09-20 (S-414) | `packages/swe-harness/src/axiom-apply.ts` |
 | Copilot dev wiring (MCP server in the workspace) | landed | `.vscode/mcp.json` |
 | agent-core tool registration (RiskClass mapping, S-113) | design | `docs/design/axiom-write-gate-2026-09.md` |
 
 ## 1. SWE harness write gate
 
 codai's SWE harness resolves model-authored SEARCH/REPLACE blocks in memory and writes the result
-with plain `writeFile` (`TaskWorkspace.writeFiles`). Behind `process.env.AXIOM_APPLY === "1"` that
-one method now routes through AXIOM instead:
+through `TaskWorkspace.writeFiles`. Unless `process.env.AXIOM_APPLY === "0"` that one method routes
+through AXIOM (plain `writeFile` is the opt-out path):
 
 ```
 buildPlanFromEdits(root, edits, {taskId, intent})   // pure: Plan with final content per file
@@ -35,7 +35,13 @@ Contract points that matter to AXIOM:
 - codai types the results with local minimal interfaces (`bundle.manifestDigest`, `report.verdict`,
    `result.{manifestDigest,status,files,error}`). Renaming any of those fields in
    `@codai/axiom-schema` is a breaking change for codai — bump major.
-- Default is unchanged: with the flag unset, not a single AXIOM symbol is touched.
+- With `AXIOM_APPLY=0` not a single AXIOM symbol is touched.
+- A `checks` rejection the model caused (`repo.noOverwriteOf` on a lockfile,
+   `content.noSecrets.credentialAssignment`) is turned into an `edit_error` turn by
+   `gateRejectionFeedback()` so the model revises; compile/apply failures and `verdict: error`
+   propagate as job errors.
+- `WorkspaceInit.intent` (issue text head) lands in every Plan's `intent` and therefore in the
+   journal.
 
 Test: `packages/swe-harness/src/axiom-apply.test.ts` (vitest, the three packages `vi.mock`ed)
 asserts the Plan shape, that `confirmDigest === manifestDigest`, and that a `fail` verdict throws
@@ -113,8 +119,27 @@ drops straight into an OpenAI/Anthropic `function.parameters` field.
    `axiom_apply_dry_run`/`axiom_plan_compile`, so an approval prompt can show the digest it is about
    to commit.
 
-## After 2.0.0 publishes
+## 4. Default-on evidence (S-414, 2026-09-20)
 
-In codai: `pnpm install` (deps `@codai/axiom-{apply,checks,plan}@^2.0.0` are already declared in
-`packages/swe-harness/package.json`), then run one resolve worker with `AXIOM_APPLY=1` and compare
-resolve rate / latency against the fs path over a full eval arm before defaulting.
+The write step is a pure function of (tree, edits); if the gate produces the same bytes as plain
+fs writes, nothing downstream (tests, diff, verifier) can differ except through a rejection. So the
+comparison was an **offline paired arm on real git history** rather than an LLM-noise cloud arm:
+`packages/swe-harness/src/scripts/axiom-arm-bench.ts` in codai replays the post-commit contents of
+the last 40 non-merge commits of 27 OSS repos through the real `TaskWorkspace.writeFiles`, fs vs
+gate, into fresh worktrees, and byte-compares (rows: codai `docs/status/axiom-arm-2026-09-20.json`).
+
+| | |
+|---|---|
+| edit sets / files / bytes | 1043 / 2267 / 58.1 MB |
+| non-rejected trees byte-identical | **983 / 983**; rollbacks 0; exceptions 0 |
+| write-step p50 (fs → gate) | 1.9 ms → 60.5 ms (+58.7 ms; p95 7.3 → 236 ms) — a resolve turn is 10–60 s, so ≪ +10 % end-to-end |
+| gate rejections | 60 (5.8 %): 53 `repo.noOverwriteOf` (`uv.lock` 42, `poetry.lock` 10, `Cargo.lock` 1), 7 `content.noSecrets.credentialAssignment` (all genuine quoted credentials in tests/docs) |
+
+What the arm changed in AXIOM: the first run rejected 2 of the first 8 edit sets on
+`token = var.set("testvalue")` and a maintainer e-mail in `pyproject.toml` — false positives that
+became `@codai/axiom-checks` c36c818 (PII opt-in `pii: true`; credential-literal precision; CNP
+checksum; e-mail domain filters — see `docs/checks.md` §content.noSecrets). The vendored copy in
+codai (`vendor/axiom/*`, `scripts/ops/sync-axiom-vendor.ps1`) was re-synced before the run above.
+
+Owner decision: default ON, rejections fed back to the model as `edit_error`. A cloud arm on a
+fresh holdout remains the way to measure how often the model recovers from that feedback.
