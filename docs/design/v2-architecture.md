@@ -195,7 +195,7 @@ Resolution order in `apply`: `blobs` → CAS → ref. Missing → `ERR_BLOB_MISS
 
 ## 3. Checks engine
 
-**Decision: typed predicate registry, data-driven by JSON, no expression language in v2.0.** Reason: every v1 policy is `metric op literal` or a named scan **[src]**; predicates are deterministic, offline, trivially testable, and the SDK's `outputSchema` can describe them. A CEL subset is deferred to v2.2 behind the same `Predicate` interface. Alternatives: **own CEL subset** — grammar cost + duplicate chevrotain (cel-js pins 11, langium 4.4 needs 13 **[V]**); **JSONLogic** — `json-logic-js` last published 2024-07 **[V]**, untyped, no path facts; **`@marcbachmann/cel-js` 8.0** — viable for v2.2 evaluation.
+**Decision: typed predicate registry, data-driven by JSON, no expression language in v2.0.** Reason: every v1 policy is `metric op literal` or a named scan **[src]**; predicates are deterministic, offline, trivially testable, and the SDK's `outputSchema` can describe them. Expression languages arrived later behind the same `Predicate` interface: `expr.cel` (S-301, D-15, `@marcbachmann/cel-js` 8 with a closed function allowlist) and `expr.cedar` (S-411, D-25, optional `@cedar-policy/cedar-wasm`). Alternatives rejected at the time: **own CEL subset** — grammar cost + duplicate chevrotain (cel-js pins 11, langium 4.4 needs 13 **[V]**); **JSONLogic** — `json-logic-js` last published 2024-07 **[V]**, untyped, no path facts.
 
 ### 3.1 Types (`packages/checks/src`)
 ```ts

@@ -146,24 +146,27 @@ is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on 
 
 ## Status and roadmap
 
-**Shipped (2.1.0).** `schema`, `canon`, `plan` (inline + CAS + digest-pinned
-`ref` with `--allow-net`, `template` sources via [emitters](docs/emitters.md)),
+**Shipped (2.2.0).** `schema`, `canon`, `plan` (inline + CAS + digest-pinned
+`ref` with `--allow-net`, `template` sources via [emitters](docs/emitters.md),
+`patch` sources — unified / V4A / search-replace, exact match, pre-image bound),
 `checks` (17 built-in predicates incl. `expr.cel`, `expr.cedar`, `guard.external` and
-`manifest.requireSigned`; three profiles), `apply` (fs + dry-run + journal/rollback
-+ idempotency + `pr` mode with a spawn args array, no shell), `mcp` (stdio and
+`manifest.requireSigned`; three profiles; PII scanning opt-in), `apply` (fs + dry-run +
+journal/rollback + idempotency + `pr` mode with a spawn args array, no shell;
+`preImage[]` re-verified at commit), `axiom verify --tree [--attest]` with in-toto
+attestations + a composite GitHub action ([docs/verify-tree.md](docs/verify-tree.md)),
+`mcp` (MCP SDK v2 — 2026-07-28 wire and the 2025 era from one entry — stdio and
 streamable HTTP, 17 tools incl. background check tasks and chunked plan sessions,
-`axiom://` resources), `axiom gate --stdin` hook mode,
+`axiom://` resources), fail-closed `axiom gate --stdin` hook with the OWASP ACS
+verdict vocabulary,
 `.axm` DSL (Chevrotain) with an LSP + VS Code extension, DSSE/Ed25519 signing with
-key pinning + anti-rollback ([docs/signing.md](docs/signing.md)), `axiom gc` for the
+key pinning, anti-rollback and root-bound envelopes ([docs/signing.md](docs/signing.md)), `axiom gc` for the
 CAS ([docs/cas.md](docs/cas.md)), `axiom migrate v1` ([docs/migrate.md](docs/migrate.md)),
-`axiom_repo_snapshot`, repo guards, CI on three OSes.
+`axiom_repo_snapshot`, 18 repo guards, CI on three OSes. codai's SWE harness runs
+every write through the gate by default ([docs/integration/codai.md](docs/integration/codai.md)).
 
-**Next (2.2.0).** `patch` artifact source (unified / V4A / search-replace, exact
-match), pre-image binding in the manifest + `axiom verify --tree` ([docs/verify-tree.md](docs/verify-tree.md)) and a GitHub
-action with in-toto attestations, fail-closed gate v2 with the OWASP ACS verdict
-vocabulary, MCP 2026-07-28 wire via SDK v2, `tasks` for long guards and chunked
-plan builds, `expr.cedar`, VS Code Marketplace publish. Details and status in
-[PLAN.md](PLAN.md) Phase 4.
+**Pending owner steps.** VS Code Marketplace publish of `codai.axiom-axm` (the release
+workflow attaches the .vsix to every release and publishes once the `VSCE_PAT` secret
+exists); npm trusted publishing for the 2.2.0 tag. Details in [PLAN.md](PLAN.md) Phase 4.
 
 Decisions and stories live in [PLAN.md](PLAN.md) and [TRACKER.csv](TRACKER.csv).
 

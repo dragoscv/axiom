@@ -1,5 +1,238 @@
 # @codai/axiom-mcp
 
+## 2.2.0
+
+### Minor Changes
+
+- 801d29e: Idempotency and error-code hygiene (S-407).
+  
+  - **apply**: re-applying an already-applied digest whose files drifted now
+    proceeds for `create` artifacts too (committed as an overwrite, foreign bytes
+    backed up) instead of failing `ERR_EXISTS`; the re-written paths are reported
+    in the new `ApplyResult.drifted`. A commit failure whose rollback *also* fails
+    is now `error.code: ERR_ROLLBACK` (original error kept in message/details)
+    instead of the original code with a concatenated message.
+  - **schema**: new codes `ERR_FACT_DISABLED` (a predicate/provider disabled by
+    the profile or a CLI gate — previously overloaded onto `ERR_UNSUPPORTED_OP`)
+    and `ERR_TRUST_STATE_CORRUPT` (`.axiom/trust/state.json` unreadable/invalid —
+    previously reused `ERR_JOURNAL_CORRUPT`). `ERR_UNSUPPORTED_OP` now means only
+    "operation not implemented" (`axiom_repo_snapshot followSymlinks`).
+  - **checks**: `guard.external` gating findings carry `ERR_FACT_DISABLED`;
+    trust-state read/parse failures carry `ERR_TRUST_STATE_CORRUPT`.
+  - **mcp**: `axiom_manifest_verify` / `axiom verify --root` add
+    `signatures.code` (`ERR_SIGNATURE_MISSING` when the bundle has no signature,
+    `ERR_SIGNATURE_INVALID` otherwise); a non-JSON `state.json` is
+    `ERR_TRUST_STATE_CORRUPT`, not a raw `SyntaxError`.
+  - Repo guard `check-error-codes` now fails when any enum member is never raised
+    in `src` or never asserted in a behavioural test; behavioural tests added for
+    `ERR_DIGEST_FORMAT`, `ERR_SIZE_MISMATCH`, `ERR_JOURNAL_CORRUPT` (corrupt
+    journal → recovery still works), `ERR_GIT_NOT_FOUND`, `ERR_GIT_FAILED`
+    (non-zero exit and timeout), `ERR_SIGNATURE_MISSING`, `ERR_ROLLBACK`.
+- 50900d6: New predicate `expr.cedar` (S-411, D-25): Cedar policies over the same facts
+  `expr.cel` sees.
+  
+  - **checks**: `expr.cedar { policies, mode?: "forbid" | "permit", message?,
+    severity? }` runs one Cedar `isAuthorized` request per artifact — principal
+    `Axiom::Plan::"<name>"`, action `Axiom::Action::"<op>"`, resource
+    `Axiom::Artifact::"<path>"` (attrs `path`, `op`, `mode`, `ext`, `dir`, and
+    when present `sha256`, `bytes`, `origin`, `text`, `exists`), parent
+    `Axiom::Manifest::"<digest>"`, context `{ manifest, repo? }`. `mode: forbid`
+    (default) appends a permit-all so every `deny` is a per-path finding;
+    `mode: permit` is default-deny. Evaluated by `@cedar-policy/cedar-wasm`
+    4.13 declared as an **optional** dependency and imported lazily; a host
+    without it reports `ERR_PROVIDER_FAILED` (verdict `error`), never `pass`.
+    Any Cedar evaluation error (missing attribute, type error, overflow) is a
+    provider error — Cedar's "erroring policy does not apply" rule is not
+    inherited. Templates, > 256 policies and parse errors →
+    `ERR_PREDICATE_PARAMS`; 2 s wall-clock budget per manifest. 156-case
+    hand-authored vector suite (`cedar-vectors.json`) + purity test.
+  - **axm-lsp**: `expr.cedar` completion/hover; 17 built-ins in parity.
+  - **mcp**: declares the same optional dependency so `npm i @codai/axiom-mcp`
+    brings the WASM by default (`--no-optional` opts out; `expr.cedar` then
+    fails closed).
+  - Docs: `docs/checks.md` §expr.cedar including the OWASP Agent Control
+    Standard mapping (AXIOM = Guardian on the write channel; `allow`/`deny`
+    only) and why OPA/Rego was not chosen.
+- 5382984: Gate v2 (S-404, D-18) — `axiom gate --stdin`:
+  
+  - **Fail-closed by default.** Malformed payload, empty/oversized/timed-out stdin,
+    unreadable profile or any internal error now **deny** (`ERR_INTERNAL`, exit 2)
+    with a reason. `--fail-open` restores the 2.1 behaviour; `--strict` is
+    accepted and ignored.
+  - **Unknown write → deny.** A write-class tool whose target cannot be determined
+    (no recognised path key / V4A body) is denied `ERR_UNSUPPORTED_OP` instead of
+    silently allowed.
+  - **Shell scan.** `Bash`, `run_in_terminal`, `execute_command`, PowerShell and
+    friends are scanned for write primitives (`>`, `>>`, `tee`, `rm`, `mv`, `cp`,
+    `sed -i`, `dd of=`, `git checkout|restore|reset|rm|mv|stash|clean`,
+    `Set-Content`/`Remove-Item`/…); their operands go through the same
+    containment + profile checks. Documented heuristic; `--no-shell-scan` opts out.
+  - **Root discovery.** The payload `cwd` is walked up to the nearest `.git` or
+    repository `.axiom/` (never the home directory), so a sub-directory cwd still
+    sees `.git/**` and `.env` in the profile and loads the repo's gate profile.
+    Relative targets stay relative to `cwd`. `--no-root-discovery` opts out.
+  - **One deny document** on stdout: Claude `hookSpecificOutput`, Copilot flat
+    `permissionDecision`/`permissionDecisionReason`, and `axiom.verdict` in the
+    OWASP Agent Control Standard v0.1 vocabulary (`allow|deny|modify|ask|defer`)
+    plus `code`, `path`, `toolClass`.
+  - `GateResult` gains `verdict`, `toolClass`, `root`; `extractTargets` now returns
+    `{ cls, targets, undetermined }`.
+  - Measured e2e p50 89 ms / p95 104 ms (15 spawns, Windows, Node 26); gate chunk
+    283 KB, still SDK-free.
+- 6928def: MCP SDK v2 and the 2026-07-28 protocol revision (S-405, D-19):
+  
+  - **SDK v2.** `@modelcontextprotocol/sdk` 1.30 → `@modelcontextprotocol/server` 2.0.0, reached
+    through one seam, `src/adapter.ts` (new guard `check-sdk-adapter`: no other runtime module may
+    import the SDK; tests may import `@modelcontextprotocol/client`).
+  - **Two eras, one entry.** stdio is served by `serveStdio(factory)`, HTTP by `createMcpHandler`
+    for 2026-07-28 requests plus the sessionful transport for 2025-era clients routed by
+    `isLegacyRequest`. `axiom mcp --wire 2026|2025|2026-only` (default `2026` = both eras;
+    `2026-only` refuses `initialize` openings). Clients on SDK v1 keep working unchanged.
+  - **Cache hints (SEP-2549).** 2026-era `tools/list` / `resources/templates/list` /
+    `server/discover` carry `ttlMs: 300000, cacheScope: "public"`; `resources/read` 24 h public
+    (content-addressed); `resources/list` 10 s private. Capabilities now advertise
+    `listChanged: false` (the catalogue is static).
+  - **Bundle.** The SDK moved into the `mcp-lazy` / `http-lazy` chunks: eager `cli.js + cli-main.js`
+    dropped from 947 KB to 453 KB (limit 950 KB); `compile`/`verify`/`gate`/`apply` never load it.
+  - **Behaviour change.** An unknown tool is answered with JSON-RPC `-32602` (spec) instead of an
+    `isError` result — the two conformance scenarios that passed vacuously on that
+    (`tools-call-simple-text`, `tools-call-error`) moved to `baseline.yml`.
+- c36c818: `content.noSecrets`: PII patterns become opt-in and every pattern gets
+  corpus-derived precision (S-414).
+  
+  Replaying the recent commits of 30 OSS repositories through the `default`
+  profile (the codai SWE-harness write gate) rejected real, harmless edits: 110 of
+  3240 files matched `email` (maintainer addresses in `pyproject.toml`,
+  `git@github.com`, `user@example.com`) and 107 matched `credentialAssignment`
+  (`token: str`, `token = var.set(...)`, `token: write`).
+  
+  - **checks**: new param `pii: boolean` (default `false`). `cnp`, `email`,
+    `phoneRo`, `card` run only with `pii: true`; `credentialAssignment`, `awsKey`,
+    `githubToken`, `privateKey`, `jwt`, `slackToken` always run.
+    `credentialAssignment` now requires a quoted literal ≥ 8 chars and skips
+    placeholders/interpolations/identifier-shaped values (9/3240 corpus files
+    left, all real quoted credentials in tests/READMEs); `email` skips RFC
+    2606/6761 domains, `*@github.com`, `git@`/`noreply@` and asset
+    pseudo-addresses; `cnp` validates month/day/county and the mod-11 control
+    digit. `SECRET_PATTERNS[i].kind` (`"secret" | "pii"`) and
+    `PII_PATTERN_NAMES` exported.
+  - **mcp**: gate profile gains `pii: boolean` (default `false`), forwarded to
+    `content.noSecrets`.
+  
+  **Behaviour change**: a profile that relied on `params: {}` catching e-mails,
+  CNPs, Romanian phone numbers or card numbers must set `pii: true` (brivio and
+  metu profiles updated alongside this release).
+- b51eb33: `patch` artifact source (S-401, D-17): `{ type: "patch", format: "unified" |
+  "v4a" | "search-replace", preImage: "sha256:…" | "absent", body }`. Compile
+  reads the file under the root, requires it to hash to `preImage`
+  (`ERR_PATCH_PREIMAGE`), applies the diff with **exact** matching only
+  (`ERR_PATCH_NO_MATCH`; malformed body → `ERR_PATCH_FORMAT`) and
+  content-addresses the result, so Manifest, checks and apply never see a patch.
+  A patch plan and its inline twin share `planDigest` (golden fixtures
+  `plan-patch` / `plan-patch-inline`); `origin: "patch"` is recorded on the
+  artifact. Three parsers (unified diff, OpenAI/Codex V4A `apply_patch` text for
+  one file incl. `@@ context` anchors and `*** End of File`, Aider
+  SEARCH/REPLACE) feed one applier. `.axm` gains
+  `patch <format> ("sha256:…"|absent) <<HEREDOC`; the LSP completes and documents
+  it. `CompileOptions.readPreImage` lets callers (gate, tests) supply pre-images
+  without a filesystem root.
+- c8de39b: Pre-image binding (S-402). `ManifestBody.preImage[]` records, for every
+  artifact path, the sha256 (or `absent`) compile saw under the root — inside the
+  canonical body, so the same Plan compiled against two trees yields two
+  `manifestDigest`s while `planDigest` is unchanged. `runChecks` verifies it when
+  given a root and reports `CheckReport.preImage: verified | drifted |
+  unverified` (drift = `error` finding `manifest.preImage` with
+  `ERR_PREIMAGE_CHANGED`, verdict `error`). `apply` refuses a first apply on a
+  drifted tree with `ERR_PREIMAGE_CHANGED` (`details.phase: "prepare"`) before
+  staging anything; re-applies of an already-applied digest are exempt.
+  
+  **Manifest format change**: manifests compiled with a root now carry
+  `preImage`; the golden `plan-patch` digest is re-pinned. Manifests compiled
+  without a root (no `preImage`) are unchanged (`plan-basic` digest identical).
+- 38ff1c0: Signing hardening (S-409):
+  
+  - **Root-bound signatures.** New DSSE `payloadType`
+    `application/vnd.axiom.manifest-bound+json` signs `JCS({ manifest, rootId })`.
+    `TrustStore.rootId` (optional) makes a store accept only envelopes bound to
+    that id — unbound or otherwise-bound envelopes fail with the new
+    `signature.unbound` finding (`UNBOUND` / `ROOT_MISMATCH`). Stores without
+    `rootId` accept both forms (unchanged behaviour). `axiom sign --root-id <id>`,
+    `axiom trust root-id [<id> | --clear] --root .`; `signEnvelopeBound()` /
+    `AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE` in canon, `RootIdSchema` in schema.
+  - **Authenticated anti-rollback state.** `advanceTrustState` creates
+    `.axiom/trust/state.key` (32 random bytes, 0600) and writes
+    `state.json.mac = HMAC-SHA256(key, JCS(state))`. With a key on disk, a
+    `state.json` whose MAC is missing or wrong is `ERR_TRUST_STATE_CORRUPT`
+    (predicate → `verdict: error`; CLI/MCP → thrown), so `lastCounter` can no
+    longer be lowered by editing the file. Roots without a key stay
+    unauthenticated until their next apply. `trustStateMac()` /
+    `trustStateMacOk()` / `TRUST_STATE_KEY_FILE` exported from checks.
+  - `docs/signing.md`: root binding, authenticated state, and a CI key ceremony
+    (`AXIOM_SIGNING_KEY` from a GitHub secret in a protected environment; the key
+    never lives on a developer machine).
+  - `ManifestBundle.schema.json` regenerated.
+- 28a39a0: Long-running checks as tasks and chunked plan sessions (S-406, D-24):
+  
+  - **Tasks (mcp).** `axiom_check_start` runs the same evaluation as `axiom_check` but returns
+    immediately as `{ taskId, status: "working", pollIntervalMs, ttlMs }`; `axiom_task_get` polls
+    (attaching the `CheckReport` as `result` once `completed`, or `error` once `failed`/`cancelled`);
+    `axiom_task_cancel` aborts a working task and kills every running guard process tree. Tasks are
+    tool-level (SDK v2 has no `io.modelcontextprotocol/tasks` runtime), live in the server process,
+    are shared by every connection/request a `serverFactory` serves, stay pollable 10 min after
+    finishing, and are all aborted when the server stops. At most 8 run concurrently (`ERR_EBUSY`).
+  - **Chunked plans (mcp).** `axiom_plan_begin` (header) → `axiom_plan_add` × n (artifact chunks,
+    each call ≤ 4 MiB, unique paths across chunks) → `axiom_plan_seal` compiles the assembled Plan
+    through the same code path as `axiom_plan_compile`; a fast-check property asserts the sealed
+    `manifestDigest`, canonical manifest and blobs equal a one-shot compile for arbitrary plans and
+    chunkings. Sessions: 2000 artifacts / 64 MiB, 30 min idle, 16 open per process.
+  - **Guards (checks).** `guard.external.timeoutMs` cap raised 60 s → **15 min**;
+    `RunChecksOptions.signal` / `GuardFacts.signal` abort the guard pool — a killed guard reports a
+    provider finding `ERR_TASK_CANCELLED`.
+  - **Error codes (schema).** New closed codes `ERR_TASK_NOT_FOUND`, `ERR_TASK_CANCELLED`,
+    `ERR_PLAN_SESSION_STATE`.
+  - 11 → 17 tools; `spec/tools.json`, `spec/codai-tools.json`, README and `docs/mcp_api.md` updated.
+- ae3d6a6: `axiom verify <bundle> --tree <root> [--pre] [--attest <out>]` (S-403, D-20/D-21):
+  compare a real tree with a manifest — every artifact present with its digest
+  (deletes absent), or with `--pre` the manifest's declared `preImage` set.
+  Exit 1 lists `mismatches[]`; nothing under `.axiom/` is touched. `--attest`
+  writes a JCS-canonical in-toto Statement with `predicateType
+  https://axiom.dev/attestation/apply/v1` (subjects = manifest + each present
+  path) and the bare predicate for `actions/attest`. New `verifyTree()` in
+  `@codai/axiom-apply` and `buildApplyAttestation()` in `@codai/axiom-canon`.
+  Composite GitHub Action `dragoscv/axiom/action` (inputs `bundle`, `root`,
+  `pre`, `attest`, `attestation-path`, `version`; outputs `ok`,
+  `manifest-digest`, `mismatches`, `attestation-path`) fails a PR whose tree
+  drifted and can upload the attestation; dogfooded by the `verify-action` CI job.
+  Docs: `docs/verify-tree.md`.
+
+### Patch Changes
+
+- 02527d8: Doc/code drift sweep (S-410): the `template` source is no longer described as
+  "reserved for v2.1 / compile rejects" in the Plan JSON schema, the `.axm` LSP
+  hover and the docs — it has been rendered by registered emitters since 2.1.0.
+  `VerifyResult.signed` documents that structural verification never verifies
+  signatures (use `axiom verify --root` or the `signature.*` predicates). v1-era
+  docs (`ir_spec`, `plugin_api`, `reverse_ir_spec`, `MCP-ONLY-PUBLIC-SURFACE`)
+  moved to `docs/archive/v1/`. New repo guard `check-stale-markers` fails on any
+  forward-looking "planned for vX.Y" note whose version is already released.
+- Updated dependencies [801d29e]
+- Updated dependencies [50900d6]
+- Updated dependencies [c36c818]
+- Updated dependencies [b51eb33]
+- Updated dependencies [7cb7db7]
+- Updated dependencies [c8de39b]
+- Updated dependencies [38ff1c0]
+- Updated dependencies [02527d8]
+- Updated dependencies [28a39a0]
+- Updated dependencies [ae3d6a6]
+  - @codai/axiom-schema@2.2.0
+  - @codai/axiom-apply@2.2.0
+  - @codai/axiom-checks@2.2.0
+  - @codai/axiom-plan@2.2.0
+  - @codai/axiom-axm@2.2.0
+  - @codai/axiom-canon@2.2.0
+  - @codai/axiom-emitters-web@2.2.0
+
 ## 2.1.0
 
 ### Minor Changes

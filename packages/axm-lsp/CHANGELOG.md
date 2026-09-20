@@ -1,5 +1,82 @@
 # @codai/axiom-axm-lsp
 
+## 2.2.0
+
+### Minor Changes
+
+- 50900d6: New predicate `expr.cedar` (S-411, D-25): Cedar policies over the same facts
+  `expr.cel` sees.
+  
+  - **checks**: `expr.cedar { policies, mode?: "forbid" | "permit", message?,
+    severity? }` runs one Cedar `isAuthorized` request per artifact — principal
+    `Axiom::Plan::"<name>"`, action `Axiom::Action::"<op>"`, resource
+    `Axiom::Artifact::"<path>"` (attrs `path`, `op`, `mode`, `ext`, `dir`, and
+    when present `sha256`, `bytes`, `origin`, `text`, `exists`), parent
+    `Axiom::Manifest::"<digest>"`, context `{ manifest, repo? }`. `mode: forbid`
+    (default) appends a permit-all so every `deny` is a per-path finding;
+    `mode: permit` is default-deny. Evaluated by `@cedar-policy/cedar-wasm`
+    4.13 declared as an **optional** dependency and imported lazily; a host
+    without it reports `ERR_PROVIDER_FAILED` (verdict `error`), never `pass`.
+    Any Cedar evaluation error (missing attribute, type error, overflow) is a
+    provider error — Cedar's "erroring policy does not apply" rule is not
+    inherited. Templates, > 256 policies and parse errors →
+    `ERR_PREDICATE_PARAMS`; 2 s wall-clock budget per manifest. 156-case
+    hand-authored vector suite (`cedar-vectors.json`) + purity test.
+  - **axm-lsp**: `expr.cedar` completion/hover; 17 built-ins in parity.
+  - **mcp**: declares the same optional dependency so `npm i @codai/axiom-mcp`
+    brings the WASM by default (`--no-optional` opts out; `expr.cedar` then
+    fails closed).
+  - Docs: `docs/checks.md` §expr.cedar including the OWASP Agent Control
+    Standard mapping (AXIOM = Guardian on the write channel; `allow`/`deny`
+    only) and why OPA/Rego was not chosen.
+- b51eb33: `patch` artifact source (S-401, D-17): `{ type: "patch", format: "unified" |
+  "v4a" | "search-replace", preImage: "sha256:…" | "absent", body }`. Compile
+  reads the file under the root, requires it to hash to `preImage`
+  (`ERR_PATCH_PREIMAGE`), applies the diff with **exact** matching only
+  (`ERR_PATCH_NO_MATCH`; malformed body → `ERR_PATCH_FORMAT`) and
+  content-addresses the result, so Manifest, checks and apply never see a patch.
+  A patch plan and its inline twin share `planDigest` (golden fixtures
+  `plan-patch` / `plan-patch-inline`); `origin: "patch"` is recorded on the
+  artifact. Three parsers (unified diff, OpenAI/Codex V4A `apply_patch` text for
+  one file incl. `@@ context` anchors and `*** End of File`, Aider
+  SEARCH/REPLACE) feed one applier. `.axm` gains
+  `patch <format> ("sha256:…"|absent) <<HEREDOC`; the LSP completes and documents
+  it. `CompileOptions.readPreImage` lets callers (gate, tests) supply pre-images
+  without a filesystem root.
+
+### Patch Changes
+
+- 7cb7db7: Predicate quality (S-408).
+  
+  - `content.noSecrets` `card`: a digit run is a PAN only when it passes Luhn, is
+    not a single repeated digit and is not part of a UUID — zero/placeholder UUIDs
+    (`00000000-0000-0000-0000-000000000000`), epoch-ms timestamps and sequential
+    placeholders no longer fail the check; every real test PAN is still caught.
+  - `repo.requireCompanion` gains `expect[].mustChange: true`: the companion must
+    be in the plan, an existing repo file no longer satisfies the rule.
+  - Every glob parameter auto-escapes Next.js route groups (`app/(app)/**`
+    matches the literal directory); real extglobs and `\(app\)` are untouched.
+  - `guard.external` attaches `facts.evidence = { exitCode, stdout, stderr }`
+    (2 KiB tails) to every finding it produces, including `ERR_GUARD_OUTPUT` /
+    `ERR_GUARD_TIMEOUT` (which previously used ad-hoc `exitCode`/`stdout`/`stderr`
+    facts).
+- 02527d8: Doc/code drift sweep (S-410): the `template` source is no longer described as
+  "reserved for v2.1 / compile rejects" in the Plan JSON schema, the `.axm` LSP
+  hover and the docs — it has been rendered by registered emitters since 2.1.0.
+  `VerifyResult.signed` documents that structural verification never verifies
+  signatures (use `axiom verify --root` or the `signature.*` predicates). v1-era
+  docs (`ir_spec`, `plugin_api`, `reverse_ir_spec`, `MCP-ONLY-PUBLIC-SURFACE`)
+  moved to `docs/archive/v1/`. New repo guard `check-stale-markers` fails on any
+  forward-looking "planned for vX.Y" note whose version is already released.
+- Updated dependencies [801d29e]
+- Updated dependencies [b51eb33]
+- Updated dependencies [c8de39b]
+- Updated dependencies [38ff1c0]
+- Updated dependencies [02527d8]
+- Updated dependencies [28a39a0]
+  - @codai/axiom-schema@2.2.0
+  - @codai/axiom-axm@2.2.0
+
 ## 2.1.0
 
 ### Minor Changes

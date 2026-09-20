@@ -1,5 +1,57 @@
 # @codai/axiom-plan
 
+## 2.2.0
+
+### Minor Changes
+
+- b51eb33: `patch` artifact source (S-401, D-17): `{ type: "patch", format: "unified" |
+  "v4a" | "search-replace", preImage: "sha256:…" | "absent", body }`. Compile
+  reads the file under the root, requires it to hash to `preImage`
+  (`ERR_PATCH_PREIMAGE`), applies the diff with **exact** matching only
+  (`ERR_PATCH_NO_MATCH`; malformed body → `ERR_PATCH_FORMAT`) and
+  content-addresses the result, so Manifest, checks and apply never see a patch.
+  A patch plan and its inline twin share `planDigest` (golden fixtures
+  `plan-patch` / `plan-patch-inline`); `origin: "patch"` is recorded on the
+  artifact. Three parsers (unified diff, OpenAI/Codex V4A `apply_patch` text for
+  one file incl. `@@ context` anchors and `*** End of File`, Aider
+  SEARCH/REPLACE) feed one applier. `.axm` gains
+  `patch <format> ("sha256:…"|absent) <<HEREDOC`; the LSP completes and documents
+  it. `CompileOptions.readPreImage` lets callers (gate, tests) supply pre-images
+  without a filesystem root.
+- c8de39b: Pre-image binding (S-402). `ManifestBody.preImage[]` records, for every
+  artifact path, the sha256 (or `absent`) compile saw under the root — inside the
+  canonical body, so the same Plan compiled against two trees yields two
+  `manifestDigest`s while `planDigest` is unchanged. `runChecks` verifies it when
+  given a root and reports `CheckReport.preImage: verified | drifted |
+  unverified` (drift = `error` finding `manifest.preImage` with
+  `ERR_PREIMAGE_CHANGED`, verdict `error`). `apply` refuses a first apply on a
+  drifted tree with `ERR_PREIMAGE_CHANGED` (`details.phase: "prepare"`) before
+  staging anything; re-applies of an already-applied digest are exempt.
+  
+  **Manifest format change**: manifests compiled with a root now carry
+  `preImage`; the golden `plan-patch` digest is re-pinned. Manifests compiled
+  without a root (no `preImage`) are unchanged (`plan-basic` digest identical).
+
+### Patch Changes
+
+- 02527d8: Doc/code drift sweep (S-410): the `template` source is no longer described as
+  "reserved for v2.1 / compile rejects" in the Plan JSON schema, the `.axm` LSP
+  hover and the docs — it has been rendered by registered emitters since 2.1.0.
+  `VerifyResult.signed` documents that structural verification never verifies
+  signatures (use `axiom verify --root` or the `signature.*` predicates). v1-era
+  docs (`ir_spec`, `plugin_api`, `reverse_ir_spec`, `MCP-ONLY-PUBLIC-SURFACE`)
+  moved to `docs/archive/v1/`. New repo guard `check-stale-markers` fails on any
+  forward-looking "planned for vX.Y" note whose version is already released.
+- Updated dependencies [801d29e]
+- Updated dependencies [b51eb33]
+- Updated dependencies [c8de39b]
+- Updated dependencies [38ff1c0]
+- Updated dependencies [02527d8]
+- Updated dependencies [28a39a0]
+- Updated dependencies [ae3d6a6]
+  - @codai/axiom-schema@2.2.0
+  - @codai/axiom-canon@2.2.0
+
 ## 2.1.0
 
 ### Minor Changes

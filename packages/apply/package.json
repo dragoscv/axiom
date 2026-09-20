@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-apply",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Transactional two-phase-commit apply engine for AXIOM v2 manifest bundles: containment, staging, journal, scoped rollback",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

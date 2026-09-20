@@ -1,5 +1,114 @@
 # @codai/axiom-schema
 
+## 2.2.0
+
+### Minor Changes
+
+- 801d29e: Idempotency and error-code hygiene (S-407).
+  
+  - **apply**: re-applying an already-applied digest whose files drifted now
+    proceeds for `create` artifacts too (committed as an overwrite, foreign bytes
+    backed up) instead of failing `ERR_EXISTS`; the re-written paths are reported
+    in the new `ApplyResult.drifted`. A commit failure whose rollback *also* fails
+    is now `error.code: ERR_ROLLBACK` (original error kept in message/details)
+    instead of the original code with a concatenated message.
+  - **schema**: new codes `ERR_FACT_DISABLED` (a predicate/provider disabled by
+    the profile or a CLI gate — previously overloaded onto `ERR_UNSUPPORTED_OP`)
+    and `ERR_TRUST_STATE_CORRUPT` (`.axiom/trust/state.json` unreadable/invalid —
+    previously reused `ERR_JOURNAL_CORRUPT`). `ERR_UNSUPPORTED_OP` now means only
+    "operation not implemented" (`axiom_repo_snapshot followSymlinks`).
+  - **checks**: `guard.external` gating findings carry `ERR_FACT_DISABLED`;
+    trust-state read/parse failures carry `ERR_TRUST_STATE_CORRUPT`.
+  - **mcp**: `axiom_manifest_verify` / `axiom verify --root` add
+    `signatures.code` (`ERR_SIGNATURE_MISSING` when the bundle has no signature,
+    `ERR_SIGNATURE_INVALID` otherwise); a non-JSON `state.json` is
+    `ERR_TRUST_STATE_CORRUPT`, not a raw `SyntaxError`.
+  - Repo guard `check-error-codes` now fails when any enum member is never raised
+    in `src` or never asserted in a behavioural test; behavioural tests added for
+    `ERR_DIGEST_FORMAT`, `ERR_SIZE_MISMATCH`, `ERR_JOURNAL_CORRUPT` (corrupt
+    journal → recovery still works), `ERR_GIT_NOT_FOUND`, `ERR_GIT_FAILED`
+    (non-zero exit and timeout), `ERR_SIGNATURE_MISSING`, `ERR_ROLLBACK`.
+- b51eb33: `patch` artifact source (S-401, D-17): `{ type: "patch", format: "unified" |
+  "v4a" | "search-replace", preImage: "sha256:…" | "absent", body }`. Compile
+  reads the file under the root, requires it to hash to `preImage`
+  (`ERR_PATCH_PREIMAGE`), applies the diff with **exact** matching only
+  (`ERR_PATCH_NO_MATCH`; malformed body → `ERR_PATCH_FORMAT`) and
+  content-addresses the result, so Manifest, checks and apply never see a patch.
+  A patch plan and its inline twin share `planDigest` (golden fixtures
+  `plan-patch` / `plan-patch-inline`); `origin: "patch"` is recorded on the
+  artifact. Three parsers (unified diff, OpenAI/Codex V4A `apply_patch` text for
+  one file incl. `@@ context` anchors and `*** End of File`, Aider
+  SEARCH/REPLACE) feed one applier. `.axm` gains
+  `patch <format> ("sha256:…"|absent) <<HEREDOC`; the LSP completes and documents
+  it. `CompileOptions.readPreImage` lets callers (gate, tests) supply pre-images
+  without a filesystem root.
+- c8de39b: Pre-image binding (S-402). `ManifestBody.preImage[]` records, for every
+  artifact path, the sha256 (or `absent`) compile saw under the root — inside the
+  canonical body, so the same Plan compiled against two trees yields two
+  `manifestDigest`s while `planDigest` is unchanged. `runChecks` verifies it when
+  given a root and reports `CheckReport.preImage: verified | drifted |
+  unverified` (drift = `error` finding `manifest.preImage` with
+  `ERR_PREIMAGE_CHANGED`, verdict `error`). `apply` refuses a first apply on a
+  drifted tree with `ERR_PREIMAGE_CHANGED` (`details.phase: "prepare"`) before
+  staging anything; re-applies of an already-applied digest are exempt.
+  
+  **Manifest format change**: manifests compiled with a root now carry
+  `preImage`; the golden `plan-patch` digest is re-pinned. Manifests compiled
+  without a root (no `preImage`) are unchanged (`plan-basic` digest identical).
+- 38ff1c0: Signing hardening (S-409):
+  
+  - **Root-bound signatures.** New DSSE `payloadType`
+    `application/vnd.axiom.manifest-bound+json` signs `JCS({ manifest, rootId })`.
+    `TrustStore.rootId` (optional) makes a store accept only envelopes bound to
+    that id — unbound or otherwise-bound envelopes fail with the new
+    `signature.unbound` finding (`UNBOUND` / `ROOT_MISMATCH`). Stores without
+    `rootId` accept both forms (unchanged behaviour). `axiom sign --root-id <id>`,
+    `axiom trust root-id [<id> | --clear] --root .`; `signEnvelopeBound()` /
+    `AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE` in canon, `RootIdSchema` in schema.
+  - **Authenticated anti-rollback state.** `advanceTrustState` creates
+    `.axiom/trust/state.key` (32 random bytes, 0600) and writes
+    `state.json.mac = HMAC-SHA256(key, JCS(state))`. With a key on disk, a
+    `state.json` whose MAC is missing or wrong is `ERR_TRUST_STATE_CORRUPT`
+    (predicate → `verdict: error`; CLI/MCP → thrown), so `lastCounter` can no
+    longer be lowered by editing the file. Roots without a key stay
+    unauthenticated until their next apply. `trustStateMac()` /
+    `trustStateMacOk()` / `TRUST_STATE_KEY_FILE` exported from checks.
+  - `docs/signing.md`: root binding, authenticated state, and a CI key ceremony
+    (`AXIOM_SIGNING_KEY` from a GitHub secret in a protected environment; the key
+    never lives on a developer machine).
+  - `ManifestBundle.schema.json` regenerated.
+- 28a39a0: Long-running checks as tasks and chunked plan sessions (S-406, D-24):
+  
+  - **Tasks (mcp).** `axiom_check_start` runs the same evaluation as `axiom_check` but returns
+    immediately as `{ taskId, status: "working", pollIntervalMs, ttlMs }`; `axiom_task_get` polls
+    (attaching the `CheckReport` as `result` once `completed`, or `error` once `failed`/`cancelled`);
+    `axiom_task_cancel` aborts a working task and kills every running guard process tree. Tasks are
+    tool-level (SDK v2 has no `io.modelcontextprotocol/tasks` runtime), live in the server process,
+    are shared by every connection/request a `serverFactory` serves, stay pollable 10 min after
+    finishing, and are all aborted when the server stops. At most 8 run concurrently (`ERR_EBUSY`).
+  - **Chunked plans (mcp).** `axiom_plan_begin` (header) → `axiom_plan_add` × n (artifact chunks,
+    each call ≤ 4 MiB, unique paths across chunks) → `axiom_plan_seal` compiles the assembled Plan
+    through the same code path as `axiom_plan_compile`; a fast-check property asserts the sealed
+    `manifestDigest`, canonical manifest and blobs equal a one-shot compile for arbitrary plans and
+    chunkings. Sessions: 2000 artifacts / 64 MiB, 30 min idle, 16 open per process.
+  - **Guards (checks).** `guard.external.timeoutMs` cap raised 60 s → **15 min**;
+    `RunChecksOptions.signal` / `GuardFacts.signal` abort the guard pool — a killed guard reports a
+    provider finding `ERR_TASK_CANCELLED`.
+  - **Error codes (schema).** New closed codes `ERR_TASK_NOT_FOUND`, `ERR_TASK_CANCELLED`,
+    `ERR_PLAN_SESSION_STATE`.
+  - 11 → 17 tools; `spec/tools.json`, `spec/codai-tools.json`, README and `docs/mcp_api.md` updated.
+
+### Patch Changes
+
+- 02527d8: Doc/code drift sweep (S-410): the `template` source is no longer described as
+  "reserved for v2.1 / compile rejects" in the Plan JSON schema, the `.axm` LSP
+  hover and the docs — it has been rendered by registered emitters since 2.1.0.
+  `VerifyResult.signed` documents that structural verification never verifies
+  signatures (use `axiom verify --root` or the `signature.*` predicates). v1-era
+  docs (`ir_spec`, `plugin_api`, `reverse_ir_spec`, `MCP-ONLY-PUBLIC-SURFACE`)
+  moved to `docs/archive/v1/`. New repo guard `check-stale-markers` fails on any
+  forward-looking "planned for vX.Y" note whose version is already released.
+
 ## 2.1.0
 
 ### Minor Changes
