@@ -9,6 +9,11 @@
  * vsce validates `devDependencies["@types/vscode"]` as semver and rejects pnpm's `catalog:`
  * spec, so the manifest is temporarily rewritten with the resolved version (from the installed
  * package) and restored afterwards — the tracked `package.json` is never left modified.
+ *
+ * The extension is `private` and outside the changesets `fixed` group, so its `version` is
+ * stamped from `@codai/axiom-mcp` (the release version) for the same rewrite window: the
+ * Marketplace rejects a re-publish of an existing version, and `axiom-axm-<version>.vsix`
+ * must match the `v<version>` tag it is attached to (S-412).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -22,9 +27,12 @@ const repoRoot = resolve(pkgDir, "..", "..");
 const manifestPath = join(pkgDir, "package.json");
 const original = readFileSync(manifestPath, "utf8");
 const pkg = JSON.parse(original);
+const releaseVersion = JSON.parse(
+  readFileSync(join(repoRoot, "packages", "mcp", "package.json"), "utf8"),
+).version;
 const outDir = join(repoRoot, ".copilot-tmp");
 mkdirSync(outDir, { recursive: true });
-const out = join(outDir, `${pkg.name}-${pkg.version}.vsix`);
+const out = join(outDir, `${pkg.name}-${releaseVersion}.vsix`);
 
 for (const required of ["dist/extension.cjs", "dist/server.cjs"]) {
   if (!existsSync(join(pkgDir, required))) {
@@ -47,6 +55,7 @@ const typesVersion = JSON.parse(
 ).version;
 const resolved = {
   ...pkg,
+  version: releaseVersion,
   devDependencies: { ...pkg.devDependencies, "@types/vscode": typesVersion },
 };
 

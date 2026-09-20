@@ -71,3 +71,67 @@ jobs:
 
       - name: Push tags created by changeset
         run: git push origin --tags
+
+  vscode-extension:
+    # S-412: the .vsix is always built and attached to the GitHub release; Marketplace publish
+    # runs only when the owner has created publisher `codai` and stored its PAT as `VSCE_PAT`
+    # (Azure DevOps PAT, scope Marketplace → Manage). Without the secret the job still proves the
+    # artifact packages and leaves it downloadable from the release page.
+    name: vscode-axm → .vsix (+ Marketplace when VSCE_PAT is set)
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace libs (axm-lsp is bundled into the extension)
+        run: pnpm build
+
+      - name: Package .vsix
+        run: pnpm --filter axiom-axm run package
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: axiom-axm-vsix
+          path: .copilot-tmp/axiom-axm-*.vsix
+          if-no-files-found: error
+
+      - name: Attach .vsix to the GitHub release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
+          gh release upload "$tag" .copilot-tmp/axiom-axm-*.vsix --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publish to the VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/v') && env.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          pnpm --filter axiom-axm exec vsce publish --packagePath .copilot-tmp/axiom-axm-*.vsix
+
+      - name: Marketplace publish skipped
+        if: startsWith(github.ref, 'refs/tags/v') && env.VSCE_PAT == ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          echo "::notice title=S-412::VSCE_PAT is not set - .vsix attached to the release only. Owner: create Marketplace publisher codai and add the PAT as repo secret VSCE_PAT."
