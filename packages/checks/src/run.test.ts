@@ -235,7 +235,8 @@ describe("PredicateRegistry", () => {
     const list = reg.list();
     expect(list).toEqual([...list].sort());
     expect(list).toContain("guard.external");
-    expect(list.length).toBe(16);
+    expect(list).toContain("expr.cedar");
+    expect(list.length).toBe(17);
     expect(() => reg.register(reg.get("path.deny"))).toThrow(/already registered/);
     expect(() =>
       new PredicateRegistry().register(

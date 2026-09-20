@@ -62,6 +62,9 @@
     "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
+  "optionalDependencies": {
+    "@cedar-policy/cedar-wasm": "catalog:"
+  },
   "devDependencies": {
     "@modelcontextprotocol/client": "catalog:",
     "fast-check": "catalog:",

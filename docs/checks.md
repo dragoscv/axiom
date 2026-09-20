@@ -50,7 +50,7 @@ replayed.
 
 ## Predicate catalogue
 
-Sixteen built-ins, exactly as registered in
+Seventeen built-ins, exactly as registered in
 `packages/checks/src/predicates/index.ts`. `requires` names the fact providers
 the predicate reads.
 
@@ -446,6 +446,96 @@ A worked profile that combines three expressions:
 The last check needs `facts.allowRepo` (inherited from `default`) **and** an
 authorised root; without one it reports `error`, so a profile that uses `repo`
 cannot silently pass in a root-less run.
+
+### `expr.cedar`
+
+[Cedar](https://www.cedarpolicy.com/) policies over the same frozen facts
+`expr.cel` sees (PLAN.md S-411, decision D-25). Evaluated by
+`@cedar-policy/cedar-wasm` 4.x (Apache-2.0, ~4 MB WASM), an **optional**
+dependency of `@codai/axiom-checks` and `@codai/axiom-mcp`, loaded lazily on
+first use. On a host where it is not installed every `expr.cedar` check is an
+`error` finding (`ERR_PROVIDER_FAILED`, message names the package) — fail
+closed, never a silent pass. `requires: manifest, content` (`repo` is read when
+the policy text mentions `exists` or `repo`).
+
+| Param | Type | Default |
+|-------|------|---------|
+| `policies` | Cedar policy-set text, 1–65536 chars, ≤ 256 static policies, **no templates** | required |
+| `mode` | `"forbid"` \| `"permit"` | `"forbid"` |
+| `message` | string ≤ 2000 | `denied by cedar policy <ids>` / `denied by cedar policy (default deny)` |
+| `severity` | `"error" \| "warn" \| "info"` | the CheckRef severity |
+
+**Modes.** Cedar is default-deny: a request is allowed only when some `permit`
+matches and no `forbid` does. `mode: "forbid"` appends
+`permit(principal, action, resource);` so a profile author writes forbid rules
+only and every `deny` is one finding for that artifact — the same shape as
+`path.deny`, with the full expressiveness of Cedar conditions. `mode: "permit"`
+is spec-pure: write the permits; anything not permitted is a finding with an
+empty `facts.reason`.
+
+**Authorization model** — one `isAuthorized` request per artifact, all sharing
+one entity store:
+
+| Slot | Value |
+|------|-------|
+| `principal` | `Axiom::Plan::"<manifest.name>"` |
+| `action` | `Axiom::Action::"create"` \| `"overwrite"` \| `"delete"` (the artifact's `op`) |
+| `resource` | `Axiom::Artifact::"<path>"` with attributes `path`, `op`, `mode`, `ext`, `dir`, and when present `sha256`, `bytes` (Cedar `Long`), `origin`, `text` (UTF-8 blob ≤ 256 KiB), `exists` (repo) — guard optional ones with `resource has bytes` |
+| parent entity | `Axiom::Manifest::"<manifestDigest>"` (`resource in Axiom::Manifest::"…"` holds for every artifact) with `name`, `profile`, `planDigest`, `artifactCount`, `checks` (ids), `toolchain`, `counter?`, `preImage?` |
+| `context` | `{ manifest: { name, profile }, repo?: { gitHead?, gitDirty? } }` — `repo` only with an authorised root |
+
+Cedar strings support `==`, `like "glob*"` and set `.contains()`; there is no
+regex. Numbers are 64-bit `Long`s (overflow is an error). Sets and `if … then …
+else` are available; `&&`/`||` short-circuit left to right.
+
+**Fail-closed semantics.** Cedar's own rule is that a policy which errors
+during evaluation simply does not apply; AXIOM does **not** inherit that:
+any evaluation error (missing attribute such as `resource.bytes` on a
+`delete`, type mismatch, overflow, `context.repo` without a root) makes the
+whole check an `error` finding with Cedar's diagnostic verbatim. Parse
+errors, template use and more than 256 policies are `ERR_PREDICATE_PARAMS`;
+a 2 s wall-clock budget per manifest is `ERR_PROVIDER_FAILED`. Policy ids are
+positional (`policy0`, `policy1`, …) in the author's text; `facts.reason`
+lists the determining forbid ids sorted.
+
+**Determinism bar (D-25).** Cedar is total and pure by construction — no I/O,
+no clock, no unbounded loops, every evaluation terminates — so unlike
+`expr.cel` no function allowlist is needed. A 156-case vector suite
+(`packages/checks/src/predicates/cedar-vectors.json`: 94 deny / 31 no-deny /
+31 error across both modes and the repo activation) plus a purity test guards
+the predicate; expectations are hand-authored from Cedar semantics.
+
+**Why Cedar and not OPA/Rego (D-25).** Rego needs `opa build` to produce a
+WASM module and a runtime with host callbacks; there is no dependency-free
+offline evaluator to ship. Cedar's WASM is the reference implementation,
+has no host callbacks, and its policy language was designed for exactly this
+principal/action/resource shape.
+
+**OWASP Agent Control Standard mapping.** In ACS terms AXIOM is a *Guardian*
+placed on the agent's **write** channel: the *Actor* is the coding agent (the
+`Axiom::Plan` principal), the *Actions* are the artifact `op`s, and the
+*Resources* are the artifact paths. Of the ACS decisions
+`allow | deny | modify | ask | defer`, a check produces exactly two — `pass` is
+`allow`, an `expr.cedar` finding is `deny` on the whole write set (a manifest
+is applied atomically, so a partial allow does not exist). AXIOM never emits
+`modify` (it does not rewrite an agent's manifest), never `ask` from a check
+(the human gate is `confirmDigest` on `axiom_apply`, upstream of the policy),
+and never `defer` (a policy that cannot be evaluated is `error`, which
+`apply` treats as `deny`). The journal is the ACS *audit record*.
+
+```json
+{ "id": "cedar.write-policy", "predicate": "expr.cedar", "severity": "error",
+  "params": { "policies": "
+    @id(\"no-dotenv\")
+    forbid(principal, action, resource) when { resource.ext == \"env\" };
+    forbid(principal, action == Axiom::Action::\"delete\", resource) when { resource.dir like \"src*\" };
+    forbid(principal, action, resource) when { resource has text && resource.text like \"*AKIA*\" };
+    forbid(principal, action == Axiom::Action::\"create\", resource) when { resource.exists };
+  " } }
+```
+
+The last rule reads `exists`, so it needs `facts.allowRepo` **and** an
+authorised root; without one the check is `error`, not `pass`.
 
 ## Built-in profiles
 

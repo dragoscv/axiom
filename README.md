@@ -148,7 +148,7 @@ is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on 
 
 **Shipped (2.1.0).** `schema`, `canon`, `plan` (inline + CAS + digest-pinned
 `ref` with `--allow-net`, `template` sources via [emitters](docs/emitters.md)),
-`checks` (15 built-in predicates incl. `expr.cel`, `guard.external` and
+`checks` (17 built-in predicates incl. `expr.cel`, `expr.cedar`, `guard.external` and
 `manifest.requireSigned`; three profiles), `apply` (fs + dry-run + journal/rollback
 + idempotency + `pr` mode with a spawn args array, no shell), `mcp` (stdio and
 streamable HTTP, 17 tools incl. background check tasks and chunked plan sessions,

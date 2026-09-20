@@ -50,6 +50,9 @@
     "picomatch": "catalog:",
     "zod": "catalog:"
   },
+  "optionalDependencies": {
+    "@cedar-policy/cedar-wasm": "catalog:"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/picomatch": "catalog:",

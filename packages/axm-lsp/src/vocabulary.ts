@@ -125,6 +125,8 @@ export const PREDICATES: Readonly<Record<string, string>> = {
   "guard.external": "Run an allow-listed external guard script (JSON stdout contract).",
   "expr.cel":
     "A boolean CEL `expression` over `manifest`, `artifacts`, `content`, `repo` (pure, allow-listed).",
+  "expr.cedar":
+    "Cedar `policies` authorised per artifact (principal Plan, action op, resource Artifact); a `deny` is a finding. `mode: forbid|permit`.",
 };
 
 export const PREDICATE_IDS: readonly string[] = Object.keys(PREDICATES).sort();

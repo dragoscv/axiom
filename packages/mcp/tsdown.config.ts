@@ -9,6 +9,14 @@ const shared = {
 } as const;
 
 /**
+ * `@cedar-policy/cedar-wasm` (optional dependency, S-411) must stay external in every chunk:
+ * its `nodejs/` entry is CJS that locates the sibling `cedar_wasm_bg.wasm` via `__dirname`, so
+ * inlining it into an ESM chunk yields "__dirname is not defined" and no .wasm next to the
+ * chunk. Resolved from node_modules at runtime; absent → `expr.cedar` fails closed.
+ */
+const CEDAR_WASM = /^@cedar-policy\/cedar-wasm/;
+
+/**
  * Rolldown writes a `//#region <file>` / `//#endregion` comment pair around every bundled
  * module (~19 KB across the CLI bundle). They are comments only, so dropping them changes no
  * behaviour and keeps the eager `cli.js + cli-main.js` inside the 950 KB budget.
@@ -57,6 +65,7 @@ export default defineConfig([
       // And `./mcp-lazy.js`: the MCP SDK itself — only `axiom mcp` needs it (S-405).
       neverBundle: [
         /^node:/,
+        CEDAR_WASM,
         /axm-lazy/,
         /gate-lazy/,
         /http-lazy/,
@@ -77,7 +86,7 @@ export default defineConfig([
     clean: false,
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -90,7 +99,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -103,7 +112,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -115,7 +124,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -127,7 +136,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -139,7 +148,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
@@ -151,7 +160,7 @@ export default defineConfig([
     plugins: [stripRegionMarkers],
     deps: {
       alwaysBundle: [/.*/],
-      neverBundle: [/^node:/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
 ]);

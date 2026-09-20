@@ -1,4 +1,5 @@
 import type { AnyPredicate } from "../types.js";
+import { exprCedar } from "./cedar.js";
 import { exprCel } from "./cel.js";
 import { contentEncodingUtf8, contentMaxBytes, contentNoSecrets } from "./content.js";
 import { depsDeny, depsMax } from "./deps.js";
@@ -8,6 +9,19 @@ import { pathAllow, pathDeny, pathReservedNames } from "./path.js";
 import { repoNoOverwriteOf, repoRequireCompanion } from "./repo.js";
 import { manifestRequireSigned } from "./signature.js";
 
+export {
+  buildCedarRequests,
+  CEDAR_EVAL_BUDGET_MS,
+  CEDAR_MAX_POLICIES,
+  CEDAR_NAMESPACE,
+  CEDAR_POLICY_MAX_CHARS,
+  type CedarActivation,
+  type CedarOutcome,
+  CedarParams,
+  type CedarParamsT,
+  cedarModule,
+  evaluateCedar,
+} from "./cedar.js";
 export {
   CEL_ALLOWED_FUNCTIONS,
   CEL_LIMITS,
@@ -47,6 +61,7 @@ export {
   contentNoSecrets,
   depsDeny,
   depsMax,
+  exprCedar,
   exprCel,
   guardExternal,
   manifestMaxArtifacts,
@@ -77,4 +92,5 @@ export const BUILTIN_PREDICATES: readonly AnyPredicate[] = [
   repoRequireCompanion,
   guardExternal,
   exprCel,
+  exprCedar,
 ];
