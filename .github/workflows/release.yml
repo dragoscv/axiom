@@ -73,7 +73,17 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
 
       - name: Push tags created by changeset
-        run: git push origin --tags
+        # `git push --tags` fails the whole run when ANY tag already exists on the remote — and
+        # the triggering v<version> tag always does, since it is what started this run. Push only
+        # the tags the remote is actually missing; a genuine push failure still fails the step.
+        run: |
+          git fetch --tags --quiet origin
+          remote=$(git ls-remote --tags origin | sed 's#.*refs/tags/##' | grep -v '\^{}' | sort -u)
+          missing=$(comm -23 <(git tag -l | sort -u) <(echo "$remote"))
+          if [ -z "$missing" ]; then echo "no new tags to push"; exit 0; fi
+          echo "pushing: $missing"
+          git push origin $missing
+        shell: bash
 
       - name: Verify every tagged package is on the registry
         # npm's CDN needs a moment after publish before the packument lists the new version.
