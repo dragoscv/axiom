@@ -54,6 +54,7 @@ export default defineConfig([
       // And `./migrate-lazy.js`: `axiom migrate v1` is CLI-only and rare.
       // And `./verify-tree-lazy.js`: `axiom verify --tree` (+ attestation) is CI-only.
       // And `./gc-lazy.js`: `axiom gc` is CLI-only and rare.
+      // And `./mcp-lazy.js`: the MCP SDK itself — only `axiom mcp` needs it (S-405).
       neverBundle: [
         /^node:/,
         /axm-lazy/,
@@ -62,6 +63,7 @@ export default defineConfig([
         /migrate-lazy/,
         /verify-tree-lazy/,
         /gc-lazy/,
+        /mcp-lazy/,
       ],
     },
   },
@@ -132,6 +134,18 @@ export default defineConfig([
     ...shared,
     // Standalone `axiom gc` chunk (CAS garbage collection; CLI only).
     entry: { "gc-lazy": "src/gc-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/],
+    },
+  },
+  {
+    ...shared,
+    // Standalone `axiom mcp` chunk: the MCP SDK + tool registry + stdio serving entry (S-405).
+    entry: { "mcp-lazy": "src/mcp-lazy.ts" },
     dts: false,
     clean: false,
     plugins: [stripRegionMarkers],

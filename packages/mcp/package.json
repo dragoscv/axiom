@@ -59,10 +59,11 @@
     "@codai/axiom-emitters-web": "workspace:*",
     "@codai/axiom-plan": "workspace:*",
     "@codai/axiom-schema": "workspace:*",
-    "@modelcontextprotocol/sdk": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "catalog:",
     "tsdown": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

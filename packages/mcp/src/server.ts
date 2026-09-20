@@ -1,9 +1,15 @@
 import { createRequire } from "node:module";
 import { loadProfile } from "@codai/axiom-checks";
 import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import {
+  CACHE_HINTS,
+  type CallToolResult,
+  McpServer,
+  type McpServerFactory,
+  ResourceTemplate,
+  type WireEra,
+} from "./adapter.js";
 import { emitterCatalogue } from "./emitters.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import { type Logger, silentLogger } from "./log.js";
@@ -22,6 +28,13 @@ export interface CreateServerOptions {
   tools?: readonly AnyToolDef[];
   /** `--allow-guards` / `--guard-allowlist` (§3.2). Omit to keep guards disabled. */
   guards?: ToolContext["guards"];
+  /** Wire era this instance will serve (set by the serving entry; `legacy` when hand-connected). */
+  era?: WireEra;
+  /**
+   * Roots discovered via tool calls (sub-roots of the allowlist). Shared across the instances a
+   * factory builds so a digest compiled on one 2026-era HTTP request is loadable on the next.
+   */
+  seenRoots?: Set<string>;
 }
 
 export interface StructuredError {
@@ -85,11 +98,16 @@ function notFound(uri: string): never {
 
 export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}): McpServer {
   const log = opts.log ?? silentLogger;
-  const ctx: ToolContext = { policy, log, seenRoots: new Set() };
+  const ctx: ToolContext = { policy, log, seenRoots: opts.seenRoots ?? new Set() };
   if (opts.guards !== undefined) ctx.guards = opts.guards;
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, resources: {} } },
+    // AXIOM's catalogue never changes at runtime: say so (SDK v2 would otherwise advertise
+    // `listChanged: true` for every declared primitive). cacheHints only reach 2026-era wires.
+    {
+      capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
+      cacheHints: CACHE_HINTS,
+    },
   );
 
   for (const def of opts.tools ?? TOOL_DEFS) {
@@ -98,7 +116,9 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
       {
         title: def.title,
         description: def.description,
-        inputSchema: def.inputSchema,
+        // SDK v2 wants Standard Schema objects; the raw-shape overload is deprecated and would
+        // wrap with the SDK's bundled zod. Wrap with OUR zod so `.describe()` docs survive.
+        inputSchema: z.object(def.inputSchema),
         outputSchema: def.outputSchema,
         annotations: { title: def.title, ...def.annotations },
       },
@@ -205,7 +225,22 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
   log.info("server created", {
     name: SERVER_NAME,
     version: SERVER_VERSION,
+    era: opts.era ?? "legacy",
     roots: [...policy.roots],
   });
   return server;
+}
+
+/**
+ * Factory for the SDK serving entries (`serveStdio` / `createMcpHandler`): one fresh instance per
+ * connection (stdio) or per request (HTTP), each told the era it is about to serve. Tool state
+ * that must outlive an instance (`seenRoots`, guard settings) lives in `policy` / `opts`, which
+ * every instance shares.
+ */
+export function serverFactory(
+  policy: RootsPolicy,
+  opts: Omit<CreateServerOptions, "era"> = {},
+): McpServerFactory {
+  const seenRoots = opts.seenRoots ?? new Set<string>();
+  return ({ era }) => createServer(policy, { ...opts, seenRoots, era });
 }

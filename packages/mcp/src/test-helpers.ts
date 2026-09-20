@@ -2,9 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlanInput } from "@codai/axiom-schema";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+// Test-only module (never bundled): the client package is a devDependency. Both halves of the
+// linked pair MUST come from the same package (client and server bundle private copies).
+import { type CallToolResult, Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { silentLogger } from "./log.js";
 import { createRootsPolicy, type RootsPolicy } from "./roots.js";
 import { createServer } from "./server.js";

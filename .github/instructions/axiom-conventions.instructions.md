@@ -37,6 +37,10 @@ AXIOM is the **transactional write gate for coding agents**: `Plan` → canonica
 7. Predicates return `verdict: "error"` when a fact provider cannot run —
    fail closed, never a constant pass.
 8. Roots are an explicit allowlist (`--root`); there is no `cwd` fallback.
+9. **The MCP SDK is reached through one seam**: only `packages/mcp/src/adapter.ts` may import
+   `@modelcontextprotocol/*` at runtime (`check-sdk-adapter`; tests may use
+   `@modelcontextprotocol/client`). The SDK lives in the `mcp-lazy`/`http-lazy` chunks — never
+   in the eager `cli-main.js`.
 
 ## Package boundaries (enforced by `check-package-deps`)
 

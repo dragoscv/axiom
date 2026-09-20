@@ -29,3 +29,7 @@ packages/axiom-tests/manifest.json
 # Test fixtures are always tracked, even where names collide with v1 output patterns above
 !packages/*/fixtures/**
 
+
+# MCP conformance harness output (packages/conformance)
+packages/conformance/results/
+

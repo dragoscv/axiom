@@ -1,10 +1,18 @@
 /**
  * Streamable HTTP transport (v2-architecture §5.4) on plain `node:http`.
  *
- * One `StreamableHTTPServerTransport` per MCP session, keyed by `mcp-session-id`; idle sessions
- * are evicted. The SDK's node wrapper pulls in `@hono/node-server`, so we use the web-standard
- * transport directly and bridge `IncomingMessage`/`ServerResponse` ↔ `Request`/`Response` here —
- * the built `http-lazy.js` chunk must contain no express/hono runtime (asserted in http.test.ts).
+ * Two eras, one endpoint (D-19 / S-405):
+ * - 2026-07-28 requests (per-request `_meta` envelope, no session) go to the SDK's
+ *   `createMcpHandler` — a fresh server instance per request from the shared factory.
+ * - 2025-era requests (`initialize` handshake + `Mcp-Session-Id`) keep the sessionful
+ *   `WebStandardStreamableHTTPServerTransport` per session, idle-evicted — the SDK's stateless
+ *   legacy fallback would answer GET/DELETE with 405 and break clients that hold a session
+ *   (`isLegacyRequest` routes in front of a `legacy: 'reject'` modern handler, as the SDK docs
+ *   prescribe for exactly this case). `--wire 2026-only` drops the legacy leg.
+ *
+ * The SDK's node wrapper pulls in `@hono/node-server`, so we bridge `IncomingMessage` /
+ * `ServerResponse` ↔ `Request` / `Response` here — the built `http-lazy.js` chunk must contain
+ * no express/hono runtime (asserted in http.test.ts).
  *
  * Security: binds loopback by default; a non-loopback host REQUIRES a bearer token (constant-time
  * compare); DNS-rebinding protection (Host allowlist) is on for loopback binds; body ≤ 4 MiB.
@@ -19,8 +27,14 @@ import {
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import { AxiomError } from "@codai/axiom-schema";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import {
+  createHttpHandler,
+  isLegacyRequest,
+  type McpHttpHandler,
+  type McpServerFactory,
+  WebStandardStreamableHTTPServerTransport,
+  type WireMode,
+} from "./adapter.js";
 import type { Logger } from "./log.js";
 import { SERVER_VERSION } from "./server.js";
 
@@ -35,18 +49,16 @@ export interface StartHttpOptions {
   /** Bearer token. Mandatory when `host` is not loopback. */
   token?: string;
   log: Logger;
+  /** D-19 wire mode; default `2026` (both eras). */
+  wire?: WireMode;
   /** Test hook — idle eviction window. */
   idleMs?: number;
   /** Test hook — sweep interval. */
   sweepMs?: number;
 }
 
-/**
- * An SDK `McpServer` (its `Protocol`) binds to exactly one transport, and a Streamable HTTP
- * session IS a transport — so every session gets its own server instance from this factory
- * (the SDK's own multi-session example does the same). `createServer(policy, …)` is cheap.
- */
-export type ServerFactory = () => McpServer;
+/** The SDK factory: one fresh instance per 2025 session or per 2026 request. */
+export type ServerFactory = McpServerFactory;
 
 export interface HttpHandle {
   url: string;
@@ -194,6 +206,13 @@ export async function startHttp(
   }
   const idleMs = opts.idleMs ?? HTTP_SESSION_IDLE_MS;
   const sessions = new Map<string, Session>();
+  const wire = opts.wire ?? "2026";
+  // Modern leg: strict — everything with a 2026 envelope claim (and every malformed claim) is
+  // its business. Legacy traffic is routed by `isLegacyRequest` below, never by this handler.
+  const modern: McpHttpHandler = createHttpHandler(server, "2026-only", (err) =>
+    log.warn("http modern handler error", { error: err.message }),
+  );
+  const serveLegacy = wire !== "2026-only";
 
   return new Promise<HttpHandle>((resolve, reject) => {
     let base = `http://${host}:${opts.port}`;
@@ -225,6 +244,20 @@ export async function startHttp(
       }
       const sidHeader = req.headers["mcp-session-id"];
       const sid = Array.isArray(sidHeader) ? sidHeader[0] : sidHeader;
+      const webReq = toWebRequest(req, base, body);
+      // A sessionless POST with a 2026 envelope claim is a modern request. Anything carrying a
+      // session id, or a claim-less opening, is 2025-era traffic (SDK `isLegacyRequest` rules).
+      const legacy = sid !== undefined || (await isLegacyRequest(webReq.clone()));
+      if (!legacy) {
+        await pipeResponse(await modern.fetch(webReq), res, req);
+        return;
+      }
+      if (!serveLegacy) {
+        // `--wire 2026-only`: let the strict modern handler answer with the
+        // unsupported-protocol-version error naming the revisions we serve.
+        await pipeResponse(await modern.fetch(webReq), res, req);
+        return;
+      }
       const session = sid === undefined ? undefined : sessions.get(sid);
       if (session === undefined) {
         if (sid !== undefined) {
@@ -254,9 +287,9 @@ export async function startHttp(
           if (transport.sessionId !== undefined) sessions.delete(transport.sessionId);
         };
         transport.onerror = (err) => log.warn("http transport error", { error: err.message });
-        const mcp = server();
+        const mcp = await server({ era: "legacy" });
         await mcp.connect(transport);
-        const web = await transport.handleRequest(toWebRequest(req, base, body));
+        const web = await transport.handleRequest(webReq);
         if (transport.sessionId === undefined) {
           // not an initialize (or it failed): the SDK already produced the 4xx
           await mcp.close();
@@ -265,7 +298,7 @@ export async function startHttp(
         return;
       }
       session.lastSeen = Date.now();
-      const web = await session.transport.handleRequest(toWebRequest(req, base, body));
+      const web = await session.transport.handleRequest(webReq);
       await pipeResponse(web, res, req);
     };
 
@@ -323,6 +356,7 @@ export async function startHttp(
         url: `${base}/mcp`,
         host,
         port,
+        wire,
         auth: opts.token !== undefined,
       });
       resolve({
@@ -335,6 +369,7 @@ export async function startHttp(
           const open = [...sessions.values()];
           sessions.clear();
           await Promise.all(open.map((s) => s.transport.close().catch(() => undefined)));
+          await modern.close().catch(() => undefined);
           httpServer.closeAllConnections();
           await new Promise<void>((r) => httpServer.close(() => r()));
         },

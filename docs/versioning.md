@@ -74,7 +74,8 @@ server as `axiom://schema/<Kind>` and are versioned with the package.
 
 | AXIOM | Node | MCP SDK |
 |-------|------|---------|
-| 2.x | ≥ 22.14 | `@modelcontextprotocol/sdk` 1.30+ (bundled) |
+| 2.0 – 2.1 | ≥ 22.14 | `@modelcontextprotocol/sdk` 1.30 (bundled; 2025-era wire only) |
+| 2.2+ | ≥ 22.14 | `@modelcontextprotocol/server` 2.0 (bundled; serves 2026-07-28 **and** 2025-era clients, `--wire`) |
 
 ## Deprecation policy for 1.x
 

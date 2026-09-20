@@ -35,7 +35,13 @@ the tool/resource surface AXIOM does implement (`server-initialize`, `ping`, `to
 `tools-call-simple-text`, `tools-call-error`, `resources-list`, `server-sse-multiple-streams`,
 `dns-rebinding-protection`, …) must pass.
 
-Last local run (Windows, node 26): `10 passed, 22 failed (22 expected, 0 unexpected), cli exit 0`.
+Last local run (Windows, node 26, SDK v2 / 2.2.0): `8 passed, 24 failed (24 expected, 0 unexpected), cli exit 0`.
+Two scenarios moved into the baseline with SDK v2: `tools-call-simple-text` and `tools-call-error` call
+fixture tools AXIOM does not ship (`test_simple_text`, `test_error_handling`). SDK v1 turned an unknown
+tool into an `isError` result whose text block satisfied the check — a vacuous pass; SDK v2 answers
+JSON-RPC `-32602` (spec-correct), which the suite counts as a failure. `run.test.ts` pins the `-32602`.
+Conformance 0.1.16 scores 2025-era revisions only; the 2026-07-28 leg is tested by the SDK-v2 client
+tests in `packages/mcp`.
 
 ## CI
 

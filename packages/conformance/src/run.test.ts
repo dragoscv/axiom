@@ -76,17 +76,23 @@ describe.skipIf(!built)("conformance run against `axiom mcp --http` (built dist)
       result.scenarios
         .find((s) => s.scenario === name)
         ?.checks.every((c) => c.status !== "FAILURE");
+    // `tools-call-simple-text` / `tools-call-error` call fixture tools (`test_simple_text`,
+    // `test_error_handling`) AXIOM does not ship; SDK v1 made them pass vacuously by turning
+    // "unknown tool" into an isError result — SDK v2 answers -32602, so they sit in the baseline.
     for (const s of [
       "server-initialize",
       "ping",
       "tools-list",
-      "tools-call-simple-text",
-      "tools-call-error",
       "resources-list",
       "server-sse-multiple-streams",
       "dns-rebinding-protection",
     ]) {
       expect(ok(s), s).toBe(true);
     }
+  });
+
+  it("answers an unknown tool with JSON-RPC -32602, not a vacuous isError success", () => {
+    const simple = result.scenarios.find((s) => s.scenario === "tools-call-simple-text");
+    expect(simple?.checks.some((c) => /-32602/.test(c.errorMessage ?? ""))).toBe(true);
   });
 });

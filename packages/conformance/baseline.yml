@@ -28,6 +28,11 @@ server:
   - tools-call-audio
   - tools-call-embedded-resource
   - tools-call-mixed-content
+  # `test_simple_text` / `test_error_handling` do not exist here. Under SDK v1 these two scored
+  # SUCCESS vacuously (unknown tool → `isError` result whose text block satisfied "has text");
+  # SDK v2 answers an unknown tool with JSON-RPC -32602 (spec-correct), so they now fail honestly.
+  - tools-call-simple-text
+  - tools-call-error
   # --- server-initiated client features axiom never uses ---
   - tools-call-with-progress # no long-running tool emits progress (apply is sub-second)
   - tools-call-sampling # write gate never asks the model for completions

@@ -10,7 +10,6 @@ import {
   ManifestBundleSchema,
   RepoSnapshotSchema,
 } from "@codai/axiom-schema";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EMITTERS, emitterCatalogue } from "./emitters.js";
 import type { GcOptions } from "./gc.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
@@ -29,9 +28,9 @@ import {
 } from "./keys.js";
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
-import { createServer } from "./server.js";
 import { diffSnapshots, snapshotRoot } from "./snapshot.js";
 import { saveManifest, saveReport, toDigestRef } from "./store.js";
+import { isWireMode, WIRE_MODES, type WireMode } from "./wire.js";
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
@@ -41,7 +40,7 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 
 Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
-            [--http <host:port>] [--http-token-env <NAME>]
+            [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}]
   axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
                                      [--allow-net [--net-allow <host>[,host]]] [--allow-file]   (ref sources; offline by default)
   axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
@@ -155,11 +154,18 @@ async function cmdMcp(argv: string[]): Promise<number> {
     "log-level": { type: "string" },
     http: { type: "string" },
     "http-token-env": { type: "string" },
+    wire: { type: "string" },
     ...GUARD_FLAGS,
   });
   const level = values["log-level"] ?? "warn";
   if (!isLogLevel(level))
     throw new UsageError(`--log-level must be one of ${LOG_LEVELS.join("|")}`);
+  // D-19: 2026-07-28 is the default wire; `2025` keeps serving legacy clients from the same
+  // entry (the SDK pins the era per connection), `2026-only` refuses them.
+  const { serveStdio, serverFactory } = await import("./mcp-lazy.js");
+  const wireArg = values.wire ?? "2026";
+  if (!isWireMode(wireArg)) throw new UsageError(`--wire must be one of ${WIRE_MODES.join("|")}`);
+  const wire: WireMode = wireArg;
   const log: Logger = createLogger({ level });
   const rootArgs = (values.root ?? []).map((r) => path.resolve(r));
   const policy = await createRootsPolicy(rootArgs);
@@ -168,14 +174,15 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const guards = guardOptions(values);
   if (guards.allowGuards)
     log.warn("external guards ENABLED (--allow-guards)", { allowlist: guards.guardAllowlist });
+  const factory = serverFactory(policy, { log, guards });
   if (values.http !== undefined) {
     const { parseHostPort, startHttp, HTTP_TOKEN_ENV_DEFAULT } = await import("./http-lazy.js");
     const { host, port } = parseHostPort(values.http);
     const tokenEnv = values["http-token-env"] ?? HTTP_TOKEN_ENV_DEFAULT;
     const token = process.env[tokenEnv];
-    const httpOpts: Parameters<typeof startHttp>[1] = { host, port, log };
+    const httpOpts: Parameters<typeof startHttp>[1] = { host, port, log, wire };
     if (token !== undefined && token.length > 0) httpOpts.token = token;
-    const handle = await startHttp(() => createServer(policy, { log, guards }), httpOpts);
+    const handle = await startHttp(factory, httpOpts);
     await new Promise<void>((resolve) => {
       const stop = () => {
         void handle.close().then(resolve);
@@ -187,13 +194,17 @@ async function cmdMcp(argv: string[]): Promise<number> {
     });
     return EXIT_OK;
   }
-  const server = createServer(policy, { log, guards });
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  log.info("mcp stdio ready", { roots: [...policy.roots] });
+  const handle = serveStdio(factory, wire, (err) =>
+    log.warn("stdio transport error", { error: err.message }),
+  );
+  log.info("mcp stdio ready", { wire, roots: [...policy.roots] });
   await new Promise<void>((resolve) => {
-    transport.onclose = () => resolve();
-    process.stdin.on("end", () => resolve());
+    const stop = () => {
+      void handle.close().then(resolve, resolve);
+    };
+    process.stdin.once("end", stop);
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   });
   return EXIT_OK;
 }

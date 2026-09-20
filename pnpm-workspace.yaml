@@ -10,7 +10,8 @@ catalog:
   tsdown: 0.23.0
   "@biomejs/biome": 2.5.14
   "@changesets/cli": 3.0.3
-  "@modelcontextprotocol/sdk": 1.30.0
+  "@modelcontextprotocol/server": 2.0.0
+  "@modelcontextprotocol/client": 2.0.0
   "@modelcontextprotocol/conformance": 0.1.16
   fast-check: 4.10.1
   "@stryker-mutator/core": 10.0.0

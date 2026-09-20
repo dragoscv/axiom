@@ -3,9 +3,12 @@ import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  type CallToolResult,
+  Client,
+  type ClientOptions,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   authorize,
@@ -17,7 +20,7 @@ import {
 } from "./http.js";
 import { createLogger } from "./log.js";
 import { createRootsPolicy } from "./roots.js";
-import { createServer } from "./server.js";
+import { serverFactory } from "./server.js";
 import { makePlan, structured, tmpRepo } from "./test-helpers.js";
 import { TOOL_DEFS } from "./tools.js";
 
@@ -30,14 +33,26 @@ let handle: HttpHandle;
 let lines: string[];
 const clients: Client[] = [];
 
-async function connect(opts: { token?: string; sessionId?: string } = {}) {
+async function connect(
+  opts: { token?: string; sessionId?: string; wire?: "2026" | "2025" | "auto" } = {},
+) {
   const requestInit: RequestInit =
     opts.token === undefined ? {} : { headers: { authorization: `Bearer ${opts.token}` } };
   const transport = new StreamableHTTPClientTransport(new URL(handle.url), {
     requestInit,
     ...(opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }),
   });
-  const client = new Client({ name: "axiom-http-test", version: "0.0.0" });
+  // SDK v2 clients default to the 2025 `initialize` handshake; `2026` pins the modern era.
+  const negotiation: ClientOptions["versionNegotiation"] =
+    opts.wire === "2026"
+      ? { mode: { pin: "2026-07-28" } }
+      : opts.wire === "auto"
+        ? { mode: "auto" }
+        : { mode: "legacy" };
+  const client = new Client(
+    { name: "axiom-http-test", version: "0.0.0" },
+    { versionNegotiation: negotiation },
+  );
   await client.connect(transport);
   clients.push(client);
   return { client, transport };
@@ -47,7 +62,7 @@ async function start(extra: Partial<Parameters<typeof startHttp>[1]> = {}) {
   lines = [];
   const log = createLogger({ level: "debug", write: (l) => void lines.push(l) });
   const policy = await createRootsPolicy([repo.root]);
-  handle = await startHttp(() => createServer(policy, { log }), {
+  handle = await startHttp(serverFactory(policy, { log }), {
     host: "127.0.0.1",
     port: 0,
     log,
@@ -98,6 +113,55 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(structured<{ ok: boolean }>(r).ok).toBe(true);
     expect(handle.sessions()).toBe(1);
     expect(lines.some((l) => JSON.parse(l).msg === "http listening")).toBe(true);
+  });
+
+  it("serves the 2026-07-28 era: pinned client, no session, cache hints stamped on tools/list", async () => {
+    await start();
+    const { client, transport } = await connect({ wire: "2026" });
+    expect(client.getProtocolEra()).toBe("modern");
+    expect(transport.sessionId).toBeUndefined();
+    expect(handle.sessions()).toBe(0); // modern requests never open a legacy session
+    const { tools } = await client.listTools();
+    expect(tools).toHaveLength(11);
+    const r = (await client.callTool({
+      name: "axiom_plan_validate",
+      arguments: { plan: makePlan({ "a.txt": "hi\n" }) },
+    })) as CallToolResult;
+    expect(r.isError).toBeUndefined();
+    expect(structured<{ ok: boolean }>(r).ok).toBe(true);
+    // SEP-2549: the wire result carries ttlMs/cacheScope (hidden from the public type).
+    const rawList = (await client.request({ method: "tools/list" })) as unknown as {
+      ttlMs?: number;
+      cacheScope?: string;
+    };
+    expect(rawList.ttlMs).toBe(300_000);
+    expect(rawList.cacheScope).toBe("public");
+    // Every modern response identifies the server (spec PR #3002).
+    expect(client.getServerVersion()).toMatchObject({ name: "axiom", version: pkg.version });
+  });
+
+  it("serves both eras from one endpoint; `auto` clients land on modern", async () => {
+    await start();
+    const legacy = await connect({ wire: "2025" });
+    const auto = await connect({ wire: "auto" });
+    expect(legacy.client.getProtocolEra()).toBe("legacy");
+    expect(auto.client.getProtocolEra()).toBe("modern");
+    expect(handle.sessions()).toBe(1);
+    for (const c of [legacy.client, auto.client]) {
+      expect((await c.listTools()).tools).toHaveLength(11);
+    }
+  });
+
+  it("--wire 2026-only refuses the 2025 handshake (unsupported protocol version) and pinned clients still connect", async () => {
+    await start({ wire: "2026-only" });
+    await expect(connect({ wire: "2025" })).rejects.toThrow();
+    const init = await raw({ method: "POST", headers: mcpHeaders, body: initBody });
+    expect(init.status).toBeGreaterThanOrEqual(400);
+    expect(init.headers.get("mcp-session-id")).toBeNull();
+    expect(handle.sessions()).toBe(0);
+    const { client } = await connect({ wire: "2026" });
+    expect(client.getProtocolEra()).toBe("modern");
+    expect((await client.listTools()).tools).toHaveLength(11);
   });
 
   it("gives each client its own session and DELETE closes it", async () => {
@@ -234,10 +298,10 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     const log = createLogger({ write: () => {} });
     const policy = await createRootsPolicy([repo.root]);
     await expect(
-      startHttp(() => createServer(policy), { host: "0.0.0.0", port: 0, log }),
+      startHttp(serverFactory(policy), { host: "0.0.0.0", port: 0, log }),
     ).rejects.toMatchObject({ code: "ERR_INTERNAL" });
     await expect(
-      startHttp(() => createServer(policy), { host: "127.0.0.1", port: 0, log, token: "short" }),
+      startHttp(serverFactory(policy), { host: "127.0.0.1", port: 0, log, token: "short" }),
     ).rejects.toMatchObject({ code: "ERR_INTERNAL" });
   });
 });

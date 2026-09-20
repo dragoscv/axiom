@@ -4,8 +4,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makePlan, tmpRepo } from "./test-helpers.js";
 
@@ -297,28 +297,52 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     });
   });
 
-  it("mcp verb over real stdio keeps stdout clean (framing survives tools/list + a call)", async () => {
-    await mkdir(join(repo.root, "sub"), { recursive: true });
+  it.each([
+    ["2025 initialize handshake (default client)", undefined, "legacy"],
+    ["2026-07-28 pinned", { mode: { pin: "2026-07-28" } }, "modern"],
+  ] as const)(
+    "mcp verb over real stdio — %s — keeps stdout clean",
+    async (_label, negotiation, era) => {
+      await mkdir(join(repo.root, "sub"), { recursive: true });
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [CLI, "mcp", "--root", repo.root, "--log-level", "debug"],
+        stderr: "pipe",
+      });
+      const client = new Client(
+        { name: "stdio-test", version: "0.0.0" },
+        negotiation === undefined ? {} : { versionNegotiation: negotiation },
+      );
+      await client.connect(transport);
+      try {
+        expect(client.getProtocolEra()).toBe(era);
+        const { tools } = await client.listTools();
+        expect(tools).toHaveLength(11);
+        const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
+        expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
+        const v = await client.callTool({
+          name: "axiom_plan_validate",
+          arguments: { plan: makePlan({ "a.txt": "a" }) },
+        });
+        expect((v.structuredContent as { ok: boolean }).ok).toBe(true);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("mcp --wire 2026-only rejects a 2025 client; --wire bogus is a usage error", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [CLI, "mcp", "--root", repo.root, "--log-level", "debug"],
+      args: [CLI, "mcp", "--root", repo.root, "--wire", "2026-only"],
       stderr: "pipe",
     });
-    const client = new Client({ name: "stdio-test", version: "0.0.0" });
-    await client.connect(transport);
-    try {
-      const { tools } = await client.listTools();
-      expect(tools).toHaveLength(11);
-      const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
-      expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
-      const v = await client.callTool({
-        name: "axiom_plan_validate",
-        arguments: { plan: makePlan({ "a.txt": "a" }) },
-      });
-      expect((v.structuredContent as { ok: boolean }).ok).toBe(true);
-    } finally {
-      await client.close();
-    }
+    const client = new Client({ name: "stdio-legacy", version: "0.0.0" });
+    await expect(client.connect(transport)).rejects.toThrow();
+    await client.close().catch(() => undefined);
+    const bad = await run(["mcp", "--root", repo.root, "--wire", "1999"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("--wire");
   });
 
   it("snapshot writes a RepoSnapshot; snapshot-diff reports changes; schema RepoSnapshot works", async () => {

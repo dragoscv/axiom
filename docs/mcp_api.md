@@ -52,24 +52,44 @@ server — currently `web@2.0.0`; see [emitters.md](emitters.md)).
 
 | Transport | Start | Notes |
 |-----------|-------|-------|
-| stdio (default) | `axiom mcp --root <dir>` | JSON-RPC on stdout, JSON-line logs on stderr. |
-| Streamable HTTP | `axiom mcp --root <dir> --http <host:port> [--http-token-env NAME]` | `POST/GET/DELETE /mcp`, `GET /health`; `--http 0` = random loopback port, URL in the `http listening` stderr log line (`--log-level info`). |
+| stdio (default) | `axiom mcp --root <dir> [--wire 2026\|2025\|2026-only]` | JSON-RPC on stdout, JSON-line logs on stderr. |
+| Streamable HTTP | `axiom mcp --root <dir> --http <host:port> [--http-token-env NAME] [--wire …]` | `POST/GET/DELETE /mcp`, `GET /health`; `--http 0` = random loopback port, URL in the `http listening` stderr log line (`--log-level info`). |
+
+### Protocol revisions (`--wire`, D-19)
+
+Since 2.2.0 the server is built on MCP TypeScript SDK **v2** (`@modelcontextprotocol/server`
+2.0.0) and speaks two *eras* from one entry point:
+
+| Era | Revisions | Handshake | How AXIOM serves it |
+|-----|-----------|-----------|---------------------|
+| modern | `2026-07-28` | none — every request carries a `_meta` envelope (`io.modelcontextprotocol/protocolVersion`, `clientInfo`); `server/discover` advertises the server; no `Mcp-Session-Id` | **default**. stdio: `serveStdio` pins the connection on its opening exchange. HTTP: `createMcpHandler` builds one server instance per request; `tools/list`, `resources/*`, `server/discover` results carry `ttlMs`/`cacheScope` (SEP-2549) from AXIOM's static cache hints (`tools/list` 5 min public, `resources/read` 24 h public — digests are immutable, `resources/list` 10 s private). |
+| legacy | `2024-10-07` … `2025-11-25` | `initialize` request; HTTP sessions via `Mcp-Session-Id` | served from the **same** factory (`--wire 2026`, the default, and `--wire 2025`): the SDK pins a stdio connection to the legacy era when it opens with `initialize`; over HTTP, `isLegacyRequest` routes claim-less traffic to the sessionful transport described below. `--wire 2026-only` refuses these openings with the SDK's unsupported-protocol-version error. |
+
+A client on SDK v2 chooses its era with `versionNegotiation` (`{ mode: 'auto' }` probes and
+lands on modern; the default is the 2025 handshake). Clients still on SDK v1 keep working
+unchanged — they only ever send `initialize`. The SDK is reached through one seam,
+`packages/mcp/src/adapter.ts` (guard `check-sdk-adapter`), and lives in the lazy chunks
+`dist/mcp-lazy.js` / `dist/http-lazy.js`, so `compile`/`verify`/`gate`/`apply` never load it.
 
 HTTP rules (v2-architecture §5.4): bind is loopback (`127.0.0.1`) unless a host is given; a
 **non-loopback host requires a bearer token** from the env var named by `--http-token-env`
 (default `AXIOM_HTTP_TOKEN`) or the server refuses to start (`ERR_INTERNAL`, exit 2). Clients send
 `Authorization: Bearer <token>` (constant-time compare; `401` + `WWW-Authenticate` otherwise).
-One `StreamableHTTPServerTransport` + one server instance per session (`Mcp-Session-Id`, UUID);
-a non-`initialize` request without the header is `400`, an unknown/expired id is `404`; idle
-sessions are evicted after 30 min. DNS-rebinding protection (Host allowlist) is on for loopback
+Legacy (2025-era) traffic: one `WebStandardStreamableHTTPServerTransport` + one server instance
+per session (`Mcp-Session-Id`, UUID); a non-`initialize` request without the header is `400`, an
+unknown/expired id is `404`; idle sessions are evicted after 30 min. Modern (2026-07-28) traffic
+has no sessions. DNS-rebinding protection (Host allowlist) is on for loopback
 binds; bodies over 4 MiB are `413`. The transport is a lazy chunk (`dist/http-lazy.js`) built on
 `node:http` only — the stdio path and the bundle-size budget are unaffected.
 
 Conformance: `packages/conformance` starts `axiom mcp --http 127.0.0.1:0` and runs
 `@modelcontextprotocol/conformance server --url … --expected-failures baseline.yml` in CI
 (ubuntu). The baseline lists the scenarios AXIOM fails by design (prompts, logging, subscribe,
-sampling, elicitation, progress, non-text content, `test://` fixtures); the run fails on any
-unexpected failure and on any stale baseline entry.
+sampling, elicitation, progress, non-text content, `test://`/`test_*` fixtures); the run fails on
+any unexpected failure and on any stale baseline entry. Conformance 0.1.16 scores the 2025 eras
+only (`--spec-version` ≤ `2025-11-25`), so it exercises the legacy leg; the 2026-07-28 leg is
+covered by the SDK-v2 client tests in `packages/mcp/src/http.test.ts` / `cli.test.ts` (pinned
+`2026-07-28`, `auto`, and `--wire 2026-only` rejection).
 
 ## Error contract
 
