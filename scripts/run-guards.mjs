@@ -10,6 +10,7 @@
  *   node scripts/run-guards.mjs                 all guards
  *   node scripts/run-guards.mjs deps stdout     only guards whose file name contains a filter
  *   node scripts/run-guards.mjs --fast          skip slow/build-dependent guards (pre-commit)
+ *   node scripts/run-guards.mjs --skip=release-complete   drop guards matching a substring
  *   node scripts/run-guards.mjs --json          machine-readable summary
  *   node scripts/run-guards.mjs --quiet         no "slowest" line
  *   GUARD_CONCURRENCY=4 …                       override the pool size
@@ -29,6 +30,15 @@ const only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const quiet = flags.has("--quiet");
 const json = flags.has("--json");
 const fast = flags.has("--fast");
+/**
+ * `--skip=<substring>` (repeatable). Used by release.yml: `release-complete` asserts every
+ * tagged version is ON the registry, so running it BEFORE `changeset publish` in the same
+ * tagged run fails by construction — it is the post-publish verification instead.
+ */
+const skips = [...flags]
+  .filter((f) => f.startsWith("--skip="))
+  .map((f) => f.slice("--skip=".length))
+  .filter(Boolean);
 
 /** Guards that need a build, spawn processes or the network — skipped under `--fast`. */
 const SLOW = new Set([
@@ -42,6 +52,7 @@ const guards = readdirSync(SCRIPTS_DIR)
   .filter((f) => f.startsWith("check-") && f.endsWith(".mjs"))
   .filter((f) => only.length === 0 || only.some((o) => f.includes(o)))
   .filter((f) => !fast || !SLOW.has(f))
+  .filter((f) => !skips.some((s) => f.includes(s)))
   .sort();
 
 const limit = Math.max(

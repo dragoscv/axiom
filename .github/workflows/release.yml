@@ -62,7 +62,10 @@ jobs:
         run: pnpm exec vitest run
 
       - name: Guards (strict — dist must exist)
-        run: node scripts/run-guards.mjs --strict
+        # `release-complete` asserts every tagged version is already ON the registry; running it
+        # here would fail by construction on the very tag we are about to publish. It runs after
+        # Publish instead, as the live verification that all 9 packages actually landed.
+        run: node scripts/run-guards.mjs --strict --skip=release-complete
 
       - name: Publish
         run: pnpm exec changeset publish
@@ -71,6 +74,12 @@ jobs:
 
       - name: Push tags created by changeset
         run: git push origin --tags
+
+      - name: Verify every tagged package is on the registry
+        # npm's CDN needs a moment after publish before the packument lists the new version.
+        run: |
+          sleep 30
+          node scripts/check-release-complete.mjs --strict
 
   vscode-extension:
     # S-412: the .vsix is always built and attached to the GitHub release; Marketplace publish
