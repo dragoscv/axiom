@@ -22,6 +22,8 @@ param(
   [switch]$ListOnly
 )
 $ErrorActionPreference = 'Stop'
+# `npm trust github ... --loglevel warn` mis-parses `warn` as a positional (EUSAGE); use the env var.
+$env:npm_config_loglevel = 'warn'
 $root = Split-Path -Parent $PSScriptRoot
 $ignored = @('@codai/axiom-testkit', '@codai/axiom-conformance')
 
@@ -44,16 +46,25 @@ foreach ($p in $pkgs) {
   Push-Location $p.dir
   try {
     if (-not $ListOnly) {
-      # Every call needs a browser OTP approval (EOTP → npm prints an auth URL and waits).
-      # Output must NOT be captured or piped, or the URL never reaches the operator.
-      npm trust github $p.name --file $Workflow --repo $Repo --allow-publish --yes --loglevel warn
-      if ($LASTEXITCODE -ne 0) {
+      # Every call (including `trust list`) needs a browser OTP approval: npm prints an auth
+      # URL on STDOUT and waits. stdout must stay a TTY — any pipe makes npm non-interactive
+      # and it dies with EOTP instead of waiting. Only stderr (where E409 lands) goes to a file.
+      $log = Join-Path ([IO.Path]::GetTempPath()) "npm-trust-$([IO.Path]::GetRandomFileName()).log"
+      npm trust github $p.name --file $Workflow --repo $Repo --allow-publish --yes 2> $log
+      $rc = $LASTEXITCODE
+      $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
+      Remove-Item $log -ErrorAction SilentlyContinue
+      if ($rc -ne 0 -and $text -match 'E409|already exists') {
+        # Idempotency: a matching relationship is already configured (observed 2026-09-20:
+        # 9/9 "failed" while every package was already trusted). That is success.
+        Write-Host "   already trusted — nothing to do"
+      } elseif ($rc -ne 0) {
         Write-Host "   FAIL trust github ($($p.name))"
         $failed++
         continue
       }
     }
-    npm trust list $p.name --loglevel warn
+    npm trust list $p.name
   } finally { Pop-Location }
 }
 if ($failed -gt 0) { Write-Host "$failed package(s) failed"; exit 1 }
