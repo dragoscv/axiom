@@ -329,6 +329,9 @@ Closed enum in `packages/schema/src/errors.ts`. Anything else is a bug
 | `ERR_PROVIDER_FAILED` | a fact provider or predicate threw |
 | `ERR_GUARD_TIMEOUT` | external guard exceeded `timeoutMs` |
 | `ERR_GUARD_OUTPUT` | external guard stdout was not a valid `GuardOutput` |
+| `ERR_TASK_NOT_FOUND` | `taskId` / `sessionId` unknown to this server process (never created, expired after its TTL, or already consumed) — `axiom_task_get`, `axiom_task_cancel`, `axiom_plan_add`, `axiom_plan_seal` |
+| `ERR_TASK_CANCELLED` | the task was cancelled (`axiom_task_cancel` / server stop); also the provider finding a killed guard reports |
+| `ERR_PLAN_SESSION_STATE` | `axiom_plan_add` on a sealed session, or a chunk that would exceed the session's 2000-artifact / 64 MiB budget |
 | `ERR_FACT_DISABLED` | a fact provider / predicate is disabled by the profile or a CLI gate (`guard.external` without `facts.allowGuards` + `--allow-guards`, or without a root) → `verdict: error` |
 | `ERR_SIGNATURE_MISSING` | a trust store exists but the bundle carries no signature (`axiom verify --root`, `axiom_manifest_verify`) |
 | `ERR_SIGNATURE_INVALID` | signature verification failed (unknown key, bad signature, non-canonical payload, rollback) or unusable key material |

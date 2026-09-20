@@ -41,6 +41,8 @@ export interface GuardFacts {
   allowlist: readonly string[];
   /** Apply staging dir, when the runner has one (`cwd: "staging"`). */
   stagingDir?: string;
+  /** Runner cancellation (S-406 tasks): aborting kills every running guard tree. */
+  signal?: AbortSignal;
 }
 
 /** Options threaded from the server flags into `runChecks` (§3.2). */
@@ -48,6 +50,8 @@ export interface GuardOptions {
   allowGuards?: boolean;
   guardAllowlist?: readonly string[];
   stagingDir?: string;
+  /** Cancel running guards (S-406 `axiom_task_cancel`); a cancelled guard reports `ERR_TASK_CANCELLED`. */
+  signal?: AbortSignal;
 }
 
 /** Everything a predicate may read. Frozen before predicates run. */

@@ -17,6 +17,21 @@ export {
 } from "./server.js";
 export { buildToolsSpec, renderToolsSpec, type ToolSpecEntry } from "./spec.js";
 export {
+  PLAN_SESSION_MAX_ARTIFACTS,
+  PLAN_SESSION_MAX_BYTES,
+  PLAN_SESSION_TTL_MS,
+  type PlanSession,
+  PlanSessionStore,
+  TASK_MAX_WORKING,
+  TASK_POLL_INTERVAL_MS,
+  TASK_STATUSES,
+  TASK_TTL_MS,
+  type TaskDescriptor,
+  type TaskRecord,
+  type TaskStatus,
+  TaskStore,
+} from "./tasks.js";
+export {
   type AnyToolDef,
   BUNDLE_BYTES_MAX,
   type RiskClass,

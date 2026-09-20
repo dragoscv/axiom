@@ -98,12 +98,12 @@ afterEach(async () => {
 });
 
 describe("startHttp — MCP over Streamable HTTP", () => {
-  it("initialize + tools/list (11 tools) + a tool call, through the SDK client", async () => {
+  it("initialize + tools/list (17 tools) + a tool call, through the SDK client", async () => {
     await start();
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(17);
     expect(tools.map((t) => t.name).sort()).toEqual(TOOL_DEFS.map((t) => t.name).sort());
     const r = (await client.callTool({
       name: "axiom_plan_validate",
@@ -122,7 +122,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(transport.sessionId).toBeUndefined();
     expect(handle.sessions()).toBe(0); // modern requests never open a legacy session
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(17);
     const r = (await client.callTool({
       name: "axiom_plan_validate",
       arguments: { plan: makePlan({ "a.txt": "hi\n" }) },
@@ -148,7 +148,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(auto.client.getProtocolEra()).toBe("modern");
     expect(handle.sessions()).toBe(1);
     for (const c of [legacy.client, auto.client]) {
-      expect((await c.listTools()).tools).toHaveLength(11);
+      expect((await c.listTools()).tools).toHaveLength(17);
     }
   });
 
@@ -161,7 +161,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(handle.sessions()).toBe(0);
     const { client } = await connect({ wire: "2026" });
     expect(client.getProtocolEra()).toBe("modern");
-    expect((await client.listTools()).tools).toHaveLength(11);
+    expect((await client.listTools()).tools).toHaveLength(17);
   });
 
   it("gives each client its own session and DELETE closes it", async () => {
@@ -182,7 +182,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     });
     expect(res.status).toBe(404);
     // b still works
-    expect((await b.client.listTools()).tools).toHaveLength(11);
+    expect((await b.client.listTools()).tools).toHaveLength(17);
   });
 
   it("rejects a non-initialize request without a session id (400) and an unknown id (404)", async () => {
@@ -254,7 +254,7 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect(unauth.status).toBe(401);
     expect(unauth.headers.get("www-authenticate")).toContain("Bearer");
     const { client } = await connect({ token: "0123456789abcdef-secret" });
-    expect((await client.listTools()).tools).toHaveLength(11);
+    expect((await client.listTools()).tools).toHaveLength(17);
   });
 
   it("DNS-rebinding protection: a foreign Host header is rejected on a loopback bind", async () => {

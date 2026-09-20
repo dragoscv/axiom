@@ -159,6 +159,7 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
       allowlist: [...(opts.guardAllowlist ?? [])],
     };
     if (opts.stagingDir !== undefined) guard.stagingDir = opts.stagingDir;
+    if (opts.signal !== undefined) guard.signal = opts.signal;
     ctx.facts.guard = guard;
   }
   Object.freeze(ctx.facts);

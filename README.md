@@ -151,7 +151,8 @@ is an interface injected into `compilePlan`, not a dep of `plan`); `axm-lsp` on 
 `checks` (15 built-in predicates incl. `expr.cel`, `guard.external` and
 `manifest.requireSigned`; three profiles), `apply` (fs + dry-run + journal/rollback
 + idempotency + `pr` mode with a spawn args array, no shell), `mcp` (stdio and
-streamable HTTP, 11 tools, `axiom://` resources), `axiom gate --stdin` hook mode,
+streamable HTTP, 17 tools incl. background check tasks and chunked plan sessions,
+`axiom://` resources), `axiom gate --stdin` hook mode,
 `.axm` DSL (Chevrotain) with an LSP + VS Code extension, DSSE/Ed25519 signing with
 key pinning + anti-rollback ([docs/signing.md](docs/signing.md)), `axiom gc` for the
 CAS ([docs/cas.md](docs/cas.md)), `axiom migrate v1` ([docs/migrate.md](docs/migrate.md)),

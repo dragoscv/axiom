@@ -19,6 +19,12 @@ fails CI when this table, `packages/mcp/README.md` and that file disagree.
 | `axiom_plan_compile` | act | Compile `Plan` → `ManifestBundle` (JCS manifest, sha256 per artifact, inline/CAS blobs); writes only under `<root>/.axiom/` when a root is given. `ref` sources resolve from the root's CAS only — the tool has no network switch (`ERR_NET_DISABLED`; fetch with the CLI `compile --allow-net`) | `{ plan, store?, root? }` | `ManifestBundle { manifest, manifestDigest, attestation?, envelope?, blobs }` |
 | `axiom_manifest_verify` | read | Re-verify a bundle: canonical form, digest, every blob hash; with `root`, also the detached DSSE signatures against `<root>/.axiom/trust/keys.json` ([signing.md](signing.md)) | `{ bundle, root? }` | `{ ok, manifestDigest?, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` present only when the root has a trust store; `ok` is `false` when it fails and `code` is `ERR_SIGNATURE_MISSING` (no signature at all) or `ERR_SIGNATURE_INVALID` |
 | `axiom_check` | read | Run a `Profile` of predicates over a bundle against a root; fails closed on provider errors; with a root, verifies `manifest.preImage` against the tree (`report.preImage: verified \| drifted \| unverified`, drift → `verdict: error`) | `{ bundle, profile?, root? }` | `CheckReport` |
+| `axiom_check_start` | read | Same evaluation as `axiom_check`, returned **immediately as a task** (see [Tasks](#tasks-d-24)); the bundle and root are validated synchronously, so a malformed bundle or a root outside the allowlist is an `isError` result, never a task | `{ bundle, profile?, root? }` | `{ taskId, tool: "axiom_check", status: "working", pollIntervalMs, ttlMs, elapsedMs }` |
+| `axiom_task_get` | read | Poll a task; while `working` only the descriptor, once terminal `result` (`completed`) or `error` (`failed` \| `cancelled`) is attached | `{ taskId }` | descriptor + `result?: CheckReport` + `error?: { code, message, details? }`; unknown/expired → `ERR_TASK_NOT_FOUND` |
+| `axiom_task_cancel` | act | Abort a `working` task — every running guard process tree is killed, the task ends `cancelled` with `error.code = ERR_TASK_CANCELLED`; idempotent on terminal tasks | `{ taskId }` | descriptor |
+| `axiom_plan_begin` | act | Open a **chunked plan session** ([below](#chunked-plans-d-24)) with the Plan header — everything except `artifacts`; the header is validated by the tool's input schema | `{ name, intent, profile?, capabilities?, checks?, counter?, metadata? }` | `{ sessionId, artifacts: 0, bytes: 0, limits: { maxArtifacts, maxBytes }, ttlMs }` |
+| `axiom_plan_add` | act | Append a chunk of `Plan.artifacts[]` (validated with `PlanArtifactSchema`; each call ≤ 4 MiB, inline content ≤ 256 KiB per artifact) | `{ sessionId, artifacts[] }` | session descriptor; duplicate path → `ERR_INVALID_PLAN` (with `path`), sealed/over-budget → `ERR_PLAN_SESSION_STATE`, unknown session → `ERR_TASK_NOT_FOUND` |
+| `axiom_plan_seal` | act | Assemble header + artifacts into one Plan and compile it through the **same** code path as `axiom_plan_compile` (options identical, manifest stored under `<root>/.axiom/manifests` when a root is given); the session is consumed even on failure | `{ sessionId, store?, root? }` | `ManifestBundle` |
 | `axiom_apply_dry_run` | read | Containment + pre-image check + staging + unified diff, no user files touched | `{ bundle, root, profile? }` | `ApplyResult { mode: "dry-run", diff, files[] }` |
 | `axiom_apply` | destructive | Two-phase commit: stage → journal → rename; requires `confirmDigest === manifestDigest`; single writer via `.axiom/lock` | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
 | `axiom_rollback` | destructive | Reverse-replay the journal of an applied manifest, scoped to its recorded paths | `{ root, manifestDigest }` | `{ manifestDigest, status, phase, steps[], root }` |
@@ -40,6 +46,38 @@ operator, not to an agent's tool surface. Its code is a lazy chunk (`dist/migrat
 fetching of `ref` sources (`compile --allow-net`, [plan-format.md](plan-format.md#ref-sources)) are
 CLI-only: both are operator decisions (disk reclamation, egress), so an agent cannot trigger them
 through the server.
+
+### Tasks (D-24)
+
+MCP SDK v2 carries the `io.modelcontextprotocol/tasks` **wire vocabulary** but no runtime: `tasks/*`
+are excluded from the typed method surface and the 2026-07-28 `tools/call` codec rejects a
+`CreateTaskResult`. AXIOM therefore models long-running work as **ordinary tools** — `axiom_check_start`
+→ poll `axiom_task_get` every `pollIntervalMs` (2 s) until `status ∈ {completed, failed, cancelled}`,
+`axiom_task_cancel` to abort — which works on every client that can call a tool (Copilot, codai
+agent-core, SDK v1 and v2) and on both wire eras. This is what unblocks brivio's full guard suite:
+`guard.external.timeoutMs` now accepts up to **15 min** (was 60 s), and a task outlives the client's
+per-call timeout (SDK default 60 s).
+
+Semantics: tasks live in the server **process** — shared by every connection (stdio) or request (HTTP)
+that process serves, never written to disk; a restart forgets them. Finished tasks are pollable for
+`ttlMs` (10 min) then dropped (`ERR_TASK_NOT_FOUND`); at most 8 tasks run concurrently
+(`ERR_EBUSY`). A task's `result` is exactly the `CheckReport` a synchronous `axiom_check` would have
+returned, and it is stored under `<root>/.axiom/reports` the same way. Cancelling sends the abort
+signal into `runChecks` — each running guard is killed (`taskkill /T` on Windows, `SIGKILL`
+elsewhere) and reports a provider `ERR_TASK_CANCELLED` finding. Stopping the server aborts every
+working task. A synchronous `axiom_check` still runs guards of any length; the only limit is the
+client's own timeout, which is why long suites should use `axiom_check_start`.
+
+### Chunked plans (D-24)
+
+Every call is capped at 4 MiB of JSON (`ERR_BUNDLE_TOO_LARGE`). A Plan bigger than that is built
+server-side: `axiom_plan_begin` (header) → `axiom_plan_add` × n (artifact chunks, unique paths across
+chunks) → `axiom_plan_seal` (compile). Sessions hold at most 2000 artifacts / 64 MiB, expire after 30 min
+idle, and at most 16 are open per process. Sealing calls the same `compilePlan` as `axiom_plan_compile`
+with the same options, so **the sealed `manifestDigest` is identical to a one-shot compile of the assembled
+Plan** — a fast-check property in `packages/mcp/src/tasks.test.ts` proves it for arbitrary plans and
+arbitrary chunkings. Inline blobs are still capped at 4 MiB per bundle (invariant 2); a large sealed Plan
+needs `store: "cas"` and therefore a root.
 
 ## Resources
 

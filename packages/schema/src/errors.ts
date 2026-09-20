@@ -69,6 +69,13 @@ export const ERROR_CODES = [
   "ERR_GIT_BRANCH_EXISTS",
   "ERR_GIT_BRANCH_INVALID",
   "ERR_GIT_FAILED",
+  // tasks + chunked plans (S-406, D-24)
+  /** `taskId` / `sessionId` unknown to this server (never created, expired, or already collected). */
+  "ERR_TASK_NOT_FOUND",
+  /** The task (or a guard inside it) was cancelled via `axiom_task_cancel`. */
+  "ERR_TASK_CANCELLED",
+  /** `axiom_plan_add` after `axiom_plan_seal`, or a chunk that would exceed the session's limits. */
+  "ERR_PLAN_SESSION_STATE",
   // transport
   "ERR_REF_OFFLINE",
   "ERR_NET_DISABLED",

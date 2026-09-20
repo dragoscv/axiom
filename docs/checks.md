@@ -292,7 +292,7 @@ started with `--allow-guards`. Otherwise it returns one `error` finding
 | `command` | string | required — relative: resolved under `<root>/scripts/`; absolute: must be in `--guard-allowlist` |
 | `args` | string[] | `[]` |
 | `cwd` | `"root" \| "staging"` | `"root"` |
-| `timeoutMs` | int 1–60000 | `30000` |
+| `timeoutMs` | int 1–900000 (15 min; S-406 — anything over a client's per-call timeout belongs in an `axiom_check_start` task) | `30000` |
 | `env` | record<string,string> | — (added to the scrubbed env) |
 | `stdin` | `"bundle" \| "manifest" \| "none"` | `"bundle"` |
 | `legacyText` | boolean | `false` — accept brivio-style `OK    name` / `FAIL  name: reason` stdout |
@@ -339,6 +339,7 @@ type GuardOutput = {
 | exit 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` (fail closed) |
 | exit ≠ 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` |
 | wall clock > `timeoutMs` | process tree killed, one `error` finding, `code: ERR_GUARD_TIMEOUT` |
+| runner cancelled (`axiom_task_cancel`, server stop) | process tree killed, one `error` finding, `code: ERR_TASK_CANCELLED` |
 | spawn failure (ENOENT etc.) | one `error` finding, `code: ERR_GUARD_OUTPUT` |
 | `legacyText: true` and no JSON | `FAIL  name: reason` lines → `error` findings `{id: name, message: reason}`; only `OK` lines → `[]` |
 

@@ -650,6 +650,9 @@
                   "ERR_GIT_BRANCH_EXISTS",
                   "ERR_GIT_BRANCH_INVALID",
                   "ERR_GIT_FAILED",
+                  "ERR_TASK_NOT_FOUND",
+                  "ERR_TASK_CANCELLED",
+                  "ERR_PLAN_SESSION_STATE",
                   "ERR_REF_OFFLINE",
                   "ERR_NET_DISABLED",
                   "ERR_NET_DENIED",
@@ -938,6 +941,1185 @@
     }
   },
   {
+    "name": "axiom_check_start",
+    "description": "Same evaluation as axiom_check, but returned immediately as a task so long `guard.external` suites (up to 15 min per guard) outlive the client's per-call timeout. Poll axiom_task_get with the returned taskId every pollIntervalMs until status is completed|failed|cancelled; the CheckReport is in `result`. Finished tasks are pollable for ttlMs, then forgotten. Tasks live in this server process only (D-24 — tool-level tasks, not the io.modelcontextprotocol/tasks wire extension).",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "ManifestBundle"
+        },
+        "profile": {
+          "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+          "type": "string"
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "working",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "pollIntervalMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "taskId",
+        "tool",
+        "status",
+        "pollIntervalMs",
+        "ttlMs",
+        "elapsedMs"
+      ]
+    }
+  },
+  {
+    "name": "axiom_task_get",
+    "description": "Status of a task created by axiom_check_start. While `working` only the descriptor is returned; once terminal, `result` (completed) or `error` (failed|cancelled) is attached. Unknown or expired taskId → ERR_TASK_NOT_FOUND.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "taskId returned by axiom_check_start"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "working",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "pollIntervalMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "apiVersion": {
+              "type": "string",
+              "const": "axiom.dev/v2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "CheckReport"
+            },
+            "manifestDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "error"
+              ]
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warn",
+                      "info"
+                    ]
+                  },
+                  "predicate": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "facts": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "severity",
+                  "predicate",
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "factsDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "durationMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "skipped",
+                      "error"
+                    ]
+                  },
+                  "ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "name",
+                  "status",
+                  "ms"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "preImage": {
+              "type": "string",
+              "enum": [
+                "verified",
+                "drifted",
+                "unverified"
+              ]
+            }
+          },
+          "required": [
+            "apiVersion",
+            "kind",
+            "manifestDigest",
+            "profile",
+            "verdict",
+            "findings",
+            "factsDigest",
+            "durationMs",
+            "providers"
+          ],
+          "additionalProperties": false
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "details": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ]
+        }
+      },
+      "required": [
+        "taskId",
+        "tool",
+        "status",
+        "pollIntervalMs",
+        "ttlMs",
+        "elapsedMs"
+      ],
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "axiom_task_cancel",
+    "description": "Abort a `working` task: every running guard process tree is killed and the task ends `cancelled` with error ERR_TASK_CANCELLED. Idempotent — a terminal task is returned unchanged.",
+    "riskClass": "ACT",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "taskId returned by axiom_check_start"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "working",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "pollIntervalMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "taskId",
+        "tool",
+        "status",
+        "pollIntervalMs",
+        "ttlMs",
+        "elapsedMs"
+      ]
+    }
+  },
+  {
+    "name": "axiom_plan_begin",
+    "description": "Start assembling a Plan whose JSON would exceed the 4 MiB per-call cap: send the header here (everything except `artifacts`), append artifacts in chunks with axiom_plan_add, then axiom_plan_seal compiles the whole. The sealed bundle's manifestDigest is identical to a one-shot axiom_plan_compile of the same Plan. Sessions are in-memory, expire after 30 min idle, and hold at most 2000 artifacts / 64 MiB.",
+    "riskClass": "ACT",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "intent": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "profile": {
+          "default": "default",
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "fs",
+              "net",
+              "secret",
+              "ai",
+              "compute",
+              "git"
+            ]
+          }
+        },
+        "checks": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "predicate": {
+                "type": "string",
+                "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*$"
+              },
+              "params": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "severity": {
+                "default": "error",
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warn",
+                  "info"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "predicate",
+              "params"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "counter": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "metadata": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema1"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "intent"
+      ],
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        },
+        "__schema1": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxArtifacts": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "maxArtifacts",
+            "maxBytes"
+          ]
+        },
+        "ttlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "sessionId",
+        "artifacts",
+        "bytes",
+        "limits",
+        "ttlMs"
+      ]
+    }
+  },
+  {
+    "name": "axiom_plan_add",
+    "description": "Add a chunk of Plan artifacts (each ≤ 4 MiB call, inline content ≤ 256 KiB per artifact as in a Plan) to an open session. Paths must be unique across every chunk (ERR_INVALID_PLAN otherwise); a sealed or over-budget session is ERR_PLAN_SESSION_STATE.",
+    "riskClass": "ACT",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "sessionId returned by axiom_plan_begin"
+        },
+        "artifacts": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "description": "Plan artifacts, same shape as Plan.artifacts[]"
+        }
+      },
+      "required": [
+        "sessionId",
+        "artifacts"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxArtifacts": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "maxArtifacts",
+            "maxBytes"
+          ]
+        },
+        "ttlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "sessionId",
+        "artifacts",
+        "bytes",
+        "limits",
+        "ttlMs"
+      ]
+    }
+  },
+  {
+    "name": "axiom_plan_seal",
+    "description": "Assemble the session's header + every added artifact into one Plan and compile it exactly like axiom_plan_compile (same options, same digest). The session is consumed whether or not compilation succeeds. Bundles whose inline blobs exceed 4 MiB need `store: cas` (and therefore a root).",
+    "riskClass": "ACT",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "sessionId returned by axiom_plan_begin"
+        },
+        "store": {
+          "description": "Blob transport; default inline",
+          "type": "string",
+          "enum": [
+            "inline",
+            "cas"
+          ]
+        },
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "apiVersion": {
+              "type": "string",
+              "const": "axiom.dev/v2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "Manifest"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+            },
+            "profile": {
+              "type": "string",
+              "minLength": 1
+            },
+            "planDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "artifacts": {
+              "minItems": 1,
+              "maxItems": 2000,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "create",
+                      "overwrite",
+                      "delete"
+                    ]
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "0644",
+                      "0755"
+                    ]
+                  },
+                  "digest": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      }
+                    },
+                    "required": [
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "template",
+                      "cas",
+                      "ref",
+                      "patch"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "op",
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "predicate": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*$"
+                  },
+                  "params": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "severity": {
+                    "default": "error",
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warn",
+                      "info"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "predicate",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "toolchain": {
+              "type": "object",
+              "properties": {
+                "axiom": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "emitters": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "axiom",
+                "emitters"
+              ],
+              "additionalProperties": false
+            },
+            "counter": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "preImage": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Relative POSIX path, NFC, no reserved names"
+                  },
+                  "sha256": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      },
+                      {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "apiVersion",
+            "kind",
+            "name",
+            "profile",
+            "planDigest",
+            "artifacts",
+            "checks",
+            "toolchain"
+          ],
+          "additionalProperties": false
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "sha256:<64 lowercase hex>"
+        },
+        "attestation": {
+          "type": "object",
+          "properties": {
+            "_type": {
+              "type": "string",
+              "const": "https://in-toto.io/Statement/v1"
+            },
+            "subject": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "digest": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Lowercase hex-encoded sha256"
+                      }
+                    },
+                    "required": [
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "digest"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "predicateType": {
+              "type": "string",
+              "format": "uri"
+            },
+            "predicate": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "_type",
+            "subject",
+            "predicateType",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        "envelope": {
+          "type": "object",
+          "properties": {
+            "payloadType": {
+              "type": "string",
+              "const": "application/vnd.in-toto+json"
+            },
+            "payload": {
+              "type": "string",
+              "format": "base64",
+              "contentEncoding": "base64",
+              "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+            },
+            "signatures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "keyid": {
+                    "type": "string"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "format": "base64",
+                    "contentEncoding": "base64",
+                    "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                  }
+                },
+                "required": [
+                  "sig"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "payloadType",
+            "payload",
+            "signatures"
+          ],
+          "additionalProperties": false
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "payloadType": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "application/vnd.axiom.manifest+json"
+                  },
+                  {
+                    "type": "string",
+                    "const": "application/vnd.axiom.manifest-bound+json"
+                  }
+                ]
+              },
+              "payload": {
+                "type": "string",
+                "format": "base64",
+                "contentEncoding": "base64",
+                "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+              },
+              "signatures": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "keyid": {
+                      "type": "string"
+                    },
+                    "sig": {
+                      "type": "string",
+                      "format": "base64",
+                      "contentEncoding": "base64",
+                      "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                    }
+                  },
+                  "required": [
+                    "sig"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "payloadType",
+              "payload",
+              "signatures"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "blobs": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "sha256:<64 lowercase hex>"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "encoding": {
+                "type": "string",
+                "enum": [
+                  "utf8",
+                  "base64"
+                ]
+              },
+              "data": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "encoding",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "manifest",
+        "manifestDigest"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "axiom_apply_dry_run",
     "description": "Stage the bundle under <root>/.axiom/staging, run pre-apply checks and produce a unified diff against the current tree. Nothing outside .axiom/ is touched. Echo the returned manifestDigest as `confirmDigest` to axiom_apply.",
     "riskClass": "READ",
@@ -1154,6 +2336,9 @@
                 "ERR_GIT_BRANCH_EXISTS",
                 "ERR_GIT_BRANCH_INVALID",
                 "ERR_GIT_FAILED",
+                "ERR_TASK_NOT_FOUND",
+                "ERR_TASK_CANCELLED",
+                "ERR_PLAN_SESSION_STATE",
                 "ERR_REF_OFFLINE",
                 "ERR_NET_DISABLED",
                 "ERR_NET_DENIED",
@@ -1429,6 +2614,9 @@
                 "ERR_GIT_BRANCH_EXISTS",
                 "ERR_GIT_BRANCH_INVALID",
                 "ERR_GIT_FAILED",
+                "ERR_TASK_NOT_FOUND",
+                "ERR_TASK_CANCELLED",
+                "ERR_PLAN_SESSION_STATE",
                 "ERR_REF_OFFLINE",
                 "ERR_NET_DISABLED",
                 "ERR_NET_DENIED",
@@ -2020,6 +3208,9 @@
                   "ERR_GIT_BRANCH_EXISTS",
                   "ERR_GIT_BRANCH_INVALID",
                   "ERR_GIT_FAILED",
+                  "ERR_TASK_NOT_FOUND",
+                  "ERR_TASK_CANCELLED",
+                  "ERR_PLAN_SESSION_STATE",
                   "ERR_REF_OFFLINE",
                   "ERR_NET_DISABLED",
                   "ERR_NET_DENIED",

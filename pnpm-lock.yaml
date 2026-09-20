@@ -421,6 +421,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.0.0
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.1
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(tsx@4.23.13)(typescript@7.0.2)

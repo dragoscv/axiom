@@ -14,6 +14,7 @@ import {
   JournalPhaseSchema,
   type ManifestBundle,
   ManifestBundleSchema,
+  PlanArtifactSchema,
   PlanSchema,
   RepoSnapshotSchema,
 } from "@codai/axiom-schema";
@@ -29,6 +30,12 @@ import {
   snapshotRoot,
 } from "./snapshot.js";
 import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
+import {
+  type PlanSessionStore,
+  TaskErrorSchema,
+  TaskStatusSchema,
+  type TaskStore,
+} from "./tasks.js";
 
 /** Hard cap on any single `bundle`/`plan` argument, measured as UTF-8 JSON bytes (§(f) payload size). */
 export const BUNDLE_BYTES_MAX = 4 * 1024 * 1024;
@@ -51,6 +58,10 @@ export interface ToolContext {
   seenRoots: Set<string>;
   /** `--allow-guards` / `--guard-allowlist` from startup (§3.2); absent = guards disabled. */
   guards?: GuardOptions;
+  /** Long-running checks (`axiom_check_start` / `axiom_task_*`), shared across a factory's instances (S-406). */
+  tasks: TaskStore;
+  /** Chunked plan sessions (`axiom_plan_begin` / `add` / `seal`), shared like `tasks`. */
+  planSessions: PlanSessionStore;
 }
 
 export interface ToolDef<I extends z.ZodRawShape = z.ZodRawShape, O extends z.ZodType = z.ZodType> {
@@ -159,6 +170,7 @@ async function checkBundle(
   bundle: ManifestBundle,
   profileName: string | undefined,
   rootReal: string | undefined,
+  signal?: AbortSignal,
 ): Promise<CheckReport> {
   const profile = await profileFor(ctx, bundle, profileName, rootReal);
   const opts: Parameters<typeof runChecks>[0] = {
@@ -167,11 +179,17 @@ async function checkBundle(
     checks: bundle.manifest.checks,
     ...ctx.guards,
   };
+  if (signal !== undefined) opts.signal = signal;
   if (rootReal !== undefined) {
     opts.root = rootReal;
     opts.casDir = path.join(rootReal, ".axiom", "cas");
   }
   const report = await runChecks(opts);
+  if (signal?.aborted) {
+    throw new AxiomError("ERR_TASK_CANCELLED", "check cancelled", {
+      details: { manifestDigest: bundle.manifestDigest },
+    });
+  }
   if (rootReal !== undefined) {
     await saveReport(rootReal, report);
     ctx.seenRoots.add(rootReal);
@@ -269,6 +287,47 @@ const BundleOrRef = z
     "A ManifestBundle object, or `sha256:<hex>` of a bundle stored under <root>/.axiom/manifests",
   );
 
+// --- tasks + chunked plans (S-406, D-24) ------------------------------------------------------
+
+export const TaskDescriptorOutput = z.object({
+  taskId: z.string(),
+  tool: z.string(),
+  status: TaskStatusSchema,
+  pollIntervalMs: z.int().positive(),
+  ttlMs: z.int().positive(),
+  elapsedMs: z.int().nonnegative(),
+});
+
+/** `axiom_task_get`: the descriptor plus, once terminal, the result or the error. */
+export const TaskGetOutput = TaskDescriptorOutput.extend({
+  /** Present iff `status === "completed"`; for `axiom_check` tasks a `CheckReport`. */
+  result: CheckReportSchema.optional(),
+  /** Present iff `status` is `failed` or `cancelled`. */
+  error: TaskErrorSchema.optional(),
+});
+
+const PlanHeaderShape = {
+  name: PlanSchema.shape.name,
+  intent: PlanSchema.shape.intent,
+  profile: PlanSchema.shape.profile.optional(),
+  capabilities: PlanSchema.shape.capabilities.optional(),
+  checks: PlanSchema.shape.checks.optional(),
+  counter: PlanSchema.shape.counter,
+  metadata: PlanSchema.shape.metadata.optional(),
+};
+
+export const PlanSessionOutput = z.object({
+  sessionId: z.string(),
+  artifacts: z.int().nonnegative(),
+  bytes: z.int().nonnegative(),
+  /** Remaining budget before `axiom_plan_add` refuses with `ERR_PLAN_SESSION_STATE`. */
+  limits: z.object({ maxArtifacts: z.int().positive(), maxBytes: z.int().positive() }),
+  ttlMs: z.int().positive(),
+});
+
+const SessionIdArg = z.string().min(1).describe("sessionId returned by axiom_plan_begin");
+const TaskIdArg = z.string().min(1).describe("taskId returned by axiom_check_start");
+
 // --- tool definitions -----------------------------------------------------------
 
 export const TOOL_DEFS: readonly AnyToolDef[] = [
@@ -332,32 +391,9 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     annotations: ACT,
     async handler(ctx, { plan, store, root }) {
       guardPayloadSize("plan", plan);
-      const wantsRoot = root !== undefined || store === "cas";
-      const rootReal = wantsRoot ? (await resolveRoot(ctx.policy, root)).rootReal : undefined;
-      const opts: Parameters<typeof compilePlan>[1] = {
-        store: store ?? "inline",
-        emitters: EMITTERS,
-      };
-      if (rootReal !== undefined) opts.root = rootReal;
-      const { bundle } = await compilePlan(plan, opts);
-      if (rootReal !== undefined) {
-        await saveManifest(rootReal, bundle);
-        ctx.seenRoots.add(rootReal);
-      }
-      ctx.log.info("compiled", {
-        manifestDigest: bundle.manifestDigest,
-        artifacts: bundle.manifest.artifacts.length,
-      });
-      return bundle;
+      return compileToBundle(ctx, plan, store, root);
     },
-    summarize: (b) => ({
-      manifestDigest: b.manifestDigest,
-      planDigest: b.manifest.planDigest,
-      name: b.manifest.name,
-      profile: b.manifest.profile,
-      artifacts: b.manifest.artifacts.length,
-      blobs: Object.keys(b.blobs).length,
-    }),
+    summarize: summarizeBundle,
   }),
 
   defineTool({
@@ -421,6 +457,155 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       return checkBundle(ctx, parsed, profile, rootReal);
     },
     summarize: summarizeReport,
+  }),
+
+  defineTool({
+    name: "axiom_check_start",
+    title: "Start policy checks as a background task",
+    description:
+      "Same evaluation as axiom_check, but returned immediately as a task so long `guard.external` suites (up to 15 min per guard) outlive the client's per-call timeout. Poll axiom_task_get with the returned taskId every pollIntervalMs until status is completed|failed|cancelled; the CheckReport is in `result`. Finished tasks are pollable for ttlMs, then forgotten. Tasks live in this server process only (D-24 — tool-level tasks, not the io.modelcontextprotocol/tasks wire extension).",
+    inputSchema: {
+      bundle: LooseObject.describe("ManifestBundle"),
+      profile: ProfileArg,
+      root: RootArg,
+    },
+    outputSchema: TaskDescriptorOutput,
+    annotations: READ,
+    async handler(ctx, { bundle, profile, root }) {
+      // Validate synchronously so a malformed bundle / disallowed root is an immediate error,
+      // not a task that fails two seconds later.
+      const parsed = parseBundle(bundle);
+      const rootReal = await optionalRoot(ctx, root);
+      const meta: { root?: string } = {};
+      if (rootReal !== undefined) meta.root = rootReal;
+      const rec = ctx.tasks.start(
+        "axiom_check",
+        (signal) => checkBundle(ctx, parsed, profile, rootReal, signal),
+        meta,
+      );
+      ctx.log.info("task started", {
+        taskId: rec.taskId,
+        manifestDigest: parsed.manifestDigest,
+        root: rootReal,
+      });
+      return ctx.tasks.describe(rec);
+    },
+    summarize: (o) => o,
+  }),
+
+  defineTool({
+    name: "axiom_task_get",
+    title: "Poll a task",
+    description:
+      "Status of a task created by axiom_check_start. While `working` only the descriptor is returned; once terminal, `result` (completed) or `error` (failed|cancelled) is attached. Unknown or expired taskId → ERR_TASK_NOT_FOUND.",
+    inputSchema: { taskId: TaskIdArg },
+    outputSchema: TaskGetOutput,
+    annotations: READ,
+    async handler(ctx, { taskId }) {
+      const rec = ctx.tasks.get(taskId);
+      const out: z.output<typeof TaskGetOutput> = ctx.tasks.describe(rec);
+      if (rec.status === "completed") out.result = CheckReportSchema.parse(rec.result);
+      else if (rec.error !== undefined) out.error = rec.error;
+      return out;
+    },
+    summarize: (o) => ({
+      taskId: o.taskId,
+      status: o.status,
+      elapsedMs: o.elapsedMs,
+      pollIntervalMs: o.pollIntervalMs,
+      result: o.result === undefined ? undefined : summarizeReport(o.result),
+      error: o.error,
+    }),
+  }),
+
+  defineTool({
+    name: "axiom_task_cancel",
+    title: "Cancel a task",
+    description:
+      "Abort a `working` task: every running guard process tree is killed and the task ends `cancelled` with error ERR_TASK_CANCELLED. Idempotent — a terminal task is returned unchanged.",
+    inputSchema: { taskId: TaskIdArg },
+    outputSchema: TaskDescriptorOutput,
+    annotations: ACT,
+    async handler(ctx, { taskId }) {
+      const rec = ctx.tasks.cancel(taskId);
+      ctx.log.info("task cancelled", { taskId, status: rec.status });
+      return ctx.tasks.describe(rec);
+    },
+    summarize: (o) => o,
+  }),
+
+  defineTool({
+    name: "axiom_plan_begin",
+    title: "Open a chunked plan session",
+    description:
+      "Start assembling a Plan whose JSON would exceed the 4 MiB per-call cap: send the header here (everything except `artifacts`), append artifacts in chunks with axiom_plan_add, then axiom_plan_seal compiles the whole. The sealed bundle's manifestDigest is identical to a one-shot axiom_plan_compile of the same Plan. Sessions are in-memory, expire after 30 min idle, and hold at most 2000 artifacts / 64 MiB.",
+    inputSchema: PlanHeaderShape,
+    outputSchema: PlanSessionOutput,
+    annotations: ACT,
+    async handler(ctx, header) {
+      const s = ctx.planSessions.begin(header);
+      ctx.log.debug("plan session opened", { sessionId: s.sessionId, name: header.name });
+      return describeSession(ctx.planSessions, s);
+    },
+    summarize: (o) => o,
+  }),
+
+  defineTool({
+    name: "axiom_plan_add",
+    title: "Append artifacts to a plan session",
+    description:
+      "Add a chunk of Plan artifacts (each ≤ 4 MiB call, inline content ≤ 256 KiB per artifact as in a Plan) to an open session. Paths must be unique across every chunk (ERR_INVALID_PLAN otherwise); a sealed or over-budget session is ERR_PLAN_SESSION_STATE.",
+    inputSchema: {
+      sessionId: SessionIdArg,
+      artifacts: z
+        .array(LooseObject)
+        .min(1)
+        .describe("Plan artifacts, same shape as Plan.artifacts[]"),
+    },
+    outputSchema: PlanSessionOutput,
+    annotations: ACT,
+    async handler(ctx, { sessionId, artifacts }) {
+      guardPayloadSize("artifacts", artifacts);
+      const parsed = z.array(PlanArtifactSchema).safeParse(artifacts);
+      if (!parsed.success) {
+        throw new AxiomError("ERR_INVALID_PLAN", "artifacts do not match PlanArtifactSchema", {
+          details: {
+            issues: parsed.error.issues
+              .slice(0, SUMMARY_LIST_MAX)
+              .map((i) => ({ path: i.path.map(String).join("."), message: i.message })),
+          },
+        });
+      }
+      const bytes = Buffer.byteLength(JSON.stringify(artifacts), "utf8");
+      const s = ctx.planSessions.add(sessionId, parsed.data, bytes);
+      return describeSession(ctx.planSessions, s);
+    },
+    summarize: (o) => o,
+  }),
+
+  defineTool({
+    name: "axiom_plan_seal",
+    title: "Seal a plan session and compile it",
+    description:
+      "Assemble the session's header + every added artifact into one Plan and compile it exactly like axiom_plan_compile (same options, same digest). The session is consumed whether or not compilation succeeds. Bundles whose inline blobs exceed 4 MiB need `store: cas` (and therefore a root).",
+    inputSchema: {
+      sessionId: SessionIdArg,
+      store: z.enum(["inline", "cas"]).optional().describe("Blob transport; default inline"),
+      root: RootArg,
+    },
+    outputSchema: ManifestBundleSchema,
+    annotations: ACT,
+    async handler(ctx, { sessionId, store, root }) {
+      const { plan, session } = ctx.planSessions.seal(sessionId);
+      const bundle = await compileToBundle(ctx, plan, store, root);
+      ctx.log.info("plan session sealed", {
+        sessionId,
+        artifacts: session.artifacts.length,
+        manifestDigest: bundle.manifestDigest,
+      });
+      return bundle;
+    },
+    summarize: summarizeBundle,
   }),
 
   defineTool({
@@ -698,6 +883,56 @@ async function resolveBundleOrRef(
     return found;
   }
   return parseBundle(v);
+}
+
+/** Shared by `axiom_plan_compile` and `axiom_plan_seal` so both produce byte-identical bundles. */
+async function compileToBundle(
+  ctx: ToolContext,
+  plan: unknown,
+  store: "inline" | "cas" | undefined,
+  root: string | undefined,
+): Promise<ManifestBundle> {
+  const wantsRoot = root !== undefined || store === "cas";
+  const rootReal = wantsRoot ? (await resolveRoot(ctx.policy, root)).rootReal : undefined;
+  const opts: Parameters<typeof compilePlan>[1] = {
+    store: store ?? "inline",
+    emitters: EMITTERS,
+  };
+  if (rootReal !== undefined) opts.root = rootReal;
+  const { bundle } = await compilePlan(plan, opts);
+  if (rootReal !== undefined) {
+    await saveManifest(rootReal, bundle);
+    ctx.seenRoots.add(rootReal);
+  }
+  ctx.log.info("compiled", {
+    manifestDigest: bundle.manifestDigest,
+    artifacts: bundle.manifest.artifacts.length,
+  });
+  return bundle;
+}
+
+function summarizeBundle(b: ManifestBundle): unknown {
+  return {
+    manifestDigest: b.manifestDigest,
+    planDigest: b.manifest.planDigest,
+    name: b.manifest.name,
+    profile: b.manifest.profile,
+    artifacts: b.manifest.artifacts.length,
+    blobs: Object.keys(b.blobs).length,
+  };
+}
+
+function describeSession(
+  store: PlanSessionStore,
+  s: { sessionId: string; artifacts: readonly unknown[]; bytes: number },
+): z.output<typeof PlanSessionOutput> {
+  return {
+    sessionId: s.sessionId,
+    artifacts: s.artifacts.length,
+    bytes: s.bytes,
+    limits: { maxArtifacts: store.maxArtifacts, maxBytes: store.maxBytes },
+    ttlMs: store.ttlMs,
+  };
 }
 
 function summarizeReport(r: CheckReport): unknown {

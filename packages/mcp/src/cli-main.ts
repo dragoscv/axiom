@@ -30,6 +30,7 @@ import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
 import { diffSnapshots, snapshotRoot } from "./snapshot.js";
 import { saveManifest, saveReport, toDigestRef } from "./store.js";
+import { TaskStore } from "./tasks.js";
 import { isWireMode, WIRE_MODES, type WireMode } from "./wire.js";
 
 const EXIT_OK = 0;
@@ -174,7 +175,10 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const guards = guardOptions(values);
   if (guards.allowGuards)
     log.warn("external guards ENABLED (--allow-guards)", { allowlist: guards.guardAllowlist });
-  const factory = serverFactory(policy, { log, guards });
+  // One task store per process: a stop (stdin end / signal) kills every guard tree still running
+  // so no orphaned children survive the server (S-406).
+  const tasks = new TaskStore();
+  const factory = serverFactory(policy, { log, guards, tasks });
   if (values.http !== undefined) {
     const { parseHostPort, startHttp, HTTP_TOKEN_ENV_DEFAULT } = await import("./http-lazy.js");
     const { host, port } = parseHostPort(values.http);
@@ -185,6 +189,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     const handle = await startHttp(factory, httpOpts);
     await new Promise<void>((resolve) => {
       const stop = () => {
+        tasks.abortAll();
         void handle.close().then(resolve);
       };
       process.once("SIGINT", stop);
@@ -200,6 +205,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   log.info("mcp stdio ready", { wire, roots: [...policy.roots] });
   await new Promise<void>((resolve) => {
     const stop = () => {
+      tasks.abortAll();
       void handle.close().then(resolve, resolve);
     };
     process.stdin.once("end", stop);

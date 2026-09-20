@@ -15,9 +15,9 @@
 
 ## Why only 7 guards in `guard.external`
 
-`guard.external` caps `timeoutMs` at 60 000 and brivio's full suite (~75 guards)
-takes well over that on this machine; `check-untracked-imports` alone is 64 s.
-Measured per guard (host under load):
+**Until 2.1.x** `guard.external` capped `timeoutMs` at 60 000 and brivio's full suite (~75 guards)
+takes well over that on this machine; `check-untracked-imports` alone is 64 s. The `brivio` profile
+therefore runs the 7 change-set-relevant guards synchronously. Measured per guard (host under load):
 
 | guard | wall |
 |---|---|
@@ -33,6 +33,27 @@ Measured per guard (host under load):
 The full suite still runs in brivio's own pre-commit / CI; AXIOM runs the subset
 that speaks to a *change-set* (tenant scoping, audit, i18n, egress, SDK ripple,
 route boundaries, test quality).
+
+### Full suite as a task (2.2.0, S-406 / D-24)
+
+`.axiom/profiles/brivio-full.json` extends `brivio` and overrides `brivio.guards` with **all**
+guards (`args: []`), `timeoutMs: 900000` (the new 15 min cap) and
+`env.AXIOM_GUARD_ADAPTER_TIMEOUT_MS=880000` (the adapter's internal cap, previously hard-wired to 55 s).
+Run it as a task so the client's per-call timeout is irrelevant:
+
+```
+axiom_check_start { bundle, root: "E:/gh/brivio", profile: "brivio-full" }   → { taskId, status: "working", pollIntervalMs: 2000 }
+axiom_task_get   { taskId }   (every pollIntervalMs)                          → … → { status: "completed", result: CheckReport }
+axiom_task_cancel{ taskId }   kills run-guards.mjs and every child
+```
+
+Proof run (VERIFIED 2026-09-20, `.copilot-tmp/brivio-task-e2e.mjs`, SDK-v2 stdio client against
+the built CLI, `--allow-guards`): `axiom_check_start` answered `working` at once; `axiom_task_get`
+every 2 s reached `completed` after **580 s** — guard provider `ok` (579 611 ms), `verdict: fail`
+with 10 findings, all genuine brivio debt (`bundle-dynamic-requires` usage error,
+`drag-alternative` 18/23, `icu-messages` 2 throwing, `orphan-actions` 11, `vacuous-assertions` 6,
+…). One is environmental: `nav-orphans` spawns `rg` and the scrubbed guard env carries no WinGet
+`Links` dir on `PATH` — add `env.PATH` to the profile or make the guard resolve `rg` itself.
 
 ## End-to-end proof (VERIFIED 2026-09-18, brivio tree untouched — dry-run only)
 

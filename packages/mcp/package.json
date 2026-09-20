@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "catalog:",
+    "fast-check": "catalog:",
     "tsdown": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

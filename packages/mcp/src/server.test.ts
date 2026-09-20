@@ -23,9 +23,9 @@ const plan = () =>
   makePlan({ "src/a.ts": "export const a = 1;\n", "README.md": "# hi\n" }, { name: "demo" });
 
 describe("tools/list", () => {
-  it("exposes 11 tools with annotations, input and output schemas", async () => {
+  it("exposes 17 tools with annotations, input and output schemas", async () => {
     const { tools } = await h.client.listTools();
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(17);
     expect(tools.map((t) => t.name).sort()).toEqual(TOOL_DEFS.map((t) => t.name).sort());
     for (const t of tools) {
       expect(t.annotations).toMatchObject({

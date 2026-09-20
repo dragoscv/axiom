@@ -15,6 +15,7 @@ import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import { type Logger, silentLogger } from "./log.js";
 import type { RootsPolicy } from "./roots.js";
 import { listStored, loadApplied, loadManifest, loadReport, toDigestRef } from "./store.js";
+import { PlanSessionStore, TaskStore } from "./tasks.js";
 import { type AnyToolDef, TOOL_DEFS, type ToolContext } from "./tools.js";
 
 const require = createRequire(import.meta.url);
@@ -35,6 +36,10 @@ export interface CreateServerOptions {
    * factory builds so a digest compiled on one 2026-era HTTP request is loadable on the next.
    */
   seenRoots?: Set<string>;
+  /** Background check tasks (S-406). Shared across a factory's instances; a fresh store per server otherwise. */
+  tasks?: TaskStore;
+  /** Chunked plan sessions (S-406). Shared like `tasks`. */
+  planSessions?: PlanSessionStore;
 }
 
 export interface StructuredError {
@@ -98,7 +103,13 @@ function notFound(uri: string): never {
 
 export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}): McpServer {
   const log = opts.log ?? silentLogger;
-  const ctx: ToolContext = { policy, log, seenRoots: opts.seenRoots ?? new Set() };
+  const ctx: ToolContext = {
+    policy,
+    log,
+    seenRoots: opts.seenRoots ?? new Set(),
+    tasks: opts.tasks ?? new TaskStore(),
+    planSessions: opts.planSessions ?? new PlanSessionStore(),
+  };
   if (opts.guards !== undefined) ctx.guards = opts.guards;
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -242,5 +253,7 @@ export function serverFactory(
   opts: Omit<CreateServerOptions, "era"> = {},
 ): McpServerFactory {
   const seenRoots = opts.seenRoots ?? new Set<string>();
-  return ({ era }) => createServer(policy, { ...opts, seenRoots, era });
+  const tasks = opts.tasks ?? new TaskStore();
+  const planSessions = opts.planSessions ?? new PlanSessionStore();
+  return ({ era }) => createServer(policy, { ...opts, seenRoots, tasks, planSessions, era });
 }

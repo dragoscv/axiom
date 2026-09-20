@@ -7,7 +7,7 @@ import type { PlanInput } from "@codai/axiom-schema";
 import { type CallToolResult, Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { silentLogger } from "./log.js";
 import { createRootsPolicy, type RootsPolicy } from "./roots.js";
-import { createServer } from "./server.js";
+import { type CreateServerOptions, createServer } from "./server.js";
 
 export interface TmpRepo {
   root: string;
@@ -42,9 +42,12 @@ export interface Harness {
 }
 
 /** In-process client ↔ server over a linked InMemoryTransport pair. */
-export async function harness(roots: readonly string[]): Promise<Harness> {
+export async function harness(
+  roots: readonly string[],
+  serverOpts: Omit<CreateServerOptions, "log"> = {},
+): Promise<Harness> {
   const policy = await createRootsPolicy(roots);
-  const server = createServer(policy, { log: silentLogger });
+  const server = createServer(policy, { ...serverOpts, log: silentLogger });
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "axiom-test", version: "0.0.0" });
   await Promise.all([server.connect(st), client.connect(ct)]);

@@ -35,6 +35,13 @@ describe("spec/tools.json parity", () => {
     expect(risk.axiom_plan_compile).toBe("ACT");
     expect(risk.axiom_check).toBe("READ");
     expect(risk.axiom_apply_dry_run).toBe("READ");
+    // S-406: starting/polling a check reads only; cancel and plan sessions mutate server state (ACT)
+    expect(risk.axiom_check_start).toBe("READ");
+    expect(risk.axiom_task_get).toBe("READ");
+    expect(risk.axiom_task_cancel).toBe("ACT");
+    expect(risk.axiom_plan_begin).toBe("ACT");
+    expect(risk.axiom_plan_add).toBe("ACT");
+    expect(risk.axiom_plan_seal).toBe("ACT");
   });
 
   it("riskClass follows annotations; names are unique and snake_case", () => {
@@ -52,13 +59,19 @@ describe("spec/tools.json parity", () => {
       "axiom_apply_dry_run",
       "axiom_axm_parse",
       "axiom_check",
+      "axiom_check_start",
       "axiom_manifest_diff",
       "axiom_manifest_verify",
+      "axiom_plan_add",
+      "axiom_plan_begin",
       "axiom_plan_compile",
+      "axiom_plan_seal",
       "axiom_plan_validate",
       "axiom_repo_snapshot",
       "axiom_rollback",
       "axiom_roots_list",
+      "axiom_task_cancel",
+      "axiom_task_get",
     ]);
   });
 });

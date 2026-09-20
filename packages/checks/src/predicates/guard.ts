@@ -8,13 +8,16 @@ import { z } from "zod";
 import { definePredicate, type FactContext } from "../types.js";
 import { finding } from "./util.js";
 
+/** Upper bound for a single guard (S-406): long suites run through `axiom_check_start` tasks. */
+export const GUARD_TIMEOUT_MAX_MS = 15 * 60_000;
+
 /** §3.2 params. */
 export const GuardExternalParams = z
   .object({
     command: z.string().min(1),
     args: z.array(z.string()).default([]),
     cwd: z.enum(["root", "staging"]).default("root"),
-    timeoutMs: z.int().min(1).max(60_000).default(30_000),
+    timeoutMs: z.int().min(1).max(GUARD_TIMEOUT_MAX_MS).default(30_000),
     env: z.record(z.string(), z.string()).optional(),
     stdin: z.enum(["bundle", "manifest", "none"]).default("bundle"),
     /** Accept brivio-style `OK    name` / `FAIL  name: reason` stdout instead of JSON. */
@@ -226,6 +229,7 @@ interface SpawnResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  aborted: boolean;
   spawnError?: string;
 }
 
@@ -235,23 +239,35 @@ function runChild(
   env: Record<string, string>,
   input: string | undefined,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let done = false;
+    if (signal?.aborted) {
+      resolve({ code: null, stdout, stderr, timedOut, aborted: true });
+      return;
+    }
     const child = spawn(resolved.file, resolved.argv, {
       cwd,
       env,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const finish = (r: Omit<SpawnResult, "stdout" | "stderr" | "timedOut">) => {
+    const onAbort = () => {
+      aborted = true;
+      killTree(child);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = (r: Omit<SpawnResult, "stdout" | "stderr" | "timedOut" | "aborted">) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      resolve({ ...r, stdout, stderr, timedOut });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ ...r, stdout, stderr, timedOut, aborted });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -398,8 +414,16 @@ export async function runGuard(ctx: FactContext, params: GuardExternalParamsT): 
       ? undefined
       : canonicalize(params.stdin === "bundle" ? ctx.bundle : ctx.manifest);
   const env = guardEnv(params.env, ctx.bundle.manifestDigest, guard.root);
-  const r = await runChild(resolved, cwd, env, input, params.timeoutMs);
+  const r = await runChild(resolved, cwd, env, input, params.timeoutMs, guard.signal);
 
+  if (r.aborted) {
+    return [
+      providerError("ERR_TASK_CANCELLED", "guard cancelled by the runner", {
+        command: params.command,
+        evidence: evidenceOf(r),
+      }),
+    ];
+  }
   if (r.timedOut) {
     return [
       providerError("ERR_GUARD_TIMEOUT", `guard timed out after ${params.timeoutMs} ms`, {

@@ -6,7 +6,7 @@ import type { CheckRef } from "@codai/axiom-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GUARD_POOL_SIZE, runChecks } from "../run.js";
 import { makeBundle, profileWith } from "../test-helpers.test-helpers.js";
-import { guardEnv, parseLegacyText, resolveGuardCommand } from "./guard.js";
+import { GuardExternalParams, guardEnv, parseLegacyText, resolveGuardCommand } from "./guard.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__", "guards");
 
@@ -180,6 +180,46 @@ describe("guard.external output mapping", () => {
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_GUARD_TIMEOUT");
     expect(r.findings[0]?.facts.timeoutMs).toBe(500);
+  });
+  it("timeoutMs accepts up to 15 min (S-406) and rejects above", () => {
+    expect(
+      GuardExternalParams.safeParse({ command: "x.mjs", timeoutMs: 15 * 60_000 }).success,
+    ).toBe(true);
+    expect(
+      GuardExternalParams.safeParse({ command: "x.mjs", timeoutMs: 15 * 60_000 + 1 }).success,
+    ).toBe(false);
+  });
+  it("aborting the runner signal kills hang.mjs → ERR_TASK_CANCELLED, well before timeoutMs", async () => {
+    const controller = new AbortController();
+    const t0 = Date.now();
+    const p = runChecks({
+      bundle,
+      root,
+      profile: profileWith([guardCheck("g", { command: "hang.mjs", timeoutMs: 60_000 })], {
+        allowGuards: true,
+      }),
+      allowGuards: true,
+      guardAllowlist: [],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 300);
+    const r = await p;
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(r.verdict).toBe("error");
+    expect(code(r)).toBe("ERR_TASK_CANCELLED");
+  });
+  it("an already-aborted signal never spawns the guard", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const r = await runChecks({
+      bundle,
+      root,
+      profile: profileWith([guardCheck("g", { command: "ok.mjs" })], { allowGuards: true }),
+      allowGuards: true,
+      guardAllowlist: [],
+      signal: controller.signal,
+    });
+    expect(code(r)).toBe("ERR_TASK_CANCELLED");
   });
   it("echo-stdin.mjs receives the JCS bundle and AXIOM_* env", async () => {
     const r = await run({ command: "echo-stdin.mjs" });

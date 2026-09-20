@@ -85,6 +85,12 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 | `axiom_plan_compile` | ACT | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (writes only under `<root>/.axiom/` — CAS blobs and the stored manifest — when a root is given) |
 | `axiom_manifest_verify` | READ | `{ bundle, root? }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` only when `root` has `.axiom/trust/keys.json`; `code` is `ERR_SIGNATURE_MISSING` \| `ERR_SIGNATURE_INVALID` when not `ok` |
 | `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`, `preImage: verified\|drifted\|unverified`) |
+| `axiom_check_start` | READ | `{ bundle, profile?, root? }` | `{ taskId, tool, status: "working", pollIntervalMs, ttlMs, elapsedMs }` — same evaluation as `axiom_check`, returned immediately as a **task** so long `guard.external` suites (up to 15 min per guard) outlive the client's per-call timeout (S-406 / D-24) |
+| `axiom_task_get` | READ | `{ taskId }` | descriptor + `result: CheckReport` once `completed`, or `error: { code, message }` once `failed`/`cancelled`; unknown/expired id → `ERR_TASK_NOT_FOUND` |
+| `axiom_task_cancel` | ACT | `{ taskId }` | descriptor; kills every running guard tree, task ends `cancelled` with `ERR_TASK_CANCELLED` (idempotent on terminal tasks) |
+| `axiom_plan_begin` | ACT | Plan header: `{ name, intent, profile?, capabilities?, checks?, counter?, metadata? }` | `{ sessionId, artifacts: 0, bytes: 0, limits: { maxArtifacts, maxBytes }, ttlMs }` — opens a **chunked plan session** for Plans whose JSON would exceed the 4 MiB call cap |
+| `axiom_plan_add` | ACT | `{ sessionId, artifacts[] }` (each call ≤ 4 MiB) | session descriptor; duplicate path across chunks → `ERR_INVALID_PLAN`, over budget (2000 artifacts / 64 MiB) or sealed → `ERR_PLAN_SESSION_STATE` |
+| `axiom_plan_seal` | ACT | `{ sessionId, store?: inline\|cas, root? }` | `ManifestBundle` — compiled by the same code path as `axiom_plan_compile`, so the digest equals a one-shot compile of the assembled Plan (property-tested); the session is consumed |
 | `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
 | `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
 | `axiom_rollback` | SENSITIVE | `{ root, manifestDigest }` | `{ status:"rolled-back", phase, steps }` |
@@ -113,6 +119,10 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
   Pre-apply checks run against the profile (default `default`, or `<root>/.axiom/profiles/<name>.json`);
   a non-`pass` verdict aborts with `ERR_CHECKS_FAILED` before any write.
 - Payloads over 4 MiB are rejected up front (`ERR_BUNDLE_TOO_LARGE`).
+- Tasks and plan sessions live in the server **process** (shared by every connection/request the
+  process serves; never on disk). A restart forgets them; finished tasks stay pollable for 10 min, idle
+  sessions expire after 30 min; at most 8 tasks run concurrently (`ERR_EBUSY` beyond that). Stopping
+  the server aborts every running task and kills its guard trees.
 - `.axiom/lock` makes apply single-writer per root; the journal makes it crash-safe and reversible.
 - stdout carries only JSON-RPC. Logs are JSON lines on stderr (`--log-level error|warn|info|debug`, default `warn`).
 - External guards (`guard.external`) are **off** unless the process is started with `--allow-guards`

@@ -317,7 +317,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
       try {
         expect(client.getProtocolEra()).toBe(era);
         const { tools } = await client.listTools();
-        expect(tools).toHaveLength(11);
+        expect(tools).toHaveLength(17);
         const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
         expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
         const v = await client.callTool({
