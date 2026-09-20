@@ -62,7 +62,10 @@ jobs:
         run: pnpm exec vitest run --coverage
 
       - name: Guards
-        run: node scripts/run-guards.mjs --strict
+        # release-complete is judged by release.yml after publish: on a `v*` push the tag
+        # exists before the packages do, so CI on that commit reported all 9 as "absent
+        # from the registry" (runs 35506503730, 35507489074) while the release was in flight.
+        run: node scripts/run-guards.mjs --strict --skip=release-complete
 
       - name: Upload coverage
         if: always()

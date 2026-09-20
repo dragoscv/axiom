@@ -65,7 +65,11 @@ function measure() {
   return {
     samples,
     p50: sorted[Math.floor(sorted.length / 2)] ?? 0,
-    p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0,
+    // Rank q·(n−1), floored (numpy "lower"): for n=15 that is index 13 — the second-worst
+    // sample, as documented above. `floor(n·0.95)` = 14 = the MAX, which made this guard judge
+    // the single Defender-scanned spawn: 22 Windows CI jobs all reported p95 === max, at
+    // 210–243 ms against a 250 ms budget (runs 35504605381 / 35475685730 tipped over).
+    p95: sorted[Math.floor((sorted.length - 1) * 0.95)] ?? 0,
     max: sorted[sorted.length - 1] ?? 0,
   };
 }
