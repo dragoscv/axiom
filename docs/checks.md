@@ -131,7 +131,8 @@ the false positives that must pass and the true positives that must still fail):
   identifier-shaped values without digits (`"keyring.backends.libsecret"`).
   Type annotations, `None`, function calls and env lookups never match.
   Remaining corpus hits: 9/3240 files — every one a real quoted credential in a
-  test or README (`password="password123"`, `WEBHOOK_TOKEN = "abc123def456"`).
+  test or README (a digest-auth test password in httpx, a webhook-token sample
+  in the loguru README, a 32-hex lock token in filelock docs).
 - `email` skips RFC 2606/6761 reserved domains (`example.*`, `.test`,
   `.invalid`, `localhost`), `*@github.com` (incl. `users.noreply.github.com`),
   `git@`/`noreply@` locals and asset pseudo-addresses (`icon@2x.png`).
