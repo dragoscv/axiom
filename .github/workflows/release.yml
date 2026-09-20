@@ -131,6 +131,9 @@ jobs:
           name: axiom-axm-vsix
           path: .copilot-tmp/axiom-axm-*.vsix
           if-no-files-found: error
+          # upload-artifact ≥ 4.4 skips dot-directories unless told otherwise; the package script
+          # writes into the gitignored `.copilot-tmp/` on purpose (never into the tree).
+          include-hidden-files: true
 
       - name: Attach .vsix to the GitHub release (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/v')
