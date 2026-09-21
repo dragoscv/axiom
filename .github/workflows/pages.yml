@@ -32,14 +32,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # withastro/action detects pnpm from the root lockfile, installs the workspace, runs the
-      # build command and uploads <path>/<out-dir> as the Pages artifact.
+      # withastro/action detects pnpm from the root lockfile and takes its version from root
+      # package.json `packageManager`. Do NOT set `package-manager:` here — any value (even a bare
+      # `pnpm`) makes the action pass a second version to pnpm/action-setup, which fails with
+      # "Multiple versions of pnpm specified" (run 35548272392).
       - name: Install, build, upload
         uses: withastro/action@3eafd002e65cc31b4f0eae0bb05450d521562247 # v6.1.3
         with:
           path: .
           node-version: 24
-          package-manager: pnpm@12
           build-cmd: pnpm --filter @codai/axiom-site build
           out-dir: apps/site/dist
 
