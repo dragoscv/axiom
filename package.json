@@ -9,8 +9,10 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "build": "pnpm -r --filter \"@codai/axiom-*\" run build",
-    "dev": "pnpm -r --parallel --filter \"@codai/axiom-*\" run dev",
+    "build": "pnpm -r --filter \"@codai/axiom-*\" --filter \"!@codai/axiom-site\" run build",
+    "build:site": "pnpm --filter @codai/axiom-site run build",
+    "dev": "pnpm -r --parallel --filter \"@codai/axiom-*\" --filter \"!@codai/axiom-site\" run dev",
+    "dev:site": "pnpm --filter @codai/axiom-site run dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -18,7 +20,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "typecheck": "pnpm -r --filter \"@codai/axiom-*\" run typecheck",
+    "typecheck": "pnpm -r --filter \"@codai/axiom-*\" --filter \"!@codai/axiom-site\" run typecheck",
     "guards": "node scripts/run-guards.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",

@@ -1,5 +1,7 @@
 # brivio ← AXIOM integration (S-306)
 
+*Profile with `guard.external` running brivio's own guard suite, a full-suite task profile, the gate profile and the Copilot hook — with the end-to-end proof runs.*
+
 **Status 2026-09-18:** wired and proven end-to-end in dry-run; files staged in
 `E:\gh\brivio` (not committed — owner commits). ADR: `brivio/docs/adr/0200-axiom-write-gate.md`.
 
@@ -95,3 +97,12 @@ six guards all returned `ok`.
 3. After `@codai/axiom-mcp@2.0.0` is on npm, switch `.github/hooks/axiom-gate.json`
    to the global `axiom` bin (done 2026-09-19) and add `.vscode/mcp.json` server `axiom`
    (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` — fine for a long-lived server).
+
+---
+
+**See also**
+
+- [Checks](../guides/checks.md#guardexternal) — the `guard.external` contract the adapter implements
+- [MCP tools](../reference/mcp-tools.md#tasks-d-24) — `axiom_check_start` / `axiom_task_get` for the full suite
+- [Hooks](../getting-started/hooks.md) — the gate profile and Copilot hook shape
+- [metu](metu.md) — the sibling integration without a guard runner

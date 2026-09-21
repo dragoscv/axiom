@@ -1,5 +1,7 @@
 # v1 → v2 test-intent audit — S-112 (2026-09-18)
 
+*Dated record — see [Design & research](../README.md#design--research).*
+
 Scope: 27 files `packages/_v1/axiom-tests/src/*.test.ts` (150 title lines) +
 `packages/policies/test/evaluator.test.ts` (read from `git show f673b16~1:…`;
 the file is no longer in the tree — `packages/_v1/policies/` was removed by

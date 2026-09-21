@@ -32,7 +32,13 @@ if (known.size === 0) {
 
 const LITERAL = /(["'`])(ERR_[A-Z0-9_]+)\1/g;
 /** Node.js built-in error codes we compare against, not ours. */
-const NODE_BUILTIN_PREFIXES = ["ERR_PARSE_ARGS", "ERR_INVALID_ARG", "ERR_MODULE_NOT_FOUND"];
+const NODE_BUILTIN_PREFIXES = [
+  "ERR_PARSE_ARGS",
+  "ERR_INVALID_ARG",
+  "ERR_MODULE_NOT_FOUND",
+  // Raised by a Node single executable for any non-builtin specifier (D-27).
+  "ERR_UNKNOWN_BUILTIN_MODULE",
+];
 const problems = [];
 let files = 0;
 let refs = 0;

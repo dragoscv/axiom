@@ -1,7 +1,9 @@
 # The CAS — `<root>/.axiom/cas`
 
+*The per-root content-addressed store that keeps bytes out of the canonical manifest, and the `axiom gc` that reclaims it.*
+
 Content-addressed store of artifact bytes, one per repository root. It is the transport that
-keeps content **out of the canonical manifest** (PLAN.md §2, invariant 2): the manifest holds
+keeps content **out of the canonical manifest** ([invariant 2](invariants.md)): the manifest holds
 `{ path, digest, bytes, origin }`, the CAS holds the bytes.
 
 ## Layout
@@ -27,7 +29,7 @@ What lands here:
 |--------|------|
 | `inline` / `template` | `compile --store cas` (blobs leave the bundle, digest stays) |
 | `cas` | never written — must already be present (`ERR_BLOB_MISSING` otherwise) |
-| `ref` | `compile --allow-net` after the pinned digest verified; see [plan-format.md](plan-format.md#ref-sources) |
+| `ref` | `compile --allow-net` after the pinned digest verified; see [plan-format.md](../reference/plan-format.md#ref-sources) |
 
 ## Garbage collection — `axiom gc`
 
@@ -61,4 +63,13 @@ manifest references:
 - Idempotent: a second run right after the first removes 0.
 - **CLI only.** GC is destructive and has no MCP tool on purpose: an agent may compile and apply
   through the server, but reclaiming disk on a root is an operator action. The MCP surface
-  (`docs/mcp_api.md`) intentionally lists no `axiom_gc`.
+  ([mcp-tools.md](../reference/mcp-tools.md)) intentionally lists no `axiom_gc`.
+
+---
+
+**See also**
+
+- [Pipeline](pipeline.md) — the three content transports (blobs, CAS, ref) side by side
+- [Invariants](invariants.md) — invariant 2, which the CAS exists to satisfy
+- [Plan format](../reference/plan-format.md#ref-sources) — `ref` sources and the network policy
+- [CLI](../reference/cli.md#gc) — `axiom gc` flags

@@ -77,11 +77,12 @@ describe("spec/tools.json parity", () => {
 });
 
 describe("stdout cleanliness guard", () => {
-  it("no console.log / process.stdout.write in src outside cli.ts / cli-main.ts", () => {
+  it("no console.log / process.stdout.write in src outside cli.ts / cli-main.ts / sea.ts", () => {
+    // `sea.ts` is the single-executable entry (D-27): the same dispatch as `cli.ts`.
+    const entries = new Set(["cli.ts", "cli-main.ts", "sea.ts"]);
     const offenders: string[] = [];
     for (const f of readdirSync(here)) {
-      if (!f.endsWith(".ts") || f === "cli.ts" || f === "cli-main.ts" || f.endsWith(".test.ts"))
-        continue;
+      if (!f.endsWith(".ts") || entries.has(f) || f.endsWith(".test.ts")) continue;
       const text = readFileSync(join(here, f), "utf8");
       if (/console\.log\(|process\.stdout\.write\(/.test(text)) offenders.push(f);
     }

@@ -1,4 +1,6 @@
-# Signing manifests (DSSE, Ed25519) — D-16
+# Signing manifests (DSSE, Ed25519)
+
+*Detached DSSE envelopes over the canonical manifest, a per-root trust store, anti-rollback counters and root binding — decision D-16 / S-409.*
 
 A `ManifestBundle` can carry detached **DSSE v1.0.2** envelopes over its canonical
 `manifest`. A root that keeps a trust store under `.axiom/trust/` can then require, via
@@ -7,6 +9,25 @@ pinned key and — optionally — that its `counter` is strictly newer than the 
 applied (anti-rollback). Nothing about `manifestDigest` changes when a bundle is signed.
 
 ## Threat model
+
+```mermaid
+flowchart LR
+  subgraph signer [Signer — CI or operator]
+    K[private key<br/>AXIOM_SIGNING_KEY · --key-file]
+    B[bundle.json] --> S[axiom sign]
+    K --> S
+    S --> SB[bundle + signatures[]<br/>manifestDigest unchanged]
+  end
+  subgraph root [Target root — .axiom/trust/]
+    KS[keys.json<br/>pinned Ed25519 public keys · rootId?]
+    ST[state.json + state.key<br/>lastCounter · HMAC]
+  end
+  SB --> V[manifest.requireSigned]
+  KS --> V
+  ST --> V
+  V -- pass --> A[apply → advances lastCounter]
+  V -- signature.* finding --> D[ERR_CHECKS_FAILED — nothing written]
+```
 
 What signing defends against:
 
@@ -264,3 +285,12 @@ Over MCP, `axiom_manifest_verify { bundle, root }` reports the same `signatures`
   the counter over — `minCounter` on the store bounds that. The trust directory needs the same
   protection as the repository's CI configuration.
 - Key rotation is add/remove + `notBefore` (ceremony above); no automatic expiry.
+
+---
+
+**See also**
+
+- [Trust model](../concepts/trust-model.md) — where signing sits among roots, fail-closed checks and attestation
+- [Verify tree](verify-tree.md) — the in-toto attestation that proves a tree matches a manifest
+- [Checks](checks.md#manifestrequiresigned) — the predicate's params and finding ids
+- [CLI](../reference/cli.md) — `keygen`, `sign`, `trust`, `verify` flags

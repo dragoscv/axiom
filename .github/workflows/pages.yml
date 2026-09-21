@@ -1,0 +1,56 @@
+# Docs site — builds apps/site (Astro + Starlight) from docs/** and deploys to GitHub Pages
+# at https://dragoscv.github.io/axiom/. Runs only when docs, the site or the brand assets change.
+name: Docs site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "apps/site/**"
+      - "assets/brand/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for lastUpdated)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # withastro/action detects pnpm from the root lockfile, installs the workspace, runs the
+      # build command and uploads <path>/<out-dir> as the Pages artifact.
+      - name: Install, build, upload
+        uses: withastro/action@3eafd002e65cc31b4f0eae0bb05450d521562247 # v6.1.3
+        with:
+          path: .
+          node-version: 24
+          package-manager: pnpm@12
+          build-cmd: pnpm --filter @codai/axiom-site build
+          out-dir: apps/site/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

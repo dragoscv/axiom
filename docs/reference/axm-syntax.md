@@ -1,11 +1,13 @@
-# `.axm` syntax — v2
+# `.axm` syntax
+
+*The human-writable DSL: EBNF, semantics, heredoc rules, canonical form and editor support. Compiles 1:1 to a `Plan`.*
 
 `.axm` is the human-writable front-end of AXIOM v2. A file compiles **1:1** into a
 [`Plan`](plan-format.md) (`apiVersion: axiom.dev/v2, kind: Plan`); nothing expressible in `.axm` is
 outside `PlanSchema`, and every `Plan` with `inline`/`cas`/`ref` sources has a canonical `.axm`
 form (`formatAxm`). The parser is `@codai/axiom-axm` (Chevrotain 13); the MCP tool is
 `axiom_axm_parse`; the CLI accepts `axiom compile plan.axm`. The v1 grammar
-(`agent "…" { … }`) is archived at `archive/v1/syntax_spec-v1.md` and is not accepted.
+(`agent "…" { … }`) is archived at [`archive/v1/syntax_spec-v1.md`](../archive/v1/syntax_spec-v1.md) and is not accepted.
 
 ## Grammar (EBNF)
 
@@ -46,7 +48,7 @@ where `Ident` is expected (`plan check { … }` names a plan `check`).
 | `inline <<T … T` | `source: {type:"inline", encoding:"utf8", content}` | see heredoc rules |
 | `cas "sha256:…"` | `source: {type:"cas", digest}` | |
 | `ref "uri" "sha256:…"` | `source: {type:"ref", uri, digest}` | `file:`/`https:` only |
-| `template e.m "t" {…}` | `source: {type:"template", emitter, template, params}` | rendered at compile time by a registered emitter (see [emitters.md](emitters.md)) |
+| `template e.m "t" {…}` | `source: {type:"template", emitter, template, params}` | rendered at compile time by a registered emitter (see [emitters.md](../guides/emitters.md)) |
 | `patch unified "sha256:…" <<P … P` | `source: {type:"patch", format, preImage, body}` | `body` is the heredoc plus a final newline (patches are line-oriented); `absent` in place of the digest for a new file; exact matching only ([plan-format.md](plan-format.md#patch-sources)) |
 | `check ID using g.name {…}` | `checks[]: {id, predicate, params, severity:"error"}` | params default `{}`; unknown predicate ids are accepted here — the checks registry decides at runtime |
 | `meta {…}` | `metadata` | `{}` when omitted |
@@ -119,7 +121,7 @@ The full fixture and its compiled `Plan` live in `packages/axm/examples/notes.ax
 
 `@codai/axiom-axm-lsp` is a Language Server Protocol 3.18 implementation for `.axm` that reuses
 `parseAxm` / `formatAxm` — the editor and the gate share one grammar (PLAN.md D-14; rationale in
-`packages/axm-lsp/README.md`).
+[`packages/axm-lsp/README.md`](../../packages/axm-lsp/README.md)).
 
 ```
 npx @codai/axiom-axm-lsp --stdio      # any LSP client (neovim, helix, zed, emacs, …)
@@ -134,7 +136,15 @@ npx @codai/axiom-axm-lsp --stdio      # any LSP client (neovim, helix, zed, emac
 | formatting | canonical form (`formatAxm`) — applied only when the file parses without diagnostics |
 | semantic tokens | `keyword`, `string`, `number`, `comment`, `property` |
 
-**VS Code**: the private extension `packages/vscode-axm` (`codai.axiom-axm`) bundles the client, a
-TextMate grammar (heredocs, digests, embedded JSON) and `language-configuration.json`. Run it with
-*Run Extension* (F5), or build a .vsix with `pnpm --filter axiom-axm run package` →
-`.copilot-tmp/axiom-axm-<version>.vsix`, then `code --install-extension <file>.vsix`.
+**VS Code**: the extension `packages/vscode-axm` (`codai.axiom-axm`) bundles the client, a
+TextMate grammar (heredocs, digests, embedded JSON) and `language-configuration.json`. Install the
+`axiom-axm-<version>.vsix` from the GitHub release — see [integration/vscode.md](../integration/vscode.md).
+
+---
+
+**See also**
+
+- [Plan format](plan-format.md) — the schema every `.axm` file compiles into
+- [VS Code](../integration/vscode.md) — installing the extension, `mcp.json`
+- [Quickstart](../getting-started/quickstart.md) — the same first Plan in JSON
+- [MCP tools](mcp-tools.md) — `axiom_axm_parse`

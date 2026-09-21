@@ -41,11 +41,14 @@
   "files": [
     "dist",
     "!dist/**/*.map",
+    "!dist/sea",
     "spec",
+    "server.json",
     "README.md"
   ],
   "scripts": {
     "build": "tsdown && pnpm run build:spec",
+    "build:sea": "tsdown -c tsdown.sea.config.ts",
     "build:spec": "node --import tsx/esm scripts/gen-tools-json.ts",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",

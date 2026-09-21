@@ -1,4 +1,6 @@
-I have what I need from today's verified facts (memory) plus the proposal itself. No further digging changes the argument, so here is the critique.
+# Red-team critique of the v2 proposal (2026-09-18)
+
+*Dated record — see [Design & research](../README.md#design--research). Written before v2.0 was built; the design answered each point.*
 
 ## Steelman first
 

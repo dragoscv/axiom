@@ -60,7 +60,7 @@ Usage:
   axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
   axiom sign <bundle.json> [--key-file <path>] [-o <out.json>] [--root-id <id>]   (private key from --key-file or $${SIGNING_KEY_ENV}; --root-id = root-bound envelope)
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
-  axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/signing.md)
+  axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/guides/signing.md)
   axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level ...]   (PreToolUse hook; fail-closed; exit 0 allow / 2 deny)
     axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
                                            (v1 manifest → v2 Plan; exit 1 = migrated with warnings)

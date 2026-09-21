@@ -24,7 +24,7 @@ Built on MCP TypeScript SDK **v2** (`@modelcontextprotocol/server` 2.0.0). The s
 HTTP sessions) from the same entry — the SDK pins each stdio connection, or routes each HTTP
 request, to the era the client opened with. `--wire 2026` (default) and `--wire 2025` both serve
 both; `--wire 2026-only` refuses 2025 openings with the unsupported-protocol-version error. Clients
-on SDK v1 need no change. Details: [docs/mcp_api.md](../../docs/mcp_api.md#protocol-revisions---wire-d-19).
+on SDK v1 need no change. Details: [docs/reference/mcp-tools.md](../../docs/reference/mcp-tools.md#protocol-revisions---wire-d-19).
 
 ### VS Code — `.vscode/mcp.json`
 
@@ -97,7 +97,7 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 | `axiom_manifest_diff` | READ | `{ a: bundle\|"sha256:…", b }` | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | READ | `{ source }` (`.axm` text) | `{ plan?, diagnostics: [{ severity, code, message, range: { start: {line, column}, end } }] }` |
 | `axiom_roots_list` | READ | `{}` | `{ roots: [{ path, writable, hasGit }] }` |
-| `axiom_repo_snapshot` | READ | `{ root?, include?[], exclude?[], maxFiles? (20000, cap 50000), maxBytes? (64 MiB), respectGitignore? (true), withContentDigest? (true) }` | `RepoSnapshot { snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind }], truncated, counts } }` — sorted, no timestamps/absolute paths; `.git/`, `.axiom/` always skipped; symlinks recorded, never followed (`docs/snapshot.md`) |
+| `axiom_repo_snapshot` | READ | `{ root?, include?[], exclude?[], maxFiles? (20000, cap 50000), maxBytes? (64 MiB), respectGitignore? (true), withContentDigest? (true) }` | `RepoSnapshot { snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind }], truncated, counts } }` — sorted, no timestamps/absolute paths; `.git/`, `.axiom/` always skipped; symlinks recorded, never followed (`docs/guides/snapshot.md`) |
 
 Every tool carries MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
 and an `outputSchema`; `structuredContent` is the full result, `content[0].text` a small summary (digest,
@@ -109,7 +109,7 @@ see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
 `axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot}`,
-`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/emitters.md`).
+`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/guides/emitters.md`).
 
 ## Trust model
 
@@ -129,8 +129,8 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
   *and* the profile sets `facts.allowGuards: true`. Relative commands must live under `<root>/scripts/`;
   absolute ones must be listed exactly via `--guard-allowlist <abs>` (repeatable). Guards are spawned
   with an args array (never a shell), a scrubbed environment, a wall-clock timeout, and must print
-  `GuardOutput` JSON — see `docs/checks.md`.
-- **Signed manifests** (`docs/signing.md`): a root can pin Ed25519 public keys in
+  `GuardOutput` JSON — see `docs/guides/checks.md`.
+- **Signed manifests** (`docs/guides/signing.md`): a root can pin Ed25519 public keys in
   `.axiom/trust/keys.json`; a profile with `manifest.requireSigned` then refuses unsigned, tampered or
   untrusted bundles, and with `antiRollback: true` refuses any `counter ≤ .axiom/trust/state.json#lastCounter`.
   `axiom_apply` advances that state only on `status: "applied"`. Private keys never enter the server:
@@ -143,7 +143,7 @@ axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [-
               [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
 axiom compile <plan.json> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
 axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
-axiom verify  <bundle.json> --tree <root> [--pre] [--attest out.intoto.json]   (tree matches manifest? docs/verify-tree.md)
+axiom verify  <bundle.json> --tree <root> [--pre] [--attest out.intoto.json]   (tree matches manifest? docs/guides/verify-tree.md)
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
 axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
@@ -156,7 +156,7 @@ axiom sign    <bundle.json> [--key-file <path>] [-o out.json] [--root-id <id>]  
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root . | root-id [<id>|--clear] --root .
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level warn]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
-                                               (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/migrate.md)
+                                               (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/guides/migrate.md)
 axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>]... [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]
 axiom snapshot-diff <a.json> <b.json>          (RepoSnapshot → { added, removed, changed })
 ```
@@ -168,8 +168,8 @@ Exit codes: `0` ok · `1` verdict fail / apply failed · `2` usage or error. Non
 fetches `https:` only (no redirects, 30 s timeout, 32 MiB cap), optionally restricted to
 `--net-allow` hosts (`*.example.com` wildcards), verifies the pinned digest and stores the blob in
 the CAS — a mismatch stores nothing (`ERR_DIGEST_MISMATCH`). `apply` never fetches. The MCP
-`axiom_plan_compile` tool has no network switch. See [docs/plan-format.md](../../docs/plan-format.md#ref-sources)
-and [docs/cas.md](../../docs/cas.md).
+`axiom_plan_compile` tool has no network switch. See [docs/reference/plan-format.md](../../docs/reference/plan-format.md#ref-sources)
+and [docs/concepts/cas.md](../../docs/concepts/cas.md).
 
 ## Hook mode — `axiom gate --stdin`
 
@@ -179,7 +179,7 @@ payload from stdin (both `{tool_name, tool_input, cwd}` and `{toolName, toolArgs
 `create_file|replace_string_in_file|insert_edit_into_file|apply_patch|multi_replace_string_in_file|edit_notebook_file`
 and generic `write|edit`, scans **shell** tools (`Bash`, `run_in_terminal`, …) for write
 primitives (`>`, `>>`, `tee`, `rm`, `mv`, `cp`, `sed -i`, `git checkout|reset|clean`, PowerShell
-`Set-Content`/`Remove-Item`, … — a heuristic, documented in docs/hooks.md), and runs **only** the
+`Set-Content`/`Remove-Item`, … — a heuristic, documented in docs/getting-started/hooks.md), and runs **only** the
 fast predicates: containment + `RelPath` rules (`..`, `CON`, NTFS ADS → `ERR_CONTAINMENT` /
 `ERR_PATH_*`), `path.deny`, `path.allow`, `content.noSecrets` and `content.maxBytes` on the new
 content when the payload carries it. **Fail-closed** (D-18): a non-answer is a deny.
@@ -200,8 +200,8 @@ Profile = `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.axiom
 built-in `{ deny: [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"], noSecrets: true, pii: false }`.
 Schema: `{ deny: string[], allow?: string[], noSecrets: boolean, pii: boolean, maxBytes?: number }` (strict).
 `pii: true` additionally scans for personal data (`cnp`, `email`, `phoneRo`, `card`) — off by default
-since S-414 (maintainer e-mails in `pyproject.toml` denied real edits; see `docs/checks.md`).
+since S-414 (maintainer e-mails in `pyproject.toml` denied real edits; see `docs/guides/checks.md`).
 
 `gate` is a separate lazy chunk (`dist/gate-lazy.js`, no MCP SDK): in-process p95 ≈ 5 ms per payload,
 end-to-end ≈ 150–200 ms including node startup; `check-gate-latency` guards p95 ≤ 250 ms.
-Wiring for each harness is in [`docs/hooks.md`](../../docs/hooks.md).
+Wiring for each harness is in [`docs/getting-started/hooks.md`](../../docs/getting-started/hooks.md).

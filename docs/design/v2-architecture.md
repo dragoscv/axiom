@@ -1,10 +1,48 @@
-Research is complete and verified. Here is the design document.
-
----
-
 # AXIOM v2 — Architecture Design
 
-**Status:** design only, 2026-09-18. Every external claim marked **[V]** was verified today against npm registry / spec pages; v1 facts marked **[src]** were read from `E:\gh\axiom` source.
+*The design document AXIOM v2 was built from — package graph, data model, checks engine, apply engine, MCP surface, `.axm`, quality gates, roadmap.*
+
+**Status:** as built, 2.2.x (2026-09-21). Written 2026-09-18 as a design; the sections below were
+updated where the shipped code diverged (§1 build layout, §2.2 signature payload type, §3 expression
+predicates, §5.1 SDK v2, §6 LSP). Every external claim marked **[V]** was verified on 2026-09-18
+against npm registry / spec pages; v1 facts marked **[src]** were read from `E:\gh\axiom` source.
+A compact index of every decision is in [decisions.md](decisions.md); the user-facing summaries are
+[concepts/pipeline.md](../concepts/pipeline.md), [concepts/invariants.md](../concepts/invariants.md)
+and [concepts/trust-model.md](../concepts/trust-model.md).
+
+```mermaid
+flowchart TB
+  subgraph leaves [Leaves — no @codai deps]
+    schema["@codai/axiom-schema<br/>Zod v4 · ERROR_CODES · JSON Schema"]
+    canon["@codai/axiom-canon<br/>JCS · sha256 · in-toto · DSSE"]
+  end
+  subgraph engines [Engines — schema + canon only]
+    plan["@codai/axiom-plan<br/>compile · CAS · ref · patch · emitter registry"]
+    checks["@codai/axiom-checks<br/>17 predicates · profiles · guard runner"]
+    apply["@codai/axiom-apply<br/>containment · 2PC · journal · git PR · verifyTree"]
+  end
+  subgraph dsl [DSL]
+    axm["@codai/axiom-axm<br/>Chevrotain parser · formatAxm"]
+    lsp["@codai/axiom-axm-lsp<br/>vscode-languageserver"]
+    vsx["vscode-axm (private)<br/>.vsix"]
+  end
+  web["@codai/axiom-emitters-web<br/>web@2.0.0 templates"]
+  subgraph bin [The published bin]
+    mcp["@codai/axiom-mcp<br/>cli.js → cli-main.js + lazy chunks<br/>mcp-lazy · http-lazy · gate-lazy · axm-lazy · migrate-lazy"]
+    adapter["adapter.ts — the only SDK import"]
+    sdk["@modelcontextprotocol/server v2"]
+  end
+  priv["testkit · conformance (private)"]
+  plan --> schema & canon
+  checks --> schema & canon
+  apply --> schema & canon
+  axm --> schema
+  lsp --> axm & schema
+  vsx --> lsp
+  mcp --> plan & checks & apply & axm & web & canon & schema
+  mcp --> adapter --> sdk
+  priv -.-> schema & canon & plan
+```
 
 ## 0. Diagnosis in one paragraph
 
@@ -40,9 +78,16 @@ axiom/
 
 **Boundaries** (enforced by `scripts/check-package-deps.mjs`): `schema` and `canon` are leaves; `plan/checks/apply` never import each other; only `mcp` imports the SDK. No emitter is a dependency of the engine (fixes v1's engine↔emitters cycle **[src]**).
 
-**Build:** `tsdown 0.23.0` **[V]** per package, ESM only, `platform: node`, `target: node22`. `@codai/axiom-mcp` bundles all workspace packages + `zod` + SDK into one file `dist/axiom.mjs`, externals = `node:*` only.
+**Build (as built):** `tsdown` per package, ESM only, `platform: node`, `target: node22`.
+`@codai/axiom-mcp` ships a thin `dist/cli.js` entry (reads `package.json`, answers `--version`,
+dispatches `gate` straight to `dist/gate-lazy.js` without loading anything else) that lazy-imports
+`dist/cli-main.js` (every engine + zod, eager, budgeted by `check-bundle-size` at 950 KB) and a set of
+lazy chunks that are loaded only by the verb that needs them: `mcp-lazy.js` / `http-lazy.js` (the
+MCP SDK v2 behind `adapter.ts`), `gate-lazy.js` (no SDK), `axm-lazy.js` (Chevrotain), `migrate-lazy.js`.
+Externals are `node:*` and the optional `@cedar-policy/cedar-wasm`. The 2.2.1 standalone binaries
+(D-27) are a separate single-file CJS `sea` entry built with `node --build-sea`.
 
-**Cold-start budget (< 300 ms, < 1 MB):** the SDK 1.30.0 hard-depends on express 5 **and** hono 4 **[V]**. Bundle imports only `@modelcontextprotocol/sdk/server/mcp.js`, `.../server/stdio.js`, and lazy `import()` for `.../server/streamableHttp.js` (only on `--http`). tsdown tree-shakes express/hono out of the stdio path; a size guard (`check-bundle-size.mjs`, limit 950 KB) and a cold-start guard (`check-cold-start.mjs`, spawns the bin with `--version`, p50 < 250 ms on CI) fail the build. Zod v4 core is ~14 KB gz **[V zod.dev]**; JSON-Schema emission via `z.toJSONSchema()` **[V]** happens at build time into `schema/dist/*.schema.json` so runtime needs no extra lib.
+**Cold-start budget (< 250 ms p50, < 950 KB eager):** the original design assumed SDK 1.30 (which hard-depends on express 5 **and** hono 4 **[V]**) and tree-shaking; what shipped is stricter — the SDK is not in the eager bundle at all. A size guard (`check-bundle-size.mjs`, limit 950 KB over `cli.js` + `cli-main.js` + their static-import closure) and a cold-start guard (`check-cold-start.mjs`, spawns the bin with `--version`, p50 < 250 ms on CI) fail the build. Zod v4 core is ~14 KB gz **[V zod.dev]**; JSON-Schema emission via `z.toJSONSchema()` **[V]** happens at build time into `packages/schema/schemas/*.json` (guard `check-schema-json-fresh`) so runtime needs no extra lib.
 
 **TypeScript 7.0.2** is the Go-native `tsgo` and ships **no compiler API** **[V]**. Use it for `tsc --noEmit`; tsdown auto-selects the `tsgo` dts generator **[V]**. Nothing in the toolchain (Biome, Vitest, tsdown) needs the TS API, so no `@typescript/typescript6` alias is required. `engines: { node: ">=22.14" }` (Node 24 is Active LTS, 26 becomes LTS 2026-10-27 **[V]**).
 
@@ -129,8 +174,11 @@ export const InTotoStatement = z.object({
 }).strict();
 
 // envelope.ts — DSSE  [V: secure-systems-lab/dsse envelope.md v1.0.2]
+// As built (D-16): the *signed* envelope in `ManifestBundle.signatures[]` is over JCS(manifest) with
+// payloadType "application/vnd.axiom.manifest+json" (or "…manifest-bound+json" when root-bound, S-409);
+// the optional unsigned in-toto record in `bundle.envelope` keeps "application/vnd.in-toto+json".
 export const DsseEnvelope = z.object({
-  payloadType: z.literal("application/vnd.in-toto+json"),
+  payloadType: z.enum(["application/vnd.axiom.manifest+json", "application/vnd.axiom.manifest-bound+json", "application/vnd.in-toto+json"]),
   payload: z.base64(), signatures: z.array(z.object({ keyid: z.string().optional(), sig: z.base64() })),
 }).strict();
 
@@ -237,7 +285,7 @@ Verdict: `error` if any provider fails or a guard times out (fail-closed; never 
 ```
 Contract (superset of brivio `run-guards.mjs` **[src]**): spawn via `execFile` (args array, `shell: false`, `windowsHide: true`), stdin receives the JCS bundle, **stdout must be a JSON `GuardOutput`** `{ ok: boolean, findings: Finding[] }` (Zod-validated; non-JSON stdout + exit 0 → `error` verdict, exit ≠ 0 without JSON → single `error` finding with captured stderr tail 4 KiB). Guards run only when the profile sets `facts.allowGuards: true` **and** the server was started with `--allow-guards`; commands must be relative to `<root>/scripts/` or an absolute path in `--guard-allowlist`. Guards run in a worker pool `min(4, cpus)`, slowest-first from the previous report. `RunChecksOptions.signal` (S-406) aborts the pool: every running guard tree is killed and reports `ERR_TASK_CANCELLED`.
 
-**Long checks and big plans are tool-level (D-24, S-406).** MCP SDK v2 ships the `io.modelcontextprotocol/tasks` wire vocabulary without a runtime (`tasks/*` excluded from `setRequestHandler`; the 2026-07-28 `tools/call` codec rejects a `CreateTaskResult`), so AXIOM exposes `axiom_check_start` → `axiom_task_get` / `axiom_task_cancel` as ordinary tools backed by an in-process `TaskStore` shared by every instance a `serverFactory` builds (like `seenRoots`), and `axiom_plan_begin` → `axiom_plan_add`* → `axiom_plan_seal` backed by a `PlanSessionStore`; sealing feeds `compilePlan` exactly as `axiom_plan_compile` does, so the digest is one-shot-identical (fast-check property). Neither store touches disk; the server's stop path aborts every working task. If a future SDK adds a tasks runtime, the same store can back the wire methods behind `adapter.ts` without changing tool semantics. See `docs/mcp_api.md` §Tasks.
+**Long checks and big plans are tool-level (D-24, S-406).** MCP SDK v2 ships the `io.modelcontextprotocol/tasks` wire vocabulary without a runtime (`tasks/*` excluded from `setRequestHandler`; the 2026-07-28 `tools/call` codec rejects a `CreateTaskResult`), so AXIOM exposes `axiom_check_start` → `axiom_task_get` / `axiom_task_cancel` as ordinary tools backed by an in-process `TaskStore` shared by every instance a `serverFactory` builds (like `seenRoots`), and `axiom_plan_begin` → `axiom_plan_add`* → `axiom_plan_seal` backed by a `PlanSessionStore`; sealing feeds `compilePlan` exactly as `axiom_plan_compile` does, so the digest is one-shot-identical (fast-check property). Neither store touches disk; the server's stop path aborts every working task. If a future SDK adds a tasks runtime, the same store can back the wire methods behind `adapter.ts` without changing tool semantics. See [reference/mcp-tools.md § Tasks](../reference/mcp-tools.md#tasks-d-24).
 
 ---
 
@@ -290,7 +338,12 @@ Long paths: prefix `\\?\` via `path.toNamespacedPath` for every fs call when `le
 
 ## 5. MCP surface
 
-### 5.1 Tools (`@modelcontextprotocol/sdk` 1.30.0 `McpServer.registerTool` with `annotations`, `inputSchema`, `outputSchema`, handler returns `structuredContent` **[V]**)
+### 5.1 Tools (MCP SDK v2 — `@modelcontextprotocol/server` 2.0.0 behind `adapter.ts`; every tool has `annotations`, `inputSchema`, `outputSchema`, handler returns `structuredContent`)
+
+The table below is the v2.0 design set. As built (2.2.x) there are **17 tools** — the ten here plus
+`axiom_check_start` / `axiom_task_get` / `axiom_task_cancel` and `axiom_plan_begin` / `axiom_plan_add` /
+`axiom_plan_seal` (D-24) and `axiom_repo_snapshot` (S-304); the authoritative registry is
+`packages/mcp/spec/tools.json` and the user-facing table is [reference/mcp-tools.md](../reference/mcp-tools.md).
 
 | tool | annotations (RO/D/I/OW) | input | output |
 |---|---|---|---|
@@ -359,8 +412,8 @@ Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" …
 - **Conformance:** `@modelcontextprotocol/conformance` 0.1.16 tests servers over an HTTP URL only **[V]**, so `packages/conformance` starts `axiom mcp --http 127.0.0.1:0 --root <tmp>` and runs `npx @modelcontextprotocol/conformance server --url … --expected-failures baseline.yml`; the stdio path is covered by an in-process `Client` + `StdioClientTransport` smoke test (`initialize`, `tools/list`, every tool with a bad input → structured error).
 - **CI matrix** (GitHub Actions): `os: [ubuntu-24.04, windows-2025, macos-15] × node: [22, 24]`; jobs: `lint → typecheck (tsgo) → test → build → guards → conformance (ubuntu only) → cold-start+size`. Actions pinned to SHAs (brivio `check-action-pins` guard reused **[src]**).
 - **Release:** `@changesets/cli` 3.0.3 **[V]**, `changeset-bot`, fixed group for all `@codai/axiom-*`. Publish via **npm trusted publishing** (OIDC, `permissions: id-token: write`, npm ≥ 11.5.1; provenance automatic — no `--provenance` flag needed **[V]**); `npm stage publish` is the default for configs created after 2026-09-03 **[V]** → workflow runs `npm stage publish` then `npm publish --tag latest` after a manual approval environment.
-- **Repo guards** `scripts/check-*.mjs` + `scripts/run-guards.mjs` (brivio contract **[src]**: exit code, `OK    `/`FAIL  ` prefix, worker pool) plus `--json` and 60 s per-guard timeout: `check-package-deps` (boundary graph §1), `check-bundle-size`, `check-cold-start`, `check-gate-latency`, `check-error-codes` (every thrown code is in `errors.ts`), `check-tool-parity` (tools.json ↔ registry ↔ docs/mcp_api.md), `check-schema-json-fresh` (`z.toJSONSchema` output committed and current), `check-no-stdout` (grep `console.log` outside `cli.ts`), `check-no-shell-spawn` (`shell:\s*true` banned), `check-vacuous-assertions` (ported), `check-golden-digests`, `check-action-pins`, `check-changeset-present`, `check-sdk-adapter` (only `mcp/src/adapter.ts` imports `@modelcontextprotocol/*`; `dist/cli-main.js` carries no SDK code).
-- **`.github/instructions/`**: `schema.instructions.md` (applyTo `packages/schema/**` — additive-only, strict objects, error codes closed enum), `apply.instructions.md` (`packages/apply/**` — no fs call without containment, no `shell`, journal before mutate), `mcp.instructions.md` (`packages/mcp/**` — annotations mandatory, stderr only, roots), `tests.instructions.md`. **Skills** (`.github/skills/*/SKILL.md`, metu `name`/`description` + numbered steps **[src]**): `add-predicate`, `add-mcp-tool`, `add-golden-fixture`, `release-axiom`, `debug-apply-journal`. Root `.copilot-ripple.json`: `publicApi: "packages/mcp/src/tools/"` → expect `docs/mcp_api.md`, `spec/tools.json`, `packages/conformance/baseline.yml`.
+- **Repo guards** `scripts/check-*.mjs` + `scripts/run-guards.mjs` (brivio contract **[src]**: exit code, `OK    `/`FAIL  ` prefix, worker pool) plus `--json` and 60 s per-guard timeout — **18 as built**: `check-package-deps` (boundary graph §1), `check-bundle-size`, `check-cold-start`, `check-gate-latency`, `check-error-codes` (every thrown code is in `errors.ts` and asserted by a test), `check-tool-parity` (tools.json ↔ registry ↔ `packages/mcp/README.md` + `docs/mcp_api.md`), `check-schema-json-fresh` (`z.toJSONSchema` output committed and current), `check-no-stdout` (grep `console.log` outside `cli.ts`), `check-no-shell-spawn` (`shell:\s*true` banned), `check-vacuous-assertions` (ported), `check-golden-digests`, `check-action-pins`, `check-changeset-present`, `check-sdk-adapter` (only `mcp/src/adapter.ts` imports `@modelcontextprotocol/*`; `dist/cli-main.js` carries no SDK code), `check-no-v1-imports` (nothing imports `packages/_v1`), `check-tracker-sync` (`PLAN.md` ↔ `TRACKER.csv` ids), `check-stale-markers` (no "planned for vX.Y" once X.Y shipped), `check-release-complete` (every package of a tagged version is on the registry — runs after publish).
+- **`.github/instructions/`**: `schema.instructions.md` (applyTo `packages/schema/**` — additive-only, strict objects, error codes closed enum), `apply.instructions.md` (`packages/apply/**` — no fs call without containment, no `shell`, journal before mutate), `mcp.instructions.md` (`packages/mcp/**` — annotations mandatory, stderr only, roots), `tests.instructions.md`. **Skills** (`.github/skills/*/SKILL.md`, metu `name`/`description` + numbered steps **[src]**): `add-predicate`, `add-mcp-tool`, `add-golden-fixture`, `release-axiom`, `debug-apply-journal`. Root `.copilot-ripple.json`: `publicApi: "packages/mcp/src/tools/"` → expect `docs/reference/mcp-tools.md`, `spec/tools.json`, `packages/conformance/baseline.yml`.
 
 ---
 
@@ -378,6 +431,12 @@ Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" …
 
 ## 9. Roadmap
 
+> [!NOTE]
+> This is the roadmap **as planned on 2026-09-18**, kept for the record. What actually shipped
+> per release — including the changes of plan (hand-written LSP instead of Langium, D-14; 17
+> tools instead of 8; CEL and signing landing in 2.1.0) — is in [PLAN.md §3](../../PLAN.md) and
+> [decisions.md](decisions.md).
+
 | Phase | Scope | Acceptance criteria | Effort |
 |---|---|---|---|
 | **v2.0.0** (minimal shippable) | `schema`, `canon`, `plan` (inline + CAS, no template emitters), `checks` (built-in predicates, no guards), `apply` (fs + dry-run + journal/rollback + idempotency; **no PR mode**), `mcp` (stdio, 8 tools, resources, roots), CLI verbs except `gate`, guards, CI matrix, changesets, trusted publishing | Golden digests identical on 3 OSes; fast-check properties green (containment 10k cases, apply-twice noop, rollback after injected fault); Stryker ≥ 85 % on canon/contain/predicates; stdio smoke passes; bin cold-start p50 < 250 ms, bundle < 950 KB on CI; 0 Biome errors; `npm stage publish` from CI with provenance visible on npmjs.com; v1 deprecated | **9 agent-days** (schema+canon 1, plan 1, checks 1.5, apply 3, mcp+cli 1.5, gates/CI/release 1) |
@@ -388,4 +447,13 @@ Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" …
 
 ---
 
-**Verification status of this document:** all version numbers, spec URLs (`https://in-toto.io/Statement/v1`, `https://slsa.dev/provenance/v1`, DSSE v1.0.2, RFC 8785), SDK capabilities, hook protocols and npm publishing behaviour were checked live today; v1 code facts were read from source with line references available in the research notes. Two claims in the prompt were **refuted**: the latest MCP protocol is `2026-07-28` (not 2025-xx), and the `cel-js` note is confirmed stale (chevrotain 11 pin, last publish 2025-07).
+**Verification status of this document:** all version numbers, spec URLs (`https://in-toto.io/Statement/v1`, `https://slsa.dev/provenance/v1`, DSSE v1.0.2, RFC 8785), SDK capabilities, hook protocols and npm publishing behaviour were checked live on 2026-09-18; v1 code facts were read from source with line references available in the research notes. Two claims in the original prompt were **refuted**: the latest MCP protocol is `2026-07-28` (not 2025-xx), and the `cel-js` note is confirmed stale (chevrotain 11 pin, last publish 2025-07).
+
+---
+
+**See also**
+
+- [Decisions](decisions.md) — D-01 … D-31 index
+- [Pipeline](../concepts/pipeline.md) · [Invariants](../concepts/invariants.md) · [Trust model](../concepts/trust-model.md) — the user-facing distillation
+- [Red-team critique](../research/2026-09-18-red-team-critique.md) — the critique this design answered
+- [PLAN.md](../../PLAN.md) — canonical tracker

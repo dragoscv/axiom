@@ -1,5 +1,7 @@
 # metu ← AXIOM integration (S-306)
 
+*A profile built from `repo.requireCompanion` rules transcribed from metu's own skills, plus gate profile, MCP server and Copilot hook — with the proof runs.*
+
 **Status 2026-09-18:** wired and proven end-to-end in dry-run; files staged in
 `E:\gh\metu` (not committed — owner commits). Sibling of
 [brivio.md](brivio.md); the difference is that metu has no guard runner, so the
@@ -120,3 +122,12 @@ run outside any UUID, so the zero-UUID fixture passes as-is.
 1. Review + commit the staged metu files (explicit paths; shared clone).
 2. After `@codai/axiom-mcp@2.0.0` is on npm, switch `.vscode/mcp.json` and
   `.github/hooks/axiom-gate.json` to `npx -y @codai/axiom-mcp …`.
+
+---
+
+**See also**
+
+- [Checks](../guides/checks.md#reporequirecompanion) — `repo.requireCompanion` and `mustChange`
+- [brivio](brivio.md) — the sibling integration with a guard runner
+- [Hooks](../getting-started/hooks.md) — the gate profile schema
+- [Harnesses](harnesses.md) — the `mcp.json` and hook file shapes

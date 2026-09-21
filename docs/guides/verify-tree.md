@@ -1,6 +1,6 @@
 # `axiom verify --tree` and the GitHub Action
 
-*S-403 · decisions D-20 (scope) and D-21 (attestation).*
+*Prove that a real tree matches a manifest — in CI, long after the agent is gone — and optionally publish an in-toto attestation (S-403, D-20/D-21).*
 
 A manifest says what a tree should contain at the paths it touched. `verify --tree` asks
 whether a real tree agrees — in CI, before a merge, long after the agent that produced the
@@ -60,6 +60,8 @@ The Statement is what you keep; the sibling `.predicate.json` is what `actions/a
 (it builds the Statement itself from `predicate-path` + the subject you name).
 
 ## GitHub Action
+
+Inputs, outputs and permissions in full: [integration/github-action.md](../integration/github-action.md).
 
 ```yaml
 # .github/workflows/axiom-verify.yml
@@ -124,3 +126,12 @@ instance (`logIndex 2893697943`), with `predicate.source = { repository, ref, sh
 The repository's own CI runs the action against a scratch tree on every push
 (`verify-action` job): it must pass on the applied tree, fail with one mismatch after a hand
 edit, and upload an attestation on `main`.
+
+---
+
+**See also**
+
+- [GitHub Action](../integration/github-action.md) — every input/output, the `@v2` moving tag
+- [Signing](signing.md) — DSSE signatures on the bundle itself (a different proof)
+- [Trust model](../concepts/trust-model.md) — attestation among the other trust boundaries
+- [Plan format](../reference/plan-format.md#manifestbody--the-hashed-object) — `preImage[]`, which `--pre` compares against

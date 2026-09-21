@@ -1,0 +1,9 @@
+# Default owner for everything in the repo.
+* @dragoscv
+
+# Security-relevant surfaces — explicit so a future team split keeps review here.
+/packages/apply/ @dragoscv
+/packages/schema/ @dragoscv
+/.github/workflows/ @dragoscv
+/action/ @dragoscv
+/docs/ @dragoscv

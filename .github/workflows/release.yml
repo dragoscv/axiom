@@ -5,6 +5,14 @@ name: Release
 # id-token for a short-lived credential and attaches provenance automatically.
 # Prerequisite (one-time, per package on npmjs.com): Settings → Trusted
 # publishing → GitHub Actions → repo dragoscv/axiom, workflow release.yml.
+#
+# Jobs (Phase 5, D-27/D-29/D-31):
+#   publish          build → guards → changeset publish → registry verification
+#   binaries         Node 26 single executables, one native runner per target
+#   release-assets   SHA256SUMS + Sigstore build provenance, attached to the GitHub release
+#   vscode-extension .vsix attached to the release (+ Marketplace when VSCE_PAT is set)
+#   mcp-registry     server.json → registry.modelcontextprotocol.io via GitHub OIDC
+#   action-tag       moves the `v2` tag of dragoscv/axiom/action to this release
 
 on:
   push:
@@ -14,6 +22,7 @@ on:
 permissions:
   contents: write # changeset publish creates git tags
   id-token: write # npm trusted publishing (OIDC)
+  attestations: write # actions/attest-build-provenance
 
 concurrency:
   group: release-${{ github.ref }}
@@ -93,6 +102,187 @@ jobs:
         run: |
           sleep 30
           node scripts/check-release-complete.mjs --strict
+
+  binaries:
+    # D-27: `node --build-sea` embeds the builder's own Node, and SEA blobs carry no version
+    # marker, so every target is built natively on its own runner (never cross-injected).
+    # Node 26 (LTS from 2026-10-28) is pinned for all five so the binaries share one runtime.
+    name: binary ${{ matrix.target }}
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-15, target: darwin-arm64 }
+          - { os: macos-15-intel, target: darwin-x64 }
+          - { os: windows-2025, target: win-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Setup Node 26 (embedded runtime)
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Bundle (single inlined CommonJS file)
+        run: pnpm --filter @codai/axiom-mcp run build:sea
+
+      - name: Build single executable
+        run: node packages/mcp/scripts/build-sea.mjs --out "${{ runner.temp }}/axiom-bin"
+
+      - name: Smoke (compile → check → apply → gate through the binary)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin=$(ls "${{ runner.temp }}"/axiom-bin/axiom-*)
+          root="${{ runner.temp }}/smoke-tree"; mkdir -p "$root"
+          printf '%s' '{"apiVersion":"axiom.dev/v2","kind":"Plan","name":"sea-smoke","intent":"release smoke","artifacts":[{"path":"src/hello.ts","source":{"type":"inline","content":"export const hi = 1;\n"}}]}' > "$root/plan.json"
+          "$bin" compile "$root/plan.json" --root "$root" -o "$root/bundle.json" > "$root/compile.out"
+          digest=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).manifestDigest)' "$root/compile.out")
+          "$bin" check "$root/bundle.json" --root "$root"
+          "$bin" apply "$root/bundle.json" --root "$root" --confirm "$digest" > /dev/null
+          test -f "$root/src/hello.ts"
+          printf '%s' "{\"session_id\":\"s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"$root\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"src/ok.ts\",\"content\":\"x\"}}" | "$bin" gate --stdin
+          echo "smoke OK: $("$bin" --version)"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: axiom-${{ matrix.target }}
+          path: ${{ runner.temp }}/axiom-bin/axiom-*
+          if-no-files-found: error
+
+  release-assets:
+    name: SHA256SUMS + provenance → GitHub release
+    # Covers the five binaries AND the .vsix (same checksum file, same Sigstore attestation).
+    needs: [binaries, vscode-extension]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download every binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: axiom-*
+          path: bin
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd bin
+          chmod +x axiom-linux-* axiom-darwin-*
+          ls -la
+          sha256sum axiom-* | tee SHA256SUMS
+
+      - name: Sigstore build provenance (binaries + .vsix + checksums)
+        # `gh attestation verify bin/axiom-linux-x64 --owner dragoscv` proves this workflow, at
+        # this commit, produced the exact bytes — same guarantee npm provenance gives the packages.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: bin/*
+
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
+          gh release upload "$tag" bin/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
+
+  mcp-registry:
+    # D-29: list io.github.dragoscv/axiom on registry.modelcontextprotocol.io. The registry
+    # fetches the npm packument and requires `mcpName` === server.json name and that the exact
+    # version already exists on npm, so this runs after `publish` and retries while the CDN
+    # catches up. Auth is GitHub OIDC (grants the io.github.<owner>/* namespace).
+    name: MCP Registry publish
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install mcp-publisher v1.8.1
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --version || true
+
+      - name: server.json version = released version
+        run: |
+          set -euo pipefail
+          v=$(node -p 'require("./packages/mcp/package.json").version')
+          node -e '
+            const fs = require("fs"); const p = "packages/mcp/server.json";
+            const s = JSON.parse(fs.readFileSync(p, "utf8")); const v = process.argv[1];
+            s.version = v; for (const pkg of s.packages) pkg.version = v;
+            fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n");
+          ' "$v"
+          cat packages/mcp/server.json
+
+      - name: Login (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish (retry while npm propagates)
+        working-directory: packages/mcp
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if ../../mcp-publisher publish; then exit 0; fi
+            echo "attempt $i failed; waiting 30 s for the npm packument"; sleep 30
+          done
+          echo "::error::mcp-publisher publish failed after 6 attempts"; exit 1
+
+      - name: Verify listing
+        run: |
+          set -euo pipefail
+          v=$(node -p 'require("./packages/mcp/package.json").version')
+          curl -fsSL "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest" | tee registry.json
+          node -e 'const r = JSON.parse(require("fs").readFileSync("registry.json","utf8")); const got = r.server?.version ?? r.version; if (got !== process.argv[1]) { console.error(`registry has ${got}, expected ${process.argv[1]}`); process.exit(1); }' "$v"
+
+  action-tag:
+    # D-31: consumers pin `uses: dragoscv/axiom/action@v2`. Move that tag to every v2.* release
+    # (a plain tag, no Release attached, so immutable-releases can be enabled later without
+    # locking it). Skipped for any other major.
+    name: move action tag v2
+    needs: [publish, release-assets]
+    if: startsWith(github.ref, 'refs/tags/v2.')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Force-move v2 → ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa v2 -m "dragoscv/axiom/action v2 → ${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+          git push origin v2 --force
+          git ls-remote --tags origin v2
 
   vscode-extension:
     # S-412: the .vsix is always built and attached to the GitHub release; Marketplace publish

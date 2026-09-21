@@ -1,5 +1,5 @@
 /**
- * Static vocabulary of `.axm` v2 (docs/syntax_spec.md) as the LSP needs it: keyword docs,
+ * Static vocabulary of `.axm` v2 (docs/reference/axm-syntax.md) as the LSP needs it: keyword docs,
  * value sets and the built-in predicate ids with one-line descriptions.
  *
  * The predicate list mirrors `BUILTIN_PREDICATES` in `@codai/axiom-checks`; a test asserts

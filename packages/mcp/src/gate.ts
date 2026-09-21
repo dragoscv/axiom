@@ -5,7 +5,7 @@
  * runs only the fast path/content predicates from `@codai/axiom-checks` against a small
  * gate profile. No repo index, no guards, no git — budget < 120 ms in-process.
  *
- * Contract (verified against Claude Code + Copilot CLI docs, see docs/hooks.md) — Gate v2 (S-404, D-18):
+ * Contract (verified against Claude Code + Copilot CLI docs, see docs/getting-started/hooks.md) — Gate v2 (S-404, D-18):
  *   allow → exit 0, nothing on stdout.
  *   deny  → exit 2, one stderr line `AXIOM GATE DENY <code>: <reason> (<relpath>)` and ONE JSON
  *           object on stdout carrying both the Claude `hookSpecificOutput` shape and the flat

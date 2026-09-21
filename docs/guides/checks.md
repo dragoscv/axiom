@@ -1,4 +1,6 @@
-# Checks: predicates and profiles (v2)
+# Checks: predicates and profiles
+
+*The 17 built-in predicates, their `params`, the fail-closed verdict rules, and how profiles compose them.*
 
 `@codai/axiom-checks` runs a list of `CheckRef`s over a `ManifestBundle` and
 returns a `CheckReport`. Every check is a **typed predicate** with a
@@ -31,6 +33,25 @@ Globs everywhere are [picomatch](https://github.com/micromatch/picomatch) with
 `error` is never downgraded. `apply` treats anything other than `pass` as
 `ERR_CHECKS_FAILED`. Provider failures appear as findings with
 `facts.code` (an `ERR_*` code) and `facts.__provider: true`.
+
+```mermaid
+flowchart TD
+  S[runChecks bundle · profile · root?] --> P{preImage[] present<br/>and root given?}
+  P -- drifted --> E[verdict: error<br/>manifest.preImage ERR_PREIMAGE_CHANGED]
+  P -- verified / unverified --> L[for each CheckRef in merged order]
+  L --> K{predicate registered?}
+  K -- no --> E2[verdict: error ERR_PREDICATE_UNKNOWN]
+  K -- yes --> V{params valid?}
+  V -- no --> E3[verdict: error ERR_PREDICATE_PARAMS]
+  V -- yes --> R{provider available?<br/>repo needs root · guard needs --allow-guards}
+  R -- repo missing --> SK[skipped]
+  R -- guard disabled --> E4[verdict: error ERR_FACT_DISABLED]
+  R -- ok --> RUN[run → findings]
+  RUN --> F{any error-severity finding?}
+  F -- provider threw --> E5[verdict: error ERR_PROVIDER_FAILED]
+  F -- yes --> FAIL[verdict: fail]
+  F -- no --> PASS[verdict: pass]
+```
 
 Repo predicates (`repo.*`) need a `root`; when the run has none, or the profile
 sets `facts.allowRepo: false`, they are **skipped** (provider status `skipped`),
@@ -310,7 +331,7 @@ bite on a fresh clone. Finding id `repo.requireCompanion.<name>`,
 ```json
 { "id": "ripple", "predicate": "repo.requireCompanion", "params": { "rules": [
   { "when": "packages/mcp/src/tools/**",
-    "expect": [ { "name": "docs", "match": "docs/mcp_api.md" },
+    "expect": [ { "name": "docs", "match": "docs/reference/mcp-tools.md" },
                 { "name": "spec", "match": "packages/mcp/spec/tools.json" } ] }
 ] } }
 ```
@@ -399,7 +420,7 @@ output) or `skipped` (no guard checks in the set).
   "params": { "command": "scripts/axiom-guard-adapter.mjs", "timeoutMs": 60000 } }
 ```
 
-See `docs/integration/brivio.md` for wiring brivio's `run-guards.mjs`.
+See [integration/brivio.md](../integration/brivio.md) for wiring brivio's `run-guards.mjs`.
 
 ### `expr.cel`
 
@@ -576,7 +597,8 @@ authorised root; without one the check is `error`, not `pass`.
 ## Built-in profiles
 
 Defined in `packages/checks/src/profile.ts` (`BUILTIN_PROFILE_INPUTS`). Served
-as `axiom://profile/<name>`.
+as `axiom://profile/<name>`. The `Profile` schema, `extends`, and file discovery
+are in [profiles.md](../reference/profiles.md).
 
 ### `default`
 
@@ -609,7 +631,7 @@ Adds, on top of everything in `default`:
 ## Custom profiles and `extends`
 
 A profile is a JSON file `<root>/.axiom/profiles/<name>.json` matching the
-`Profile` schema ([plan-format.md](plan-format.md#profile)); its `name` must
+`Profile` schema ([plan-format.md](../reference/plan-format.md#profile)); its `name` must
 equal the file stem. Resolution (`loadProfile`):
 
 1. Search directories are tried in order, then the built-ins.
@@ -634,8 +656,17 @@ equal the file stem. Resolution (`loadProfile`):
 
 ## Adding a predicate
 
-Follow `.github/skills/add-predicate/SKILL.md`: define `params` with Zod, implement
+Follow [`.github/skills/add-predicate/SKILL.md`](../../.github/skills/add-predicate/SKILL.md): define `params` with Zod, implement
 `run()` so that any provider failure surfaces as an error finding (never a
 constant pass), register it in `BUILTIN_PREDICATES`, wire it into a profile if it
 should be on by default, add unit tests including the fail-closed path, add a
 changeset, and document it in this file.
+
+---
+
+**See also**
+
+- [Profiles reference](../reference/profiles.md) — schema, built-ins side by side, `extends`, `pii`, discovery
+- [Signing](signing.md) — the `manifest.requireSigned` protocol in full
+- [Apply](apply.md) — how a non-`pass` verdict becomes `ERR_CHECKS_FAILED`
+- [Hooks](../getting-started/hooks.md) — the four predicates the PreToolUse gate reuses

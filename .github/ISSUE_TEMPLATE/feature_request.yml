@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a new capability or a change to an existing one.
+title: "[feat]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lead with the problem. Invariants in `PLAN.md` §2 (canonical manifest, hash-gated apply,
+        closed error enum, fail-closed predicates) are not up for weakening — proposals that keep
+        them intact land faster.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today, or what is harder than it should be? Who hits this?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should AXIOM do instead? Sketch the tool input/output, CLI flag, predicate params or syntax if you have one.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: surface
+    attributes:
+      label: Which surface does this touch?
+      options:
+        - label: MCP tool
+        - label: CLI verb
+        - label: check predicate
+        - label: apply engine
+        - label: .axm syntax
+        - label: docs site
+        - label: GitHub Action
+        - label: VS Code extension
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve it, including "do nothing" and why they fall short.
+
+  - type: dropdown
+    id: willing-to-pr
+    attributes:
+      label: Willing to open a PR?
+      options:
+        - Yes, I can implement this
+        - Yes, with some guidance
+        - No
+    validations:
+      required: true

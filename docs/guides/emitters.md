@@ -1,6 +1,8 @@
 # Template emitters (`template` sources)
 
-**Status:** v2.1 · owner decision D-13 · story S-207.
+*Small, deterministic, versioned file templates rendered at compile time — optional sugar on top of `inline` (D-13, S-207).*
+
+**Status:** shipped in 2.1.0; emitter `web@2.0.0` is the only one registered by the published CLI/MCP.
 
 A `template` source lets a Plan artifact say *"render this small, well-known file for me"*
 instead of carrying the bytes inline:
@@ -114,3 +116,12 @@ const { bundle } = await compilePlan(plan, { emitters });
 
 The published `axiom` CLI and MCP server register only `web`. Adding a third-party emitter
 to them is not supported in 2.x — use the library API above.
+
+---
+
+**See also**
+
+- [Plan format](../reference/plan-format.md#template-sources) — the `template` source field by field
+- [Pipeline](../concepts/pipeline.md) — where rendering happens (compile) and what is hashed
+- [Red-team critique](../research/2026-09-18-red-team-critique.md) — why templates are sugar, not a scaffolder
+- [Versioning](../reference/versioning.md) — an emitter version bump is a manifest change

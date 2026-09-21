@@ -3,10 +3,7 @@
  * Thin entry: `--version`/`--help` answer without loading zod, the MCP SDK or the
  * engines; every real verb lazy-loads `./cli-main.js` (bundled alongside, no deps).
  */
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const { version } = require("../package.json") as { version: string };
+import { PACKAGE_VERSION as version } from "./version.js";
 
 const argv = process.argv.slice(2);
 const verb = argv[0];

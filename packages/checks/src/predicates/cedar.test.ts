@@ -18,6 +18,7 @@ import {
   cedarModule,
   evaluateCedar,
   exprCedar,
+  isCedarMissingError,
 } from "./cedar.js";
 import type { ContentEntry } from "./cel.js";
 
@@ -376,5 +377,16 @@ describe("expr.cedar without the optional dependency", () => {
     __setCedarModuleForTests(null);
     const mod = await cedarModule();
     expect(mod?.getCedarVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("classifies every loader's not-installed rejection, including a Node SEA (D-27)", () => {
+    const withCode = (code: string) => Object.assign(new Error(code), { code });
+    expect(isCedarMissingError(withCode("ERR_MODULE_NOT_FOUND"))).toBe(true);
+    expect(isCedarMissingError(withCode("MODULE_NOT_FOUND"))).toBe(true);
+    expect(isCedarMissingError(withCode("ERR_UNKNOWN_BUILTIN_MODULE"))).toBe(true);
+    // A broken install (e.g. the .wasm failing to instantiate) must still surface.
+    expect(isCedarMissingError(withCode("ERR_INVALID_ARG_TYPE"))).toBe(false);
+    expect(isCedarMissingError(new Error("boom"))).toBe(false);
+    expect(isCedarMissingError(undefined)).toBe(false);
   });
 });

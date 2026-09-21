@@ -45,7 +45,7 @@ fact provider cannot deliver — fail closed, never a constant pass (PLAN.md §2
    (`scripts/check-error-codes.mjs` enforces it).
 8. **Docs**: add a row to the predicate table in `packages/checks/README.md`
    (id, params, what it flags). If the MCP exposes profiles via `axiom_check`,
-   `docs/mcp_api.md` needs no change unless the tool input changed.
+   `docs/reference/mcp-tools.md` needs no change unless the tool input changed.
 9. **Changeset**: `pnpm changeset` → `@codai/axiom-checks` `minor`
    ("feat(checks): add `<group>.<name>` predicate").
 10. **Verify** and paste output: `pnpm --filter @codai/axiom-checks test`,

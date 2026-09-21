@@ -1,5 +1,7 @@
 # `axiom migrate v1` — v1 manifest → v2 Plan
 
+*Lift an AXIOM 1.0.x manifest into a v2 Plan: every path and byte preserved, everything v2 cannot express listed in `metadata.migration.dropped`.*
+
 `axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--name <kebab>] [--overwrite]`
 
 Lifts an AXIOM 1.0.x `manifest.json` into a v2 `Plan` (S-305). The output validates against
@@ -110,3 +112,12 @@ Fixtures used by the round-trip test live in `packages/mcp/fixtures/v1/` (an inl
 manifest, a budget manifest with base64 + `dir`, an edge manifest with a sidecar `out/` tree, and
 the real archived hash-only `manifest.json`). The migrator is a lazy CLI chunk
 (`dist/migrate-lazy.js`); the eager MCP bundle does not include it.
+
+---
+
+**See also**
+
+- [MIGRATION.md](../../MIGRATION.md) — the 1.x → 2.x concept mapping and client changes
+- [Plan format](../reference/plan-format.md) — what the emitted Plan must satisfy
+- [CAS](../concepts/cas.md) — where `--cas` puts the bytes
+- [Versioning](../reference/versioning.md) — the 1.x deprecation policy

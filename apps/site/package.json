@@ -1,0 +1,22 @@
+{
+  "name": "@codai/axiom-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentation site for AXIOM (Astro + Starlight), published to GitHub Pages.",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "pnpm run sync && astro dev",
+    "build": "pnpm run sync && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "catalog:",
+    "astro": "catalog:",
+    "astro-mermaid": "catalog:",
+    "mermaid": "catalog:",
+    "sharp": "catalog:",
+    "starlight-github-alerts": "catalog:",
+    "starlight-links-validator": "catalog:"
+  }
+}

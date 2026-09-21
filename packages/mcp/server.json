@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dragoscv/axiom",
+  "title": "AXIOM",
+  "description": "Transactional write gate for coding agents: plan, canonical manifest, checks, two-phase apply.",
+  "websiteUrl": "https://dragoscv.github.io/axiom/",
+  "repository": {
+    "url": "https://github.com/dragoscv/axiom",
+    "source": "github",
+    "subfolder": "packages/mcp"
+  },
+  "version": "2.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@codai/axiom-mcp",
+      "version": "2.2.0",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "mcp",
+          "description": "Serve the MCP stdio transport."
+        },
+        {
+          "type": "named",
+          "name": "--root",
+          "description": "Absolute repository root AXIOM may write to (allowlist; repeatable). There is no cwd fallback.",
+          "format": "filepath",
+          "placeholder": "/absolute/path/to/repo",
+          "isRequired": true,
+          "isRepeated": true
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "AXIOM_SIGNING_KEY",
+          "description": "Optional Ed25519 private key (base64 PKCS#8 or raw seed) used by axiom_sign; never stored under a root.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

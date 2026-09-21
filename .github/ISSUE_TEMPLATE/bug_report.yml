@@ -1,0 +1,110 @@
+name: Bug report
+description: Something in AXIOM misbehaves — a wrong verdict, a failed apply, a crash.
+title: "[bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Reproducible bugs get fixed fastest: a minimal Plan or bundle
+        plus the exact `error.code` is usually enough.
+
+  - type: input
+    id: version
+    attributes:
+      label: AXIOM version
+      description: Output of `axiom --version` (or the `@codai/axiom-mcp` version from your lockfile).
+      placeholder: "2.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Install channel
+      options:
+        - npm / npx
+        - standalone binary
+        - VS Code extension
+        - GitHub Action
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`. Leave empty for the standalone binary.
+      placeholder: "v24.x"
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      description: Which agent host was driving AXIOM, if any.
+      options:
+        - Claude Code
+        - GitHub Copilot CLI
+        - VS Code
+        - Codex
+        - other / none
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did and what AXIOM did. Include the tool or CLI verb (`axiom_check`, `axiom apply`, …).
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal Plan / bundle JSON or command
+      description: The smallest Plan, ManifestBundle or CLI command that reproduces it. Strip secrets and unrelated artifacts.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: input
+    id: error-code
+    attributes:
+      label: Error code
+      description: The `error.code` from the response, if any. All codes are `ERR_*` (see `packages/schema/src/errors.ts`).
+      placeholder: "ERR_PREIMAGE_CHANGED"
+
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal excerpt
+      description: Relevant lines from `.axiom/journal` in the target root, if an `apply` was involved. Optional.
+      render: json
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true

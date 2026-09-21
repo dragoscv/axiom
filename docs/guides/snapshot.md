@@ -1,5 +1,7 @@
 # Repo snapshots — `axiom_repo_snapshot` / `axiom snapshot`
 
+*A deterministic, content-addressed inventory of a root — the read-side counterpart of a manifest, and the source of real pre-image digests.*
+
 A **RepoSnapshot** is a deterministic, content-addressed inventory of a root: what files exist,
 how big they are, what they hash to. It is the read-side counterpart of a `Manifest` — where a
 manifest says *what will be written*, a snapshot says *what is there now*.
@@ -111,3 +113,12 @@ axiom apply bundle.json --root . --confirm sha256:…
 axiom snapshot --root . -o after.json --include "src/**"
 axiom snapshot-diff before.json after.json     # exactly the manifest's paths, nothing else
 ```
+
+---
+
+**See also**
+
+- [MCP tools](../reference/mcp-tools.md) — the `axiom_repo_snapshot` input/output contract
+- [Plan format](../reference/plan-format.md#manifestbody--the-hashed-object) — `preImage[]`, which a snapshot's digests feed
+- [Apply](apply.md) — the TOCTOU re-verification those digests protect
+- [CLI](../reference/cli.md) — `snapshot` and `snapshot-diff` flags

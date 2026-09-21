@@ -2,9 +2,9 @@
 /**
  * check-no-stdout — MCP stdio servers own stdout for JSON-RPC. Any stray
  * `console.log(` or `process.stdout.write(` in library code corrupts the
- * transport. Only `packages/mcp/src/cli.ts` and `cli-main.ts` (the CLI verbs)
- * may write to stdout; everything else logs to stderr. Root `scripts/**` is out of scope
- * (guards print to stdout by contract).
+ * transport. Only `packages/mcp/src/cli.ts`, `cli-main.ts` (the CLI verbs) and `sea.ts` (the
+ * single-executable entry — the same dispatch as `cli.ts`, D-27) may write to stdout; everything
+ * else logs to stderr. Root `scripts/**` is out of scope (guards print to stdout by contract).
  */
 import { join } from "node:path";
 import {
@@ -17,7 +17,11 @@ import {
   walk,
 } from "./_guard-lib.mjs";
 
-const ALLOW = new Set(["packages/mcp/src/cli.ts", "packages/mcp/src/cli-main.ts"]);
+const ALLOW = new Set([
+  "packages/mcp/src/cli.ts",
+  "packages/mcp/src/cli-main.ts",
+  "packages/mcp/src/sea.ts",
+]);
 const PATTERN = /\b(console\.log|console\.info|console\.debug|process\.stdout\.write)\s*\(/g;
 
 const problems = [];

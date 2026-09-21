@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - "!packages/_v1"
+  - apps/*
 
 catalog:
   typescript: 7.0.2
@@ -29,6 +30,13 @@ catalog:
   vscode-languageclient: 10.1.1
   "@types/vscode": 1.138.0
   "@vscode/vsce": 4.0.0
+  astro: 7.3.3
+  "@astrojs/starlight": 0.42.2
+  astro-mermaid: 2.1.0
+  mermaid: 11.17.2
+  starlight-links-validator: 0.26.0
+  starlight-github-alerts: 0.4.0
+  sharp: 0.35.4
 
 allowBuilds:
   esbuild: true

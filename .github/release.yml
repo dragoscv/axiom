@@ -1,0 +1,26 @@
+# Auto-generated release notes (`gh release create --generate-notes`, D-31).
+# PRs are bucketed by label; the Changesets changelogs per package remain the
+# authoritative record and are linked from every release body.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+    authors:
+      - dependabot
+      - github-actions
+  categories:
+    - title: Breaking changes
+      labels: [breaking]
+    - title: Features
+      labels: [feature, enhancement]
+    - title: Fixes
+      labels: [bug, fix]
+    - title: Security
+      labels: [security]
+    - title: Documentation
+      labels: [documentation, docs]
+    - title: Release engineering
+      labels: [ci, release]
+    - title: Other changes
+      labels: ["*"]

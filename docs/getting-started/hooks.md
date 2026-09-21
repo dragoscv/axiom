@@ -1,12 +1,35 @@
 # Hook mode — `axiom gate --stdin`
 
+*The fail-closed PreToolUse hook: what it checks, the exit-code contract, wiring for Claude Code / Copilot CLI / VS Code, the profile file and the latency budget.*
+
 `axiom gate` turns AXIOM's path and content rules into a **PreToolUse hook**: the harness calls it
 before every tool call, the gate reads the payload from stdin and either lets the call through
 (exit `0`) or blocks it (exit `2` + reason). It is the cheap, always-on complement to the full
 `Plan → check → apply` transaction: no manifest, no repo index, no guards, no git — just
 "is this agent about to write somewhere it must not, or write something it must not".
 
-Spec: `docs/design/v2-architecture.md` §5.6. Implementation: `packages/mcp/src/gate.ts`.
+Spec: [`design/v2-architecture.md`](../design/v2-architecture.md) §5.6. Implementation:
+`packages/mcp/src/gate.ts`. Per-harness config snippets side by side:
+[integration/harnesses.md](../integration/harnesses.md).
+
+```mermaid
+flowchart TD
+  IN[stdin: one harness payload] --> P{parses · ≤ 4 MiB · within 2 s?}
+  P -- no --> DENYI[exit 2 ERR_INTERNAL<br/>fail-closed · --fail-open → exit 0 + warn]
+  P -- yes --> C{tool class}
+  C -- other --> ALLOW0[exit 0 · < 1 ms]
+  C -- shell --> SS{--no-shell-scan?}
+  SS -- yes --> ALLOW0
+  SS -- no --> SCAN[scan command for write primitives → targets]
+  C -- write --> T{target path found?}
+  T -- no --> DENYU[exit 2 ERR_UNSUPPORTED_OP]
+  T -- yes --> R[root = cwd walked up to .git / repo .axiom]
+  SCAN --> R
+  R --> PR[profile: --profile → root/.axiom/gate-profile.json → ~/.axiom/gate-profile.json → built-in]
+  PR --> CK[containment · RelPath rules · path.deny · path.allow<br/>content.noSecrets · content.maxBytes]
+  CK -- finding --> DENY[exit 2 + deny JSON on stdout<br/>AXIOM GATE DENY code: reason on stderr]
+  CK -- clean --> ALLOW[exit 0]
+```
 
 ## What it checks
 
@@ -213,6 +236,7 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
   "deny": [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"],
   "allow": ["src/**", "docs/**"],
   "noSecrets": true,
+  "pii": false,
   "maxBytes": 262144
 }
 ```
@@ -222,6 +246,7 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 | `deny` | `string[]` | `[]` (built-in profile: the list above) | picomatch globs, `dot: true`; any match → `path.deny` |
 | `allow` | `string[]?` | — | when present every target must match one glob → else `path.allow` |
 | `noSecrets` | `boolean` | `true` | run `content.noSecrets` on supplied content → `content.noSecrets.<pattern>` |
+| `pii` | `boolean` | `false` | also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) — opt-in since S-414, see [checks.md](../guides/checks.md#contentnosecrets) |
 | `maxBytes` | `number?` | — | run `content.maxBytes` on supplied content → `content.maxBytes` |
 
 The object is strict (unknown keys are a schema error → deny `ERR_INTERNAL`, or warn + allow with `--fail-open`).
@@ -264,3 +289,12 @@ the server code would add the SDK + zod + all engines (~950 KB) to every tool ca
   shell writes matter, and rely on `Plan → check → apply` for the guarantee.
 - Root discovery stops at `.git`/repo-`.axiom`; a repository without either uses `cwd` as root, so
   `.git/**`-style globs cannot match anything there anyway.
+
+---
+
+**See also**
+
+- [Harnesses](../integration/harnesses.md) — Claude Code / Copilot CLI / VS Code / Codex config matrix
+- [Install](install.md) — why hooks need the global bin, not `npx`
+- [Checks](../guides/checks.md) — the full predicates the gate borrows four of
+- [Trust model](../concepts/trust-model.md) — the gate as seatbelt, `Plan → apply` as the guarantee

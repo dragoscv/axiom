@@ -1,4 +1,6 @@
-## Research: E:\gh\axiom — lay of the land
+# Research: E:\gh\axiom — lay of the land (2026-09-18)
+
+*Dated record — see [Design & research](../README.md#design--research). Links below point at the v1 tree, now frozen under `packages/_v1/`.*
 
 Caveat up front: this session has no terminal tool, so `git status`, `wc`, and `npm view` could not be executed. Git state comes from reading `.git/` directly; npm state from fetching the registry document; LOC are approximations from files read. Each claim is tagged VERIFIED (read it) or INFERRED.
 

@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: If you use AXIOM in research or tooling, please cite it using this metadata.
+title: "AXIOM — the transactional write gate for coding agents"
+type: software
+authors:
+  - family-names: Vladulescu
+    given-names: Dragos Catalin
+repository-code: https://github.com/dragoscv/axiom
+url: https://dragoscv.github.io/axiom/
+license: MIT
+version: 2.2.1
+date-released: "2026-09-21"
+keywords:
+  - mcp
+  - coding-agents
+  - in-toto
+  - content-addressed
+  - transactional-apply
+abstract: >-
+  AXIOM is a transactional write gate that sits between a coding agent and the
+  repository it edits. An agent describes intent as a Plan, which is compiled into
+  a canonical, content-addressed Manifest (RFC 8785 JCS, sha256 digests, in-toto
+  attestation). Set-level check predicates evaluate the whole change against a
+  policy profile and fail closed when a fact provider cannot run. Apply is a
+  hash-gated two-phase commit: the caller must echo the manifest digest, pre-image
+  hashes are re-verified at commit time, writes are staged and renamed atomically
+  under a single-writer lock, and a journal enables scoped rollback. AXIOM ships as
+  an MCP stdio server, a CLI, a PreToolUse hook, a GitHub Action and a VS Code
+  extension.

@@ -22,7 +22,7 @@ const MARKER =
   /\b(?:reserved(?: for| in| until)?|planned(?: for)?|deferred(?: to| until)?|arrives? in|lands? in|coming in|scheduled for|is an? v\d+\.\d+ (?:deliverable|item|feature)|will (?:be|ship|land|arrive)[^.\n]{0,40}?in)\s+(?:the\s+)?v?(\d+)\.(\d+)(?:\.\d+)?\b/gi;
 
 const SKIP_PATH =
-  /^(docs\/archive\/|docs\/research\/|\.changeset\/|PLAN\.md$|TRACKER\.csv$|.*CHANGELOG\.md$|.*\.expected\.json$|packages\/mcp\/spec\/|scripts\/check-stale-markers\.mjs$)/;
+  /^(docs\/archive\/|docs\/research\/|apps\/site\/(?:src\/content\/docs|public|dist|\.astro)\/|\.changeset\/|PLAN\.md$|TRACKER\.csv$|.*CHANGELOG\.md$|.*\.expected\.json$|packages\/mcp\/spec\/|scripts\/check-stale-markers\.mjs$)/;
 
 const files = [
   ...walk(

@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { loadProfile } from "@codai/axiom-checks";
 import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
 import { z } from "zod";
@@ -17,12 +16,10 @@ import type { RootsPolicy } from "./roots.js";
 import { listStored, loadApplied, loadManifest, loadReport, toDigestRef } from "./store.js";
 import { PlanSessionStore, TaskStore } from "./tasks.js";
 import { type AnyToolDef, TOOL_DEFS, type ToolContext } from "./tools.js";
-
-const require = createRequire(import.meta.url);
-const pkg = require("../package.json") as { name: string; version: string };
+import { PACKAGE_VERSION } from "./version.js";
 
 export const SERVER_NAME = "axiom";
-export const SERVER_VERSION: string = pkg.version;
+export const SERVER_VERSION: string = PACKAGE_VERSION;
 
 export interface CreateServerOptions {
   log?: Logger;

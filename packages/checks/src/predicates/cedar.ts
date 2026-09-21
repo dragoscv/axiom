@@ -27,7 +27,7 @@ import { finding } from "./util.js";
  * anything not permitted is a finding. Evaluation errors (missing attribute, type error) are
  * provider errors, not findings — Cedar's own diagnostics are surfaced verbatim.
  *
- * OWASP Agent Control Standard mapping (docs/checks.md §expr.cedar): a Cedar `deny` here is an
+ * OWASP Agent Control Standard mapping (docs/guides/checks.md §expr.cedar): a Cedar `deny` here is an
  * ACS Guardian `deny` on the *write set*; AXIOM never emits `modify`/`ask`/`defer` from a check.
  */
 export const CEDAR_POLICY_MAX_CHARS = 64 * 1024;
@@ -116,14 +116,28 @@ interface CedarModule {
 
 let modPromise: Promise<CedarModule | undefined> | undefined;
 
+/**
+ * Whether an `import("@cedar-policy/cedar-wasm/nodejs")` rejection means "not installed".
+ * ESM loader (`ERR_MODULE_NOT_FOUND`), CJS loader (`MODULE_NOT_FOUND`) and a Node single
+ * executable (≥ 25.5: any non-builtin specifier rejects with `ERR_UNKNOWN_BUILTIN_MODULE`,
+ * D-27) all fail closed at the predicate; anything else is a real error and propagates.
+ */
+export function isCedarMissingError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    code === "ERR_MODULE_NOT_FOUND" ||
+    code === "MODULE_NOT_FOUND" ||
+    code === "ERR_UNKNOWN_BUILTIN_MODULE"
+  );
+}
+
 /** Resolve the WASM once; `undefined` when the optional dependency is not installed. */
 export function cedarModule(): Promise<CedarModule | undefined> {
   if (modPromise === undefined) {
     modPromise = import("@cedar-policy/cedar-wasm/nodejs").then(
       (m) => m as unknown as CedarModule,
       (err: unknown) => {
-        const code = (err as { code?: unknown }).code;
-        if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") return undefined;
+        if (isCedarMissingError(err)) return undefined;
         throw err;
       },
     );

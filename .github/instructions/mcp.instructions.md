@@ -16,7 +16,7 @@ cold start p50 ≤ 250 ms — both measured in CI (`check-bundle-size`, `check-c
   the `@codai/axiom-schema` Zod types. A tool without both fails review.
 - Tool names are `axiom_<noun>_<verb>` and live in one registry
   (`src/tools.ts` or `src/tools/`). The list is mirrored **by hand** into
-  `spec/tools.json`, `README.md` and `docs/mcp_api.md`; `check-tool-parity`
+  `spec/tools.json`, `README.md` and `docs/reference/mcp-tools.md`; `check-tool-parity`
   fails when they disagree. Add a tool = edit all four (see skill `add-mcp-tool`).
 - `axiom_apply` and `axiom_rollback` are `destructiveHint: true`; everything else
   is `readOnlyHint: true`.
@@ -30,7 +30,7 @@ cold start p50 ≤ 250 ms — both measured in CI (`check-bundle-size`, `check-c
 ## Process rules
 
 - **stdout is JSON-RPC only.** `console.log`/`process.stdout.write` are banned
-  everywhere except `src/cli.ts` (`check-no-stdout`). Log with `console.error`
+  everywhere except `src/cli.ts`, `src/cli-main.ts` and `src/sea.ts` (`check-no-stdout`). Log with `console.error`
   / `console.warn`, default level `warn`.
 - **Roots are an allowlist.** `--root <dir>` (repeatable) is the only way a path
   becomes writable; there is no `process.cwd()` fallback. `axiom_roots_list`

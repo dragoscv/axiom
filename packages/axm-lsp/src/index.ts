@@ -1,5 +1,5 @@
 /**
- * `@codai/axiom-axm-lsp` — language server for `.axm` (docs/syntax_spec.md "Editor support").
+ * `@codai/axiom-axm-lsp` — language server for `.axm` (docs/reference/axm-syntax.md "Editor support").
  *
  * The feature functions are pure (text in, LSP structures out) so hosts other than the bundled
  * bin can embed them; `startServer` wires them to a `vscode-languageserver` connection.

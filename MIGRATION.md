@@ -1,5 +1,7 @@
 # Migrating from AXIOM v1 (1.0.x) to v2
 
+[Docs site](https://dragoscv.github.io/axiom/) · [README](README.md) · [Changelog](CHANGELOG.md) · [v1 changelog (archived)](docs/archive/v1/CHANGELOG-v1.md) · [Versioning](docs/reference/versioning.md)
+
 v2 is a rewrite. Nothing produced by v1 — `.axm` files, IR JSON, `manifest.json`
 outputs, HTTP clients — is accepted by v2 as-is. This document maps the v1
 concepts onto v2 and says plainly what has no equivalent yet.
@@ -26,14 +28,14 @@ choice. There is nothing in a v1 manifest whose integrity v2 could vouch for.
 
 | v1 | v2 |
 |----|----|
-| `.axm` agent file | `Plan` JSON (`apiVersion: "axiom.dev/v2"`, `kind: "Plan"`). The `.axm` v2 grammar compiles 1:1 to `Plan` (`axiom axm parse`, `axiom_axm_parse`; [docs/syntax_spec.md](docs/syntax_spec.md)). |
+| `.axm` agent file | `Plan` JSON (`apiVersion: "axiom.dev/v2"`, `kind: "Plan"`). The `.axm` v2 grammar compiles 1:1 to `Plan` (`axiom compile <plan.axm>`, `axiom_axm_parse`; [docs/reference/axm-syntax.md](docs/reference/axm-syntax.md)). |
 | IR (`agents[]`, `version`) | No IR. The `Plan` is the input; the `ManifestBundle` is the canonical output. |
-| Emitters (`webapp`, `apiservice`, `docker`, `batch`) | Removed. **Your agent writes the content** and puts it in `artifacts[].source` (`inline`, or `cas` for large trees). Optional template emitters exist as a separate plugin, `@codai/axiom-emitters-web` (`source: {type:"template"}`; [docs/emitters.md](docs/emitters.md)) — not in core. |
+| Emitters (`webapp`, `apiservice`, `docker`, `batch`) | Removed. **Your agent writes the content** and puts it in `artifacts[].source` (`inline`, or `cas` for large trees). Optional template emitters exist as a separate plugin, `@codai/axiom-emitters-web` (`source: {type:"template"}`; [docs/guides/emitters.md](docs/guides/emitters.md)) — not in core. |
 | `manifest.json` with `contentUtf8` / `contentBase64` | `ManifestBundle`: a JCS-canonical `manifest` body holding only digests, plus `blobs` (inline side-channel) or a CAS under `<root>/.axiom/cas/`. |
 | `irHash`, `buildId`, `createdAt: deterministic-…` | `manifestDigest = sha256(JCS(manifest))`, `planDigest`, per-artifact `digest.sha256`. No timestamps inside anything hashed. |
-| Profiles with `constraints` (`max_dependencies`, `frontend_bundle_kb`, …) | `Profile` with `checks[]` of typed predicates (`deps.max`, `content.maxBytes`, `path.deny`, …). See [docs/checks.md](docs/checks.md). |
+| Profiles with `constraints` (`max_dependencies`, `frontend_bundle_kb`, …) | `Profile` with `checks[]` of typed predicates (`deps.max`, `content.maxBytes`, `path.deny`, …). See [docs/guides/checks.md](docs/guides/checks.md). |
 | Capabilities `net("http")`, `fs("./path")`, `ai("provider")` | `Plan.capabilities` is a plain enum list (`fs`, `net`, `secret`, `ai`, `compute`, `git`) recorded in the manifest; enforcement is by checks, not by a capability sandbox. |
-| HTTP server on `:3411` (`POST /parse`, `/generate`, `/check`, `/apply`, …) | MCP **stdio** server: `npx @codai/axiom-mcp mcp --root <dir>`; streamable HTTP via `axiom mcp --root <dir> --http <host:port>` ([docs/mcp_api.md](docs/mcp_api.md)). |
+| HTTP server on `:3411` (`POST /parse`, `/generate`, `/check`, `/apply`, …) | MCP **stdio** server: `npx @codai/axiom-mcp mcp --root <dir>`; streamable HTTP via `axiom mcp --root <dir> --http <host:port>` ([docs/reference/mcp-tools.md](docs/reference/mcp-tools.md)). |
 | `axiom_generate` | `axiom_plan_compile` |
 | `axiom_check` | `axiom_check` (same name; input is a `ManifestBundle`, output is a `CheckReport` with `verdict: pass\|fail\|error`) |
 | `axiom_apply` (mode `fs` / `pr`) | `axiom_apply` — **requires `confirmDigest === bundle.manifestDigest`** and a `root` inside the server's `--root` allowlist. `mode: "pr"` creates a branch and commits the touched paths without a shell (no push, no PR creation). |
@@ -59,7 +61,7 @@ the built-in `budget`/`edge` profile constraints map to v2 predicates
 `buildId`, `irHash`, `createdAt`, `sha256`, `bytes`, `kind`, runtime SLA/unit
 evidence and unknown fields are listed in `metadata.migration.dropped` with a
 reason. Exit `0` clean, `1` migrated with warnings (still written), `2` not a
-v1 manifest. Full field table: [docs/migrate.md](docs/migrate.md).
+v1 manifest. Full field table: [docs/guides/migrate.md](docs/guides/migrate.md).
 
 The manual transformation, for reference, is:
 
@@ -95,4 +97,4 @@ write into the repository root.
 
 After 2.0.0 ships, every `@codai/axiom-*` package at `< 2.0.0` is marked
 deprecated on npm with a pointer to this file. No further 1.x releases are
-planned; see [docs/versioning.md](docs/versioning.md).
+planned; see [docs/reference/versioning.md](docs/reference/versioning.md).

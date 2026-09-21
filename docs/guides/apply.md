@@ -1,11 +1,15 @@
-# Apply: guarantees, layout and failure modes (v2)
+# Apply: guarantees, layout and failure modes
+
+*What `apply` promises, what it does not, what `.axiom/` holds afterwards, and how PR mode wraps it in a git branch.*
 
 `@codai/axiom-apply` takes a verified `ManifestBundle` and a root and either
 writes the change set atomically (from the user tree's point of view) or leaves
 the tree exactly as it found it. `apply()` never throws; every failure is an
 `ApplyResult` with `status: failed | rolled-back` and an `error.code` from the
-closed enum. This page describes what is promised, what is not, and what is on
-disk afterwards. Package README: `packages/apply/README.md`.
+closed enum ([error-codes.md](../reference/error-codes.md)). This page describes
+what is promised, what is not, and what is on disk afterwards. The pipeline it
+sits in is drawn in [pipeline.md](../concepts/pipeline.md); package README:
+[`packages/apply/README.md`](../../packages/apply/README.md).
 
 ## Guarantees
 
@@ -116,6 +120,28 @@ Add `.axiom/` to `.gitignore`.
 
 ## Two-phase flow
 
+```mermaid
+stateDiagram-v2
+  [*] --> lock: acquire .axiom/lock
+  lock --> recover: journal left in committing / rolling-back?
+  recover --> noop: applied marker + digests match
+  recover --> prepare
+  prepare --> aborted: containment · blob hash · preChecks fail
+  prepare --> staged: journal { phase: staged }
+  staged --> dryrun: mode dry-run → diff, staging removed
+  staged --> committing
+  committing --> committed: every step renamed
+  committing --> rollingBack: any error (ERR_PREIMAGE_CHANGED, ERR_EBUSY, …)
+  rollingBack --> rolledBack: steps replayed in reverse
+  rollingBack --> failed: ERR_ROLLBACK — journal kept for axiom rollback
+  committed --> [*]: applied/<hex>.json · lock released
+  rolledBack --> [*]
+  noop --> [*]
+  aborted --> [*]
+  dryrun --> [*]
+  failed --> [*]
+```
+
 ```
 acquire lock ─► recover any journal left in committing/rolling-back
    │
@@ -148,7 +174,7 @@ created file — then `rolled-back`. The result is `status: rolled-back` with
 `error` set to the original cause and `journal` pointing at the file. If the
 rollback itself fails, `status: failed` and the message names both errors; the
 journal is left for `axiom rollback <digest> --root .` or manual inspection
-(`.github/skills/debug-apply-journal`).
+([`.github/skills/debug-apply-journal`](../../.github/skills/debug-apply-journal/SKILL.md)).
 
 Staging lives under the root so `rename` stays on one volume and is atomic
 per file.
@@ -170,7 +196,7 @@ as differing without a hunk), removes staging and returns
 written, no lock file remains, no marker is created. The `manifestDigest` in the
 result is the value to pass as `confirmDigest`.
 
-## PR mode (`mode: "pr"`)
+## PR mode
 
 `mode: pr` wraps the normal `fs` two-phase apply in a git branch + commit. It
 is the v2 replacement for v1's `applyPR`, which spawned `git` with `shell: true`
@@ -239,3 +265,12 @@ creates no branch.
 - Windows reserved names are rejected on every platform so a manifest compiled
   on Linux applies on Windows.
 - Directory `fsync` is a no-op; `0755` is not applied.
+
+---
+
+**See also**
+
+- [Pipeline](../concepts/pipeline.md) — where apply sits and the two-phase commit as a sequence diagram
+- [Invariants](../concepts/invariants.md) — the promises this page implements (3: hash-gated, TOCTOU, single writer)
+- [Checks](checks.md) — the `preChecks` that run on the staged tree before phase 2
+- [Error codes](../reference/error-codes.md) — every `ERR_*` an `ApplyResult` can carry

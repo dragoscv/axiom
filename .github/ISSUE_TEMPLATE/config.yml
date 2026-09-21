@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/dragoscv/axiom/discussions
+    about: Ask how to integrate AXIOM, discuss a design, or share what you built.
+  - name: Report a security vulnerability
+    url: https://github.com/dragoscv/axiom/security/advisories/new
+    about: Private vulnerability reporting. Do not open a public issue for security problems.
+  - name: Documentation
+    url: https://dragoscv.github.io/axiom/
+    about: Plan format, MCP API, checks, apply semantics, .axm syntax.

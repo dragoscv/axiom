@@ -1,5 +1,7 @@
 # Research: AXIOM repo full inventory (e:\gh\axiom)
 
+*Dated record (2026-09-18) — see [Design & research](../README.md#design--research). Links below point at the v1 tree, now frozen under `packages/_v1/`.*
+
 Note: Explore mode has no terminal, so `rg --files` was replaced by the workspace glob search (352 files, node_modules/dist excluded). Everything below is from reading source; nothing was run. Claims marked VERIFIED are file contents I read; "EXPECTED" is inference.
 
 ---

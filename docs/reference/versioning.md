@@ -1,4 +1,6 @@
-# Versioning and compatibility (v2)
+# Versioning and compatibility
+
+*One version for all nine packages, one wire `apiVersion` per major, and what counts as breaking.*
 
 ## SemVer via Changesets
 
@@ -10,7 +12,7 @@ package carries the same version. `@codai/axiom-testkit` is private and ignored.
   `scripts/check-changeset-present.mjs` fails CI without one.
 - `pnpm changeset` records the bump level; `changeset version` writes versions
   and `CHANGELOG.md`; `changeset publish` runs from CI via npm trusted publishing
-  (OIDC, provenance attached). See `.github/skills/release-axiom`.
+  (OIDC, provenance attached). See [`.github/skills/release-axiom`](../../.github/skills/release-axiom/SKILL.md).
 - Pre-release tags (`alpha`, `beta`, `rc`) are not used unless the changeset
   says why.
 
@@ -89,3 +91,12 @@ for reference only; nothing may import from it (`check-no-v1-imports`).
 Earlier revisions of this file promised a 1.x→2.x codemod and a 12-month
 support window. Neither applies; `axiom migrate v1` is a v2.2 convenience
 (S-305), not a compatibility layer.
+
+---
+
+**See also**
+
+- [MIGRATION.md](../../MIGRATION.md) — moving from 1.x
+- [Migrate](../guides/migrate.md) — `axiom migrate v1`
+- [Decisions](../design/decisions.md) — D-19 (wire eras), D-22 (2.1.0 repair)
+- [CHANGELOG.md](../../CHANGELOG.md) — release index

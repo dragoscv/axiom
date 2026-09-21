@@ -31,7 +31,8 @@ AXIOM is the **transactional write gate for coding agents**: `Plan` → canonica
    literal elsewhere must exist in that list (`check-error-codes`). Tests assert
    on `code`, never on message text.
 5. MCP: **stdout is JSON-RPC only**. No `console.log`/`process.stdout.write`
-   outside `packages/mcp/src/cli.ts` (`check-no-stdout`); log to stderr at `warn`.
+   outside `packages/mcp/src/cli.ts`, `cli-main.ts` and the single-executable entry `sea.ts`
+   (`check-no-stdout`); log to stderr at `warn`.
 6. **No shell**: `shell: true`, `exec(`, `execSync(` are banned in `packages/*/src`
    (`check-no-shell-spawn`). Use `execFile`/`spawn` with an args array.
 7. Predicates return `verdict: "error"` when a fact provider cannot run —
@@ -65,7 +66,7 @@ depends on `mcp`. Workspace deps are `workspace:*`; **every external dep is
   `node scripts/run-guards.mjs` — all green, output shown, not inferred.
 - A `.changeset/*.md` exists for any change under `packages/*/src` (except
   `testkit`) — `check-changeset-present` fails in CI without one.
-- Ripple closed: new tool → `docs/mcp_api.md` + `packages/mcp/README.md` +
+- Ripple closed: new tool → `docs/reference/mcp-tools.md` + `packages/mcp/README.md` +
   `packages/mcp/spec/tools.json`; new schema field → re-run
   `pnpm --filter @codai/axiom-schema build:jsonschema` and commit `schemas/*.json`;
   new golden plan → `.expected.json` regenerated (`update-golden`).

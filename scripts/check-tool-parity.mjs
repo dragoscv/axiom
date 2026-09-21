@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * check-tool-parity — the MCP tool registry (`packages/mcp/spec/tools.json`)
- * must be mirrored in `packages/mcp/README.md` and `docs/mcp_api.md`
+ * must be mirrored in `packages/mcp/README.md` and `docs/reference/mcp-tools.md`
  * (PLAN.md S-111: "check-tool-parity links docs ↔ registry"). A tool that
  * exists in code but not in docs is invisible to every integrator.
  *
@@ -14,7 +14,7 @@ import { exists, REPO_ROOT, readJson, readText, report, STRICT } from "./_guard-
 const SPEC = join(REPO_ROOT, "packages", "mcp", "spec", "tools.json");
 const DOCS = [
   ["packages/mcp/README.md", join(REPO_ROOT, "packages", "mcp", "README.md")],
-  ["docs/mcp_api.md", join(REPO_ROOT, "docs", "mcp_api.md")],
+  ["docs/reference/mcp-tools.md", join(REPO_ROOT, "docs", "reference", "mcp-tools.md")],
 ];
 
 if (!exists(SPEC)) {

@@ -23,4 +23,4 @@ const { bundle } = await compilePlan(plan, { emitters: createEmitterRegistry([we
 
 Golden outputs in `src/__golden__/*.txt` are the spec; `pnpm run update-golden` regenerates
 them. Any output change must bump `WEB_EMITTER_VERSION` (it is hashed into every manifest
-digest). Full contract, params and error codes: [docs/emitters.md](../../docs/emitters.md).
+digest). Full contract, params and error codes: [docs/guides/emitters.md](../../docs/guides/emitters.md).

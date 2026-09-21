@@ -12,7 +12,7 @@ if (plan) console.error(formatAxm(plan) === source); // canonical form roundtrip
 ```
 
 `plan` is present only when there are no error diagnostics. Positions are 1-based. CRLF input is
-normalised to LF before lexing (heredoc contents included). Full semantics: `docs/syntax_spec.md`.
+normalised to LF before lexing (heredoc contents included). Full semantics: `docs/reference/axm-syntax.md`.
 
 ## Grammar
 

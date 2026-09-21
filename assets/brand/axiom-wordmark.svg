@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 128" width="560" height="128" role="img" aria-label="AXIOM">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14122b"/>
+      <stop offset="1" stop-color="#090814"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d4de6"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#67e8f9"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+    <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#7c5cff" stroke-opacity=".28" stroke-width="2"/>
+    <path d="M30 104 L54 26 h8 L38 104 Z" fill="url(#bar)"/>
+    <path d="M98 104 L74 26 h-8 L90 104 Z" fill="url(#bar)"/>
+    <rect x="38" y="72" width="52" height="12" rx="6" fill="url(#beam)"/>
+    <circle cx="64" cy="78" r="4" fill="#090814"/>
+    <circle cx="64" cy="78" r="2" fill="#67e8f9"/>
+  </g>
+  <text x="156" y="84" font-family="Inter, 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="6" fill="currentColor">AXIOM</text>
+</svg>

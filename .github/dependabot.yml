@@ -1,0 +1,50 @@
+# Dependabot — weekly, grouped, Conventional Commit prefixes.
+# External versions live only in pnpm-workspace.yaml catalogs (`catalog:` in every
+# package.json); Dependabot has supported pnpm catalogs since 2025, so the npm
+# ecosystem at "/" covers the whole workspace.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      dev-tooling:
+        patterns:
+          - tsdown
+          - vitest
+          - "@vitest/*"
+          - "@biomejs/*"
+          - typescript
+          - "@types/*"
+          - fast-check
+          - "@stryker-mutator/*"
+          - tsx
+          - "@changesets/*"
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      production:
+        dependency-type: production
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"

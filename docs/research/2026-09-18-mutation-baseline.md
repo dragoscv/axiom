@@ -1,5 +1,7 @@
 # Mutation baseline — S-110 (2026-09-18)
 
+*Dated record — see [Design & research](../README.md#design--research).*
+
 **Status: NO BASELINE OBTAINED. Stryker fails to start.** Threshold (break 85 %) = **not evaluated**.
 
 ## Run

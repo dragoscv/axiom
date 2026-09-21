@@ -1,7 +1,10 @@
-# AXIOM MCP API (v2)
+# MCP tools, resources and transports
 
+*The 17 tools of `@codai/axiom-mcp`, their inputs and outputs, the `axiom://` resources, stdio and Streamable HTTP transports, and the `--wire` protocol eras.*
+
+> [!NOTE]
 > The v1 HTTP demo API this file used to describe is archived at
-> `docs/archive/v1/mcp_api-v1-http.md`. v1 is superseded (see `PLAN.md` §0).
+> [`docs/archive/v1/mcp_api-v1-http.md`](../archive/v1/mcp_api-v1-http.md). v1 is superseded (see [`PLAN.md`](../../PLAN.md) §0).
 
 `@codai/axiom-mcp` exposes the transactional write gate as an MCP **stdio** server by
 default, or as a **Streamable HTTP** server with `--http` (see Transports). Every tool carries `annotations` and an
@@ -9,7 +12,29 @@ default, or as a **Streamable HTTP** server with `--http` (see Transports). Ever
 explicit allowlist (`--root <dir>`, repeatable) — there is no `cwd` fallback.
 
 The registry of record is `packages/mcp/spec/tools.json`; `scripts/check-tool-parity.mjs`
-fails CI when this table, `packages/mcp/README.md` and that file disagree.
+fails CI when this table, [`packages/mcp/README.md`](../../packages/mcp/README.md) and that file disagree.
+
+```mermaid
+sequenceDiagram
+	participant A as Agent (MCP client)
+	participant S as axiom mcp --root R
+	participant FS as R/.axiom + tree
+	A->>S: axiom_plan_compile { plan, root }
+	S->>FS: write manifests/<hex>.json (+ CAS blobs)
+	S-->>A: ManifestBundle { manifestDigest }
+	A->>S: axiom_check { bundle, profile, root }
+	S-->>A: CheckReport { verdict }
+	A->>S: axiom_apply_dry_run { bundle, root }
+	S-->>A: ApplyResult { mode: dry-run, diff }
+	A->>S: axiom_apply { bundle, root, confirmDigest }
+	S->>FS: 2PC — staging → journal → rename
+	S-->>A: ApplyResult { status: applied, journal }
+	opt something is wrong
+		A->>S: axiom_rollback { root, manifestDigest }
+		S->>FS: reverse-replay journal
+		S-->>A: { status: rolled-back }
+	end
+```
 
 ## Tools
 
@@ -17,7 +42,7 @@ fails CI when this table, `packages/mcp/README.md` and that file disagree.
 |------|------|---------|-----------------|------------------|
 | `axiom_plan_validate` | read | Validate a `Plan` against the Zod schema; report `ERR_*` codes with JSON pointers | `{ plan }` | `{ ok, planDigest?, errors[] }` |
 | `axiom_plan_compile` | act | Compile `Plan` → `ManifestBundle` (JCS manifest, sha256 per artifact, inline/CAS blobs); writes only under `<root>/.axiom/` when a root is given. `ref` sources resolve from the root's CAS only — the tool has no network switch (`ERR_NET_DISABLED`; fetch with the CLI `compile --allow-net`) | `{ plan, store?, root? }` | `ManifestBundle { manifest, manifestDigest, attestation?, envelope?, blobs }` |
-| `axiom_manifest_verify` | read | Re-verify a bundle: canonical form, digest, every blob hash; with `root`, also the detached DSSE signatures against `<root>/.axiom/trust/keys.json` ([signing.md](signing.md)) | `{ bundle, root? }` | `{ ok, manifestDigest?, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` present only when the root has a trust store; `ok` is `false` when it fails and `code` is `ERR_SIGNATURE_MISSING` (no signature at all) or `ERR_SIGNATURE_INVALID` |
+| `axiom_manifest_verify` | read | Re-verify a bundle: canonical form, digest, every blob hash; with `root`, also the detached DSSE signatures against `<root>/.axiom/trust/keys.json` ([signing.md](../guides/signing.md)) | `{ bundle, root? }` | `{ ok, manifestDigest?, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` present only when the root has a trust store; `ok` is `false` when it fails and `code` is `ERR_SIGNATURE_MISSING` (no signature at all) or `ERR_SIGNATURE_INVALID` |
 | `axiom_check` | read | Run a `Profile` of predicates over a bundle against a root; fails closed on provider errors; with a root, verifies `manifest.preImage` against the tree (`report.preImage: verified \| drifted \| unverified`, drift → `verdict: error`) | `{ bundle, profile?, root? }` | `CheckReport` |
 | `axiom_check_start` | read | Same evaluation as `axiom_check`, returned **immediately as a task** (see [Tasks](#tasks-d-24)); the bundle and root are validated synchronously, so a malformed bundle or a root outside the allowlist is an `isError` result, never a task | `{ bundle, profile?, root? }` | `{ taskId, tool: "axiom_check", status: "working", pollIntervalMs, ttlMs, elapsedMs }` |
 | `axiom_task_get` | read | Poll a task; while `working` only the descriptor, once terminal `result` (`completed`) or `error` (`failed` \| `cancelled`) is attached | `{ taskId }` | descriptor + `result?: CheckReport` + `error?: { code, message, details? }`; unknown/expired → `ERR_TASK_NOT_FOUND` |
@@ -31,21 +56,21 @@ fails CI when this table, `packages/mcp/README.md` and that file disagree.
 | `axiom_manifest_diff` | read | Structural diff between two manifests (added/removed/changed artifacts) | `{ a, b }` (bundle or `sha256:` ref) | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | read | Parse `.axm` v2 DSL text into a `Plan`; diagnostics carry 1-based `{line, column}` ranges and `ERR_*` codes; `plan` present only when error-free (parser loaded lazily) | `{ source }` | `{ plan?, diagnostics[] }` |
 | `axiom_roots_list` | read | List the allowlisted roots the server may touch | `{}` | `{ roots[] }` |
-| `axiom_repo_snapshot` | read | Deterministic, content-addressed inventory of a root ([snapshot.md](snapshot.md)): regular files and symlinks as `{ path, bytes, sha256?, mode, kind }` sorted by code point, `snapshotDigest = sha256(JCS(body))`; honours the root `.gitignore`, always skips `.git/` and `.axiom/`, never follows symlinks or leaves the root; globs containing `..` → `ERR_CONTAINMENT` | `{ root?, include?[], exclude?[], maxFiles?, maxBytes?, respectGitignore?, withContentDigest? }` | `RepoSnapshot { apiVersion, kind, root: { kind: "relative" }, snapshotDigest, body: { files[], truncated, counts: { files, bytes } } }` — text summary is `{ snapshotDigest, counts, truncated, paths[≤20] }` |
+| `axiom_repo_snapshot` | read | Deterministic, content-addressed inventory of a root ([snapshot.md](../guides/snapshot.md)): regular files and symlinks as `{ path, bytes, sha256?, mode, kind }` sorted by code point, `snapshotDigest = sha256(JCS(body))`; honours the root `.gitignore`, always skips `.git/` and `.axiom/`, never follows symlinks or leaves the root; globs containing `..` → `ERR_CONTAINMENT` | `{ root?, include?[], exclude?[], maxFiles?, maxBytes?, respectGitignore?, withContentDigest? }` | `RepoSnapshot { apiVersion, kind, root: { kind: "relative" }, snapshotDigest, body: { files[], truncated, counts: { files, bytes } } }` — text summary is `{ snapshotDigest, counts, truncated, paths[≤20] }` |
 
 Risk classes are derived from the MCP annotations (`readOnlyHint` → READ, `destructiveHint` →
 SENSITIVE, otherwise ACT). `packages/mcp/spec/codai-tools.json` re-emits the same registry in the
 entry shape of codai's `packages/agent-core/spec/tools-v2.json` so codai agents can gate these
-tools under their `APPROVAL_MATRIX` — see `docs/integration/codai.md`.
+tools under their `APPROVAL_MATRIX` — see [integration/codai.md](../integration/codai.md).
 
 CLI-only verbs (no MCP tool): `axiom migrate v1 <manifest.json>` lifts an AXIOM 1.0.x manifest
-into a v2 `Plan` ([migrate.md](migrate.md)) — a one-off maintenance step that belongs to the
+into a v2 `Plan` ([migrate.md](../guides/migrate.md)) — a one-off maintenance step that belongs to the
 operator, not to an agent's tool surface. Its code is a lazy chunk (`dist/migrate-lazy.js`).
 
-**Deliberately not tools.** `axiom gc` (CAS garbage collection, [cas.md](cas.md)) and network
+**Deliberately not tools.** `axiom gc` (CAS garbage collection, [cas.md](../concepts/cas.md)) and network
 fetching of `ref` sources (`compile --allow-net`, [plan-format.md](plan-format.md#ref-sources)) are
 CLI-only: both are operator decisions (disk reclamation, egress), so an agent cannot trigger them
-through the server.
+through the server. The full verb list is in [cli.md](cli.md).
 
 ### Tasks (D-24)
 
@@ -84,7 +109,9 @@ needs `store: "cas"` and therefore a root.
 `axiom://journal/<root-id>` (recent journal entries), `axiom://profile/<name>`
 (built-in check profiles: `default`, `strict`, `permissive`), `axiom://emitters` (static list of
 `{emitter, version, template, description}` rows for the template emitters compiled into this
-server — currently `web@2.0.0`; see [emitters.md](emitters.md)).
+server — currently `web@2.0.0`; see [emitters.md](../guides/emitters.md)). Also `axiom://manifest/<sha>`,
+`axiom://report/<sha>`, `axiom://applied/<sha>` (stored bundles, reports and results) and
+`axiom://schema/<Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot>`.
 
 ## Transports
 
@@ -133,4 +160,13 @@ covered by the SDK-v2 client tests in `packages/mcp/src/http.test.ts` / `cli.tes
 
 Every failure is `{ code: ErrorCode, message, details? }` where `code` is a member of
 `ERROR_CODES` in `packages/schema/src/errors.ts`. Clients and tests branch on `code`,
-never on `message`.
+never on `message`. The table: [error-codes.md](error-codes.md).
+
+---
+
+**See also**
+
+- [CLI reference](cli.md) — the same engines from the command line, plus the CLI-only verbs
+- [Harnesses](../integration/harnesses.md) — `mcp.json` / config snippets for each client
+- [Trust model](../concepts/trust-model.md) — roots allowlist, `confirmDigest`, what an agent cannot trigger
+- [Error codes](error-codes.md) — the closed enum every `isError` result draws from

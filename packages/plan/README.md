@@ -22,7 +22,7 @@ inline↔CAS, or passing a clock never changes `manifestDigest`.
   `ERR_NET_FAILED` (ref not in the CAS; `net: { allowNet, allowlist?, allowFile?, fetchImpl? }`,
   offline by default — `resolveRef` in `src/ref.ts`); `template` sources need `compilePlan(plan, { emitters })` —
   `ERR_EMITTER_UNKNOWN` / `ERR_TEMPLATE_UNKNOWN` / `ERR_TEMPLATE_PARAMS` otherwise
-  (`createEmitterRegistry`, `TemplateEmitter`; see `docs/emitters.md`).
+  (`createEmitterRegistry`, `TemplateEmitter`; see `docs/guides/emitters.md`).
 - `verifyBundle(bundle)` — schema, recomputed digest, blob hashes, attestation subject. Never throws.
 - `diffManifests(a, b)` — `{ added, removed, changed[{path, from, to}] }` by path/digest.
 - `casPath / casPut / casGet / casHas` — tmp→fsync→rename content store.

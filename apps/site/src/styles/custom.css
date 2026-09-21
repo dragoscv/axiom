@@ -1,0 +1,123 @@
+/* AXIOM brand — dark-first indigo/violet with a cyan accent on near-black. */
+:root {
+  --ax-primary: #7c5cff;
+  --ax-primary-soft: #a78bfa;
+  --ax-primary-deep: #6d4de6;
+  --ax-cyan: #22d3ee;
+  --ax-bg: #090814;
+  --ax-bg-2: #14122b;
+
+  /* Starlight palette (dark) */
+  --sl-color-accent-low: #1f1745;
+  --sl-color-accent: var(--ax-primary);
+  --sl-color-accent-high: #c9b8ff;
+  --sl-color-white: #f4f2ff;
+  --sl-color-gray-1: #e6e2f7;
+  --sl-color-gray-2: #c3bedb;
+  --sl-color-gray-3: #8f89ad;
+  --sl-color-gray-4: #56507a;
+  --sl-color-gray-5: #322d52;
+  --sl-color-gray-6: #1c1838;
+  --sl-color-black: var(--ax-bg);
+  --sl-color-bg-nav: rgb(9 8 20 / 0.85);
+  --sl-color-bg-sidebar: var(--ax-bg);
+  --sl-color-hairline-shade: #221e40;
+
+  --sl-content-width: 50rem;
+  --ax-glow: rgb(124 92 255 / 0.28);
+  --ax-glow-cyan: rgb(34 211 238 / 0.16);
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #ece7ff;
+  --sl-color-accent: var(--ax-primary-deep);
+  --sl-color-accent-high: #2c1b7a;
+  --sl-color-white: #14122b;
+  --sl-color-gray-1: #221e40;
+  --sl-color-gray-2: #3f3a63;
+  --sl-color-gray-3: #6b6590;
+  --sl-color-gray-4: #a8a3c6;
+  --sl-color-gray-5: #d9d5ee;
+  --sl-color-gray-6: #efedf9;
+  --sl-color-gray-7: #f7f6fc;
+  --sl-color-black: #ffffff;
+  --sl-color-bg-nav: rgb(255 255 255 / 0.85);
+  --sl-color-bg-sidebar: #f7f6fc;
+  --ax-glow: rgb(124 92 255 / 0.18);
+  --ax-glow-cyan: rgb(34 211 238 / 0.12);
+}
+
+/* Hero glow on the landing page */
+[data-has-hero] .page {
+  background:
+    radial-gradient(60rem 30rem at 15% -10%, var(--ax-glow), transparent 60%),
+    radial-gradient(40rem 24rem at 90% 10%, var(--ax-glow-cyan), transparent 65%),
+    var(--sl-color-bg);
+}
+[data-has-hero] header {
+  border-bottom: 1px solid transparent;
+  background-color: transparent;
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+[data-has-hero] .hero > img,
+[data-has-hero] .hero > .hero-html {
+  filter: drop-shadow(0 0 2.5rem var(--ax-glow));
+}
+[data-has-hero] .hero h1 {
+  background: linear-gradient(120deg, var(--sl-color-white) 0%, var(--ax-primary-soft) 55%, var(--ax-cyan) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  letter-spacing: -0.02em;
+}
+[data-has-hero] .hero .tagline {
+  color: var(--sl-color-gray-2);
+}
+
+/* Cards */
+.card,
+.sl-link-card {
+  border-radius: 0.9rem;
+  border-color: var(--sl-color-hairline-shade);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 60%), var(--sl-color-gray-6);
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+:root[data-theme="light"] .card,
+:root[data-theme="light"] .sl-link-card {
+  background: var(--sl-color-gray-7);
+}
+.card:hover,
+.sl-link-card:hover {
+  border-color: var(--ax-primary-soft);
+  transform: translateY(-1px);
+}
+.card .icon {
+  color: var(--ax-cyan);
+}
+
+/* Mermaid diagrams (astro-mermaid renders into <pre class="mermaid">) */
+pre.mermaid,
+.mermaid {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+  margin: 1.25rem 0;
+  border: 1px solid var(--sl-color-hairline-shade);
+  border-radius: 0.9rem;
+  background: var(--sl-color-gray-6);
+  overflow-x: auto;
+}
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Links & inline code */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration-color: color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
+  text-underline-offset: 0.15em;
+}
+.sl-markdown-content code:not(:where(.not-content *)) {
+  border-radius: 0.35rem;
+}

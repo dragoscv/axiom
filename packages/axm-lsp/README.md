@@ -1,6 +1,6 @@
 # @codai/axiom-axm-lsp
 
-Language server for AXIOM `.axm` plans (docs/syntax_spec.md). Diagnostics, completion, hover,
+Language server for AXIOM `.axm` plans (docs/reference/axm-syntax.md). Diagnostics, completion, hover,
 document symbols, formatting and semantic tokens over LSP 3.18 — built on the **same**
 Chevrotain parser that compiles `.axm` to a `Plan` (`@codai/axiom-axm`), so the editor and the
 gate can never disagree about what is valid.

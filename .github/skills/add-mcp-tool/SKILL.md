@@ -1,6 +1,6 @@
 ---
 name: add-mcp-tool
-description: Add or change a tool on the @codai/axiom-mcp stdio server — Zod input/output schemas, annotations, handler that never throws, registry mirror in spec/tools.json + README + docs/mcp_api.md, smoke test, changeset. Use when a user wants agents to be able to call a new AXIOM capability over MCP or a new CLI verb.
+description: Add or change a tool on the @codai/axiom-mcp stdio server — Zod input/output schemas, annotations, handler that never throws, registry mirror in spec/tools.json + README + docs/reference/mcp-tools.md, smoke test, changeset. Use when a user wants agents to be able to call a new AXIOM capability over MCP or a new CLI verb.
 ---
 
 # Add an MCP tool
@@ -31,7 +31,7 @@ when any of the four disagree; `.copilot-ripple.json` reminds you while editing.
    - `packages/mcp/spec/tools.json` — `{ name, riskClass, description }` (this
      is what codai registers; `apply`-class = `SENSITIVE`, reads = `READ`).
    - `packages/mcp/README.md` — tool table row.
-   - `docs/mcp_api.md` — tool table row (name, risk, purpose, input, output).
+   - `docs/reference/mcp-tools.md` — tool table row (name, risk, purpose, input, output).
 6. **Tests** — extend the in-process smoke in `packages/mcp/src/*.test.ts`:
    `tools/list` includes the name with annotations + outputSchema; a malformed
    input returns an `ERR_*` code; one happy path against a tmp root. Do not

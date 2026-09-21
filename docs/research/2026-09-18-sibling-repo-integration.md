@@ -1,5 +1,7 @@
 # AXIOM integration research — report
 
+*Dated record (2026-09-18) — see [Design & research](../README.md#design--research).*
+
 Note on method: no terminal tool is available in this mode, so `rg` could not be run across the sibling repos; findings below come from directory listings and targeted file reads (VERIFIED where stated). Items requiring a true text sweep (3, 5) are marked as partial.
 
 ## 1. MCP configuration / consumption per repo

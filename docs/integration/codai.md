@@ -1,5 +1,7 @@
 # codai ↔ AXIOM integration
 
+*How codai's SWE harness routes every write through the gate by default, the Copilot wiring, and the agent-core tool registration with risk classes.*
+
 codai (`E:\gh\codai`) is the first consumer of AXIOM v2. Three touch points, in order of maturity:
 
 | surface | status | where (in codai) |
@@ -63,7 +65,7 @@ explicit allowlist — there is no `cwd` fallback.
 
 codai's agent-core keeps its tool catalogue in `packages/agent-core/spec/` and gates every call
 through `APPROVAL_MATRIX[autonomy][risk]` with `RiskClass = READ | ACT | SENSITIVE`
-(`packages/agent-core/src/index.ts`). AXIOM ships the same information for its 9 MCP tools as
+(`packages/agent-core/src/index.ts`). AXIOM ships the same information for its 17 MCP tools as
 **`packages/mcp/spec/codai-tools.json`**, generated from the MCP registry by
 `pnpm --filter @codai/axiom-mcp build:spec` and pinned by `tools-spec.test.ts`.
 
@@ -101,8 +103,8 @@ drops straight into an OpenAI/Anthropic `function.parameters` field.
 
 | tool | risk | reason |
 |---|---|---|
-| `axiom_plan_validate`, `axiom_manifest_verify`, `axiom_check`, `axiom_apply_dry_run`, `axiom_manifest_diff`, `axiom_roots_list` | READ | `readOnlyHint: true` — touch no files |
-| `axiom_plan_compile` | ACT | writes only under `<root>/.axiom/` (CAS blobs with `store: cas`, stored manifest when a `root` is given); never the working tree |
+| `axiom_plan_validate`, `axiom_manifest_verify`, `axiom_check`, `axiom_check_start`, `axiom_task_get`, `axiom_apply_dry_run`, `axiom_manifest_diff`, `axiom_axm_parse`, `axiom_roots_list`, `axiom_repo_snapshot` | READ | `readOnlyHint: true` — touch no files |
+| `axiom_plan_compile`, `axiom_plan_begin`, `axiom_plan_add`, `axiom_plan_seal`, `axiom_task_cancel` | ACT | write only under `<root>/.axiom/` (CAS blobs with `store: cas`, stored manifest when a `root` is given) or mutate server-process state; never the working tree |
 | `axiom_apply`, `axiom_rollback` | SENSITIVE | `destructiveHint: true` — rewrite files in the root (2PC, journaled) |
 
 ### Wiring it into a codai harness
@@ -138,8 +140,17 @@ gate, into fresh worktrees, and byte-compares (rows: codai `docs/status/axiom-ar
 What the arm changed in AXIOM: the first run rejected 2 of the first 8 edit sets on
 `token = var.set("testvalue")` and a maintainer e-mail in `pyproject.toml` — false positives that
 became `@codai/axiom-checks` c36c818 (PII opt-in `pii: true`; credential-literal precision; CNP
-checksum; e-mail domain filters — see `docs/checks.md` §content.noSecrets). The vendored copy in
+checksum; e-mail domain filters — see [checks.md](../guides/checks.md#contentnosecrets)). The vendored copy in
 codai (`vendor/axiom/*`, `scripts/ops/sync-axiom-vendor.ps1`) was re-synced before the run above.
 
 Owner decision: default ON, rejections fed back to the model as `edit_error`. A cloud arm on a
 fresh holdout remains the way to measure how often the model recovers from that feedback.
+
+---
+
+**See also**
+
+- [MCP tools](../reference/mcp-tools.md) — the registry `codai-tools.json` is generated from
+- [Harnesses](harnesses.md) — the generic MCP/hook wiring codai's `.vscode/mcp.json` follows
+- [Checks](../guides/checks.md#contentnosecrets) — the precision rules the eval arm produced
+- [Decisions](../design/decisions.md) — D-26 (eval-arm method, PII opt-in)
