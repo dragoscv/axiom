@@ -1,5 +1,9 @@
 # @codai/axiom-canon
 
+## 2.2.1
+
+No changes in this release.
+
 ## 2.2.0
 
 ### Minor Changes

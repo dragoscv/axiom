@@ -20,7 +20,7 @@ release notes with the full asset list (binaries, `SHA256SUMS`, `.vsix`) live on
 | `@codai/axiom-emitters-web` | [packages/emitters-web/CHANGELOG.md](packages/emitters-web/CHANGELOG.md) | Optional `template` emitter `web@2.0.0` |
 | `@codai/axiom-mcp` | [packages/mcp/CHANGELOG.md](packages/mcp/CHANGELOG.md) | The published bin: MCP server, CLI, hook mode |
 
-## Unreleased — 2.2.1 (Phase 5: distribution, docs site, repo polish)
+## 2.2.1 (2026-09-21) — Phase 5: distribution, docs site, repo polish
 
 No wire or API change. Standalone binaries for linux-x64, linux-arm64, darwin-arm64,
 darwin-x64 and win-x64 (Node 26 single-executable, built natively per target) are attached

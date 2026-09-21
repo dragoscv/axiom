@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-checks",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Predicate registry, fact providers and profiles for the AXIOM checks engine",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

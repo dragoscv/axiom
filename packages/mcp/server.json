@@ -9,13 +9,13 @@
     "source": "github",
     "subfolder": "packages/mcp"
   },
-  "version": "2.2.0",
+  "version": "2.2.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@codai/axiom-mcp",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "runtimeHint": "npx",
       "transport": { "type": "stdio" },
       "packageArguments": [

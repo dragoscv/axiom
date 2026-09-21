@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-emitters-web",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "AXIOM v2 template emitter `web`: small, deterministic, golden-stack file templates (Next 16 route handler / server action, Hono 4 route, Drizzle pgTable, Biome config, Tailwind v4 globals, README section) for `template` plan sources",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-plan",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Plan → ManifestBundle compiler for AXIOM v2: content-addressed artifacts, JCS manifest digest, inline/CAS blob transport, in-toto attestation, bundle verification and manifest diff",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",
