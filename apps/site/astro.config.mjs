@@ -38,9 +38,9 @@ export default defineConfig({
         },
         { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
         { tag: "meta", attrs: { name: "twitter:image", content: `${site}${base}/og.png` } },
-        { tag: "meta", attrs: { name: "theme-color", content: "#090814" } },
+        { tag: "meta", attrs: { name: "theme-color", content: "#fbf7ef" } },
       ],
-      expressiveCode: { themes: ["github-dark-default", "github-light"] },
+      expressiveCode: { themes: ["github-light", "github-dark-default"], useStarlightDarkModeSwitch: true },
       sidebar: [
         {
           label: "Start here",

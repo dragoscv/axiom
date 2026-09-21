@@ -1,111 +1,209 @@
-/* AXIOM brand — dark-first indigo/violet with a cyan accent on near-black. */
+/*
+ * AXIOM — "Ledger" identity.
+ * Warm paper and ink, one accent: seal red (a notary stamp on a record). Light-first; dark mode
+ * is deep slate, not black. Display type is a serif (the record), UI is a grotesque, digests are
+ * mono. Hairline rules and a faint blueprint grid instead of glows.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+
 :root {
-  --ax-primary: #7c5cff;
-  --ax-primary-soft: #a78bfa;
-  --ax-primary-deep: #6d4de6;
-  --ax-cyan: #22d3ee;
-  --ax-bg: #090814;
-  --ax-bg-2: #14122b;
-
-  /* Starlight palette (dark) */
-  --sl-color-accent-low: #1f1745;
-  --sl-color-accent: var(--ax-primary);
-  --sl-color-accent-high: #c9b8ff;
-  --sl-color-white: #f4f2ff;
-  --sl-color-gray-1: #e6e2f7;
-  --sl-color-gray-2: #c3bedb;
-  --sl-color-gray-3: #8f89ad;
-  --sl-color-gray-4: #56507a;
-  --sl-color-gray-5: #322d52;
-  --sl-color-gray-6: #1c1838;
-  --sl-color-black: var(--ax-bg);
-  --sl-color-bg-nav: rgb(9 8 20 / 0.85);
-  --sl-color-bg-sidebar: var(--ax-bg);
-  --sl-color-hairline-shade: #221e40;
-
+  --ax-font-display: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sl-font: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
   --sl-content-width: 50rem;
-  --ax-glow: rgb(124 92 255 / 0.28);
-  --ax-glow-cyan: rgb(34 211 238 / 0.16);
 }
 
+/* Light (default) — paper */
 :root[data-theme="light"] {
-  --sl-color-accent-low: #ece7ff;
-  --sl-color-accent: var(--ax-primary-deep);
-  --sl-color-accent-high: #2c1b7a;
-  --sl-color-white: #14122b;
-  --sl-color-gray-1: #221e40;
-  --sl-color-gray-2: #3f3a63;
-  --sl-color-gray-3: #6b6590;
-  --sl-color-gray-4: #a8a3c6;
-  --sl-color-gray-5: #d9d5ee;
-  --sl-color-gray-6: #efedf9;
-  --sl-color-gray-7: #f7f6fc;
-  --sl-color-black: #ffffff;
-  --sl-color-bg-nav: rgb(255 255 255 / 0.85);
-  --sl-color-bg-sidebar: #f7f6fc;
-  --ax-glow: rgb(124 92 255 / 0.18);
-  --ax-glow-cyan: rgb(34 211 238 / 0.12);
+  --ax-paper: #fbf7ef;
+  --ax-paper-2: #f3ede1;
+  --ax-ink: #1c1917;
+  --ax-rule: rgb(28 25 23 / 0.16);
+  --ax-seal: #c2410c;
+  --ax-seal-deep: #9a3412;
+  --ax-seal-tint: #fde8dc;
+  --ax-grid: rgb(28 25 23 / 0.06);
+  --ax-shadow: rgb(28 25 23 / 0.12);
+
+  --sl-color-accent-low: var(--ax-seal-tint);
+  --sl-color-accent: var(--ax-seal);
+  --sl-color-accent-high: var(--ax-seal-deep);
+  --sl-color-white: var(--ax-ink);
+  --sl-color-gray-1: #292524;
+  --sl-color-gray-2: #44403c;
+  --sl-color-gray-3: #78716c;
+  --sl-color-gray-4: #a8a29e;
+  --sl-color-gray-5: #d6d3d1;
+  --sl-color-gray-6: #ece6d9;
+  --sl-color-gray-7: var(--ax-paper-2);
+  --sl-color-black: var(--ax-paper);
+  --sl-color-bg-nav: rgb(251 247 239 / 0.9);
+  --sl-color-bg-sidebar: var(--ax-paper);
+  --sl-color-hairline-shade: var(--ax-rule);
+  --sl-color-hairline-light: rgb(28 25 23 / 0.1);
+  --sl-color-text-accent: var(--ax-seal);
 }
 
-/* Hero glow on the landing page */
+/* Dark — slate ledger */
+:root[data-theme="dark"] {
+  --ax-paper: #17181c;
+  --ax-paper-2: #1e2025;
+  --ax-ink: #f3efe6;
+  --ax-rule: rgb(243 239 230 / 0.14);
+  --ax-seal: #f0703d;
+  --ax-seal-deep: #ffa07a;
+  --ax-seal-tint: #3a2117;
+  --ax-grid: rgb(243 239 230 / 0.05);
+  --ax-shadow: rgb(0 0 0 / 0.4);
+
+  --sl-color-accent-low: var(--ax-seal-tint);
+  --sl-color-accent: var(--ax-seal);
+  --sl-color-accent-high: var(--ax-seal-deep);
+  --sl-color-white: var(--ax-ink);
+  --sl-color-gray-1: #e7e2d8;
+  --sl-color-gray-2: #cdc8bd;
+  --sl-color-gray-3: #8f8a80;
+  --sl-color-gray-4: #5f5b53;
+  --sl-color-gray-5: #34363c;
+  --sl-color-gray-6: #23252b;
+  --sl-color-black: var(--ax-paper);
+  --sl-color-bg-nav: rgb(23 24 28 / 0.9);
+  --sl-color-bg-sidebar: var(--ax-paper);
+  --sl-color-hairline-shade: var(--ax-rule);
+  --sl-color-hairline-light: rgb(243 239 230 / 0.08);
+  --sl-color-text-accent: var(--ax-seal);
+}
+
+/* ---- Type ---------------------------------------------------------------- */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.content-panel h1,
+.hero h1 {
+  font-family: var(--ax-font-display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+.sl-markdown-content h1,
+.content-panel h1 {
+  font-size: clamp(2.2rem, 3.4vw, 3rem);
+  line-height: 1.1;
+}
+.sl-markdown-content h2 {
+  font-size: 1.85rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--ax-rule);
+}
+.sl-markdown-content h3 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.site-title {
+  font-family: var(--ax-font-display);
+  font-size: 1.35rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---- Landing -------------------------------------------------------------- */
 [data-has-hero] .page {
   background:
-    radial-gradient(60rem 30rem at 15% -10%, var(--ax-glow), transparent 60%),
-    radial-gradient(40rem 24rem at 90% 10%, var(--ax-glow-cyan), transparent 65%),
+    linear-gradient(var(--ax-grid) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, var(--ax-grid) 1px, transparent 1px) 0 0 / 32px 32px,
     var(--sl-color-bg);
 }
 [data-has-hero] header {
-  border-bottom: 1px solid transparent;
-  background-color: transparent;
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
+  background-color: var(--sl-color-bg-nav);
+}
+[data-has-hero] .hero {
+  padding-block: clamp(2rem, 6vw, 5rem);
+}
+[data-has-hero] .hero h1 {
+  font-size: clamp(3.5rem, 8vw, 6.5rem);
+  letter-spacing: 0.04em;
+  color: var(--sl-color-white);
+}
+[data-has-hero] .hero .tagline {
+  font-family: var(--ax-font-display);
+  font-style: italic;
+  font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+  color: var(--sl-color-gray-2);
+  max-width: 34ch;
 }
 [data-has-hero] .hero > img,
 [data-has-hero] .hero > .hero-html {
-  filter: drop-shadow(0 0 2.5rem var(--ax-glow));
+  filter: drop-shadow(0 18px 30px var(--ax-shadow));
 }
-[data-has-hero] .hero h1 {
-  background: linear-gradient(120deg, var(--sl-color-white) 0%, var(--ax-primary-soft) 55%, var(--ax-cyan) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  letter-spacing: -0.02em;
+[data-has-hero] .hero .sl-link-button.primary {
+  background: var(--ax-seal);
+  border-color: var(--ax-seal);
+  color: #fff;
 }
-[data-has-hero] .hero .tagline {
-  color: var(--sl-color-gray-2);
+[data-has-hero] .hero .sl-link-button.primary:hover {
+  background: var(--ax-seal-deep);
+  border-color: var(--ax-seal-deep);
+}
+[data-has-hero] .hero .sl-link-button.secondary {
+  border-color: var(--ax-rule);
+  color: var(--sl-color-white);
+  background: transparent;
+}
+[data-has-hero] .hero .sl-link-button.secondary:hover {
+  border-color: var(--sl-color-white);
 }
 
-/* Cards */
+/* ---- Cards: ruled index cards, not glass ------------------------------------ */
 .card,
 .sl-link-card {
-  border-radius: 0.9rem;
-  border-color: var(--sl-color-hairline-shade);
-  background: linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 60%), var(--sl-color-gray-6);
-  transition: border-color 160ms ease, transform 160ms ease;
-}
-:root[data-theme="light"] .card,
-:root[data-theme="light"] .sl-link-card {
-  background: var(--sl-color-gray-7);
+  border-radius: 0.375rem;
+  border: 1px solid var(--ax-rule);
+  background: var(--ax-paper-2);
+  box-shadow: 0 1px 0 rgb(28 25 23 / 0.04);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 .card:hover,
 .sl-link-card:hover {
-  border-color: var(--ax-primary-soft);
-  transform: translateY(-1px);
+  border-color: var(--ax-seal);
+  box-shadow: 0 0 0 3px var(--ax-seal-tint);
+}
+.card .title {
+  font-family: var(--ax-font-display);
+  font-size: 1.35rem;
+  font-weight: 400;
 }
 .card .icon {
-  color: var(--ax-cyan);
+  color: var(--ax-seal);
 }
 
-/* Mermaid diagrams (astro-mermaid renders into <pre class="mermaid">) */
+/* ---- Digest / verdict marks ---------------------------------------------------- */
+.ax-digest {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85em;
+  color: var(--ax-seal);
+  word-break: break-all;
+}
+.ax-stamp {
+  display: inline-block;
+  padding: 0.15em 0.6em;
+  border: 1.5px solid var(--ax-seal);
+  border-radius: 0.25rem;
+  color: var(--ax-seal);
+  font-family: var(--sl-font-mono);
+  font-size: 0.78em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: rotate(-2deg);
+}
+
+/* ---- Mermaid ------------------------------------------------------------------- */
 pre.mermaid,
 .mermaid {
   display: flex;
   justify-content: center;
-  padding: 1rem;
+  padding: 1.25rem;
   margin: 1.25rem 0;
-  border: 1px solid var(--sl-color-hairline-shade);
-  border-radius: 0.9rem;
-  background: var(--sl-color-gray-6);
+  border: 1px solid var(--ax-rule);
+  border-radius: 0.375rem;
+  background: var(--ax-paper-2);
   overflow-x: auto;
 }
 .mermaid svg {
@@ -113,11 +211,83 @@ pre.mermaid,
   height: auto;
 }
 
-/* Links & inline code */
+/* ---- Content polish -------------------------------------------------------------- */
 .sl-markdown-content a:not(:where(.not-content *)) {
-  text-decoration-color: color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
+  color: var(--ax-seal);
+  text-decoration-color: color-mix(in srgb, var(--ax-seal) 40%, transparent);
   text-underline-offset: 0.15em;
 }
 .sl-markdown-content code:not(:where(.not-content *)) {
-  border-radius: 0.35rem;
+  border-radius: 0.25rem;
+  background: var(--sl-color-gray-6);
+}
+.sl-markdown-content th:not(:where(.not-content *)) {
+  font-weight: 600;
+  border-bottom: 1.5px solid var(--sl-color-white);
+}
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 2px solid var(--ax-seal);
+}
+.sidebar-content a[aria-current="page"] {
+  background: var(--ax-seal-tint);
+  color: var(--ax-seal-deep);
+}
+
+/* ---- The pipeline draws itself once (hero) ---------------------------------------- */
+.ax-pipeline {
+  margin: 2.5rem auto 0;
+  max-width: 56rem;
+  padding: 1.5rem 1.25rem 0.75rem;
+  border-top: 1px solid var(--ax-rule);
+  border-bottom: 1px solid var(--ax-rule);
+}
+.ax-pipeline svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  font-family: var(--sl-font-mono);
+}
+.ax-pipeline .line {
+  stroke: var(--sl-color-gray-3);
+  stroke-width: 1.5;
+  fill: none;
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+  animation: ax-draw 1.6s cubic-bezier(0.4, 0, 0.2, 1) 0.2s forwards;
+}
+.ax-pipeline .node rect {
+  fill: var(--ax-paper-2);
+  stroke: var(--sl-color-white);
+  stroke-width: 1.25;
+}
+.ax-pipeline .node text {
+  fill: var(--sl-color-white);
+  font-size: 13px;
+}
+.ax-pipeline .node {
+  opacity: 0;
+  animation: ax-fade 0.5s ease forwards;
+}
+.ax-pipeline .node.seal rect {
+  stroke: var(--ax-seal);
+}
+.ax-pipeline .node.seal text {
+  fill: var(--ax-seal);
+}
+.ax-pipeline .node:nth-of-type(1) { animation-delay: 0.25s; }
+.ax-pipeline .node:nth-of-type(2) { animation-delay: 0.55s; }
+.ax-pipeline .node:nth-of-type(3) { animation-delay: 0.85s; }
+.ax-pipeline .node:nth-of-type(4) { animation-delay: 1.15s; }
+.ax-pipeline .node:nth-of-type(5) { animation-delay: 1.45s; }
+.ax-pipeline .caption {
+  fill: var(--sl-color-gray-3);
+  font-size: 11px;
+  opacity: 0;
+  animation: ax-fade 0.6s ease 1.7s forwards;
+}
+@keyframes ax-draw { to { stroke-dashoffset: 0; } }
+@keyframes ax-fade { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ax-pipeline .line { stroke-dashoffset: 0; animation: none; }
+  .ax-pipeline .node, .ax-pipeline .caption { opacity: 1; animation: none; }
 }

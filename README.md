@@ -1,20 +1,16 @@
 <div align="center">
 
-<img src="assets/brand/axiom-mark.svg" width="96" alt="AXIOM mark">
-
-# AXIOM
-
-**The transactional write gate for coding agents.**
+<a href="https://dragoscv.github.io/axiom/"><img src="assets/brand/og-image.svg" width="100%" alt="AXIOM — the transactional write gate for coding agents"></a>
 
 [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-mcp?label=npm&logo=npm)](https://www.npmjs.com/package/@codai/axiom-mcp)
 [![downloads](https://img.shields.io/npm/dm/%40codai%2Faxiom-mcp?label=downloads)](https://www.npmjs.com/package/@codai/axiom-mcp)
 [![CI](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/ci.yml?branch=main&label=CI&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/release.yml?label=release&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/release.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dragoscv/axiom/badge)](https://scorecard.dev/viewer/?uri=github.com/dragoscv/axiom)
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![docs](https://img.shields.io/badge/docs-dragoscv.github.io%2Faxiom-6f42c1)](https://dragoscv.github.io/axiom/)
-[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.dragoscv%2Faxiom-0f766e)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest)
-[![node](https://img.shields.io/badge/node-%E2%89%A5%2022.14-339933?logo=node.js)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-1c1917)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-dragoscv.github.io%2Faxiom-c2410c)](https://dragoscv.github.io/axiom/)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.dragoscv%2Faxiom-c2410c)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2022.14-1c1917?logo=node.js)](https://nodejs.org)
 
 [Docs](https://dragoscv.github.io/axiom/) · [Quickstart](#quickstart-60-s) · [Tools](#tools) · [Architecture](#architecture) · [Packages](#packages) · [Contributing](CONTRIBUTING.md)
 

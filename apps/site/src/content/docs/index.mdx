@@ -11,7 +11,7 @@ hero:
   tagline: The transactional write gate for coding agents.
   image:
     file: ../../assets/logo.svg
-    alt: AXIOM mark
+    alt: AXIOM seal
   actions:
     - text: Get started
       link: /axiom/getting-started/quickstart/
@@ -28,47 +28,45 @@ hero:
 
 import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/components';
 
+<div class="ax-pipeline not-content" aria-label="Plan, Manifest, checks, apply, journal — every arrow is a hash boundary">
+<svg viewBox="0 0 880 120" role="img">
+  <path class="line" d="M96 60 H176 M272 60 H352 M448 60 H528 M624 60 H704" />
+  <g class="node"><rect x="8" y="38" width="88" height="44" rx="3"/><text x="52" y="65" text-anchor="middle">Plan</text></g>
+  <g class="node seal"><rect x="176" y="38" width="96" height="44" rx="3"/><text x="224" y="65" text-anchor="middle">Manifest</text></g>
+  <g class="node"><rect x="352" y="38" width="96" height="44" rx="3"/><text x="400" y="65" text-anchor="middle">checks</text></g>
+  <g class="node seal"><rect x="528" y="38" width="96" height="44" rx="3"/><text x="576" y="65" text-anchor="middle">apply</text></g>
+  <g class="node"><rect x="704" y="38" width="168" height="44" rx="3"/><text x="788" y="65" text-anchor="middle">.axiom/ journal</text></g>
+  <text class="caption" x="224" y="104" text-anchor="middle">sha256(JCS(body))</text>
+  <text class="caption" x="576" y="104" text-anchor="middle">confirmDigest · pre-image re-verified · 2PC</text>
+</svg>
+</div>
+
 <CardGrid stagger>
   <Card title="Plan → Manifest" icon="document">
     An agent submits a **Plan**; AXIOM compiles it to a canonical, content-addressed
-    **Manifest** (JCS/RFC 8785, sha256) with no timestamps and no content inline.
+    **Manifest** (JCS/RFC 8785, sha256) — no timestamps, no content inline.
   </Card>
   <Card title="Set-level checks" icon="approve-check">
     Predicates run over the **whole change set**, not one file at a time. A fact provider
-    that cannot run yields `error`, never a silent pass — fail closed.
+    that cannot run yields `error`, never a silent pass. Fail closed.
   </Card>
   <Card title="Two-phase apply" icon="seti:git">
     Pre-image hashes are re-verified at commit, writes are staged then atomically renamed,
-    and a journal makes every apply **rollback-able** — even after a crash.
+    and a journal makes every apply **rollback-able**, even after a crash.
   </Card>
-  <Card title="Provenance" icon="seti:lock">
-    `confirmDigest` must equal the manifest digest. Optional Sigstore signing, anti-rollback
-    counters and in-toto attestations put the agent's edit on the record.
+  <Card title="On the record" icon="seti:lock">
+    `confirmDigest` must equal the manifest digest. Optional Ed25519 signing, anti-rollback
+    counters and in-toto attestations make the agent's edit provable.
   </Card>
   <Card title="Works everywhere" icon="puzzle">
     One package, five surfaces: **MCP** server, **CLI**, PreToolUse **hook**, GitHub
-    **Action** and **VS Code** extension. Roots are an explicit allowlist — no `cwd` fallback.
+    **Action**, **VS Code**. Roots are an explicit allowlist; there is no `cwd` fallback.
   </Card>
   <Card title="Deterministic" icon="random">
     Same Plan, same Manifest, same digest on Linux, macOS and Windows. Golden fixtures pin
     every digest in CI.
   </Card>
 </CardGrid>
-
-## How it flows
-
-```mermaid
-flowchart LR
-  A[Agent] -->|Plan| P[plan_compile]
-  P -->|Manifest + blobs| C[check]
-  C -->|verdict| D[apply_dry_run]
-  D -->|diff + digest| X[apply]
-  X -->|journal| J[(.axiom/)]
-  X -->|attestation| S[Sigstore]
-```
-
-Every arrow is a hash boundary. Read the [pipeline](/axiom/concepts/pipeline/) page for the
-sequence diagram and the [invariants](/axiom/concepts/invariants/) that hold across all of it.
 
 ## Install
 
@@ -113,6 +111,21 @@ sequence diagram and the [invariants](/axiom/concepts/invariants/) that hold acr
   </TabItem>
 </Tabs>
 
+## How it flows
+
+```mermaid
+flowchart LR
+  A[Agent] -->|Plan| P[plan_compile]
+  P -->|Manifest + blobs| C[check]
+  C -->|verdict| D[apply_dry_run]
+  D -->|diff + digest| X[apply]
+  X -->|journal| J[(.axiom/)]
+  X -->|attestation| S[Sigstore]
+```
+
+Every arrow is a hash boundary. Read the [pipeline](/axiom/concepts/pipeline/) page for the
+sequence diagram and the [invariants](/axiom/concepts/invariants/) that hold across all of it.
+
 ## Used by
 
 <CardGrid>
@@ -126,6 +139,6 @@ sequence diagram and the [invariants](/axiom/concepts/invariants/) that hold acr
 Coding agents write files. Most of the time that is fine; occasionally it is a half-applied
 refactor, a clobbered concurrent edit, or a change nobody can trace back to a decision. AXIOM
 makes an agent's write **a transaction**: planned, canonicalised, checked as a set, applied
-atomically against verified pre-images, journaled, and — when you want it — signed. It sits
-in front of the filesystem as an MCP server or a hook, so the agent does not have to be trusted;
+atomically against verified pre-images, journaled, and, when you want it, signed. It sits in
+front of the filesystem as an MCP server or a hook, so the agent does not have to be trusted;
 the gate does the trusting.

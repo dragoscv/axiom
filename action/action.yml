@@ -6,8 +6,8 @@ description: >-
   actions/attest so `gh attestation verify` can prove which tree a manifest was verified against.
 author: dragoscv
 branding:
-  icon: shield
-  color: purple
+  icon: check-circle
+  color: orange
 
 inputs:
   bundle:

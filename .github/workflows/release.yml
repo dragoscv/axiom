@@ -98,10 +98,15 @@ jobs:
         shell: bash
 
       - name: Verify every tagged package is on the registry
-        # npm's CDN needs a moment after publish before the packument lists the new version.
+        # npm's CDN needs a moment after publish before the packument lists the new version —
+        # 30 s was not enough for the largest tarball (v2.2.1: mcp landed at +45 s, run
+        # 35548626466, and the miss skipped every dependent job). Poll up to ~5 min.
         run: |
-          sleep 30
-          node scripts/check-release-complete.mjs --strict
+          for i in $(seq 1 10); do
+            if node scripts/check-release-complete.mjs --strict; then exit 0; fi
+            echo "attempt $i: registry not caught up yet; waiting 30 s"; sleep 30
+          done
+          echo "::error::packages still missing from the registry after 5 minutes"; exit 1
 
   binaries:
     # D-27: `node --build-sea` embeds the builder's own Node, and SEA blobs carry no version

@@ -1,27 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="AXIOM">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#14122b"/>
-      <stop offset="1" stop-color="#090814"/>
-    </linearGradient>
-    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#a78bfa"/>
-      <stop offset="1" stop-color="#6d4de6"/>
-    </linearGradient>
-    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="1" stop-color="#67e8f9"/>
-    </linearGradient>
-  </defs>
-  <!-- tile -->
-  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
-  <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#7c5cff" stroke-opacity=".28" stroke-width="2"/>
-  <!-- gate posts (the two legs of the A) -->
-  <path d="M30 104 L54 26 h8 L38 104 Z" fill="url(#bar)"/>
-  <path d="M98 104 L74 26 h-8 L90 104 Z" fill="url(#bar)"/>
-  <!-- locked beam (the crossbar) -->
-  <rect x="38" y="72" width="52" height="12" rx="6" fill="url(#beam)"/>
-  <!-- latch: the beam is closed -->
-  <circle cx="64" cy="78" r="4" fill="#090814"/>
-  <circle cx="64" cy="78" r="2" fill="#67e8f9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="AXIOM seal">
+  <!--
+    AXIOM mark — a notary seal. Outer ring of 48 hash ticks (a digest rendered as a dial), an
+    inner ring, and the gate-A: two posts with a locked crossbar. Seal red on warm paper.
+  -->
+  <circle cx="64" cy="64" r="62" fill="#fbf7ef"/>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#c2410c" stroke-width="4"/>
+  <g stroke="#c2410c" stroke-width="2.4" transform="translate(64 64)">
+    <g id="t"><line x1="0" y1="-53" x2="0" y2="-46"/></g>
+    <use href="#t" transform="rotate(7.5)"/><use href="#t" transform="rotate(15)"/><use href="#t" transform="rotate(22.5)"/>
+    <use href="#t" transform="rotate(30)"/><use href="#t" transform="rotate(37.5)"/><use href="#t" transform="rotate(45)"/>
+    <use href="#t" transform="rotate(52.5)"/><use href="#t" transform="rotate(60)"/><use href="#t" transform="rotate(67.5)"/>
+    <use href="#t" transform="rotate(75)"/><use href="#t" transform="rotate(82.5)"/><use href="#t" transform="rotate(90)"/>
+    <use href="#t" transform="rotate(97.5)"/><use href="#t" transform="rotate(105)"/><use href="#t" transform="rotate(112.5)"/>
+    <use href="#t" transform="rotate(120)"/><use href="#t" transform="rotate(127.5)"/><use href="#t" transform="rotate(135)"/>
+    <use href="#t" transform="rotate(142.5)"/><use href="#t" transform="rotate(150)"/><use href="#t" transform="rotate(157.5)"/>
+    <use href="#t" transform="rotate(165)"/><use href="#t" transform="rotate(172.5)"/><use href="#t" transform="rotate(180)"/>
+    <use href="#t" transform="rotate(187.5)"/><use href="#t" transform="rotate(195)"/><use href="#t" transform="rotate(202.5)"/>
+    <use href="#t" transform="rotate(210)"/><use href="#t" transform="rotate(217.5)"/><use href="#t" transform="rotate(225)"/>
+    <use href="#t" transform="rotate(232.5)"/><use href="#t" transform="rotate(240)"/><use href="#t" transform="rotate(247.5)"/>
+    <use href="#t" transform="rotate(255)"/><use href="#t" transform="rotate(262.5)"/><use href="#t" transform="rotate(270)"/>
+    <use href="#t" transform="rotate(277.5)"/><use href="#t" transform="rotate(285)"/><use href="#t" transform="rotate(292.5)"/>
+    <use href="#t" transform="rotate(300)"/><use href="#t" transform="rotate(307.5)"/><use href="#t" transform="rotate(315)"/>
+    <use href="#t" transform="rotate(322.5)"/><use href="#t" transform="rotate(330)"/><use href="#t" transform="rotate(337.5)"/>
+    <use href="#t" transform="rotate(345)"/><use href="#t" transform="rotate(352.5)"/>
+  </g>
+  <circle cx="64" cy="64" r="41" fill="none" stroke="#c2410c" stroke-width="2"/>
+  <path fill="#c2410c" d="M44 92 L60 36 h8 L52 92 Z"/>
+  <path fill="#c2410c" d="M84 92 L68 36 h-8 L76 92 Z"/>
+  <rect fill="#c2410c" x="48" y="70" width="32" height="8" rx="1"/>
+  <circle cx="64" cy="74" r="2.2" fill="#fbf7ef"/>
 </svg>

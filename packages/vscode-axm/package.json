@@ -12,9 +12,14 @@
     "url": "git+https://github.com/dragoscv/axiom.git",
     "directory": "packages/vscode-axm"
   },
-  "homepage": "https://github.com/dragoscv/axiom#readme",
+  "homepage": "https://dragoscv.github.io/axiom/integration/vscode/",
   "bugs": {
     "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#fbf7ef",
+    "theme": "light"
   },
   "categories": [
     "Programming Languages",

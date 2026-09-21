@@ -1,56 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="AXIOM — the transactional write gate for coding agents">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0d0b1e"/>
-      <stop offset="1" stop-color="#050410"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.22" cy="0.5" r="0.55">
-      <stop offset="0" stop-color="#7c5cff" stop-opacity=".45"/>
-      <stop offset="1" stop-color="#7c5cff" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glow2" cx="0.85" cy="0.9" r="0.5">
-      <stop offset="0" stop-color="#22d3ee" stop-opacity=".22"/>
-      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#a78bfa"/>
-      <stop offset="1" stop-color="#6d4de6"/>
-    </linearGradient>
-    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="1" stop-color="#67e8f9"/>
-    </linearGradient>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".035"/>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#1c1917" stroke-opacity=".07"/>
     </pattern>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbf7ef" stop-opacity="0"/>
+      <stop offset="1" stop-color="#fbf7ef" stop-opacity="1"/>
+    </linearGradient>
   </defs>
-  <rect width="1280" height="640" fill="url(#bg)"/>
+  <!-- paper -->
+  <rect width="1280" height="640" fill="#fbf7ef"/>
   <rect width="1280" height="640" fill="url(#grid)"/>
-  <rect width="1280" height="640" fill="url(#glow)"/>
-  <rect width="1280" height="640" fill="url(#glow2)"/>
+  <rect x="640" width="640" height="640" fill="url(#fade)"/>
+  <!-- hairlines -->
+  <line x1="80" y1="88" x2="1200" y2="88" stroke="#1c1917" stroke-opacity=".25"/>
+  <line x1="80" y1="552" x2="1200" y2="552" stroke="#1c1917" stroke-opacity=".25"/>
 
-  <!-- mark -->
-  <g transform="translate(96 160) scale(2.5)">
-    <rect width="128" height="128" rx="28" fill="#0f0d22"/>
-    <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#7c5cff" stroke-opacity=".4" stroke-width="2"/>
-    <path d="M30 104 L54 26 h8 L38 104 Z" fill="url(#bar)"/>
-    <path d="M98 104 L74 26 h-8 L90 104 Z" fill="url(#bar)"/>
-    <rect x="38" y="72" width="52" height="12" rx="6" fill="url(#beam)"/>
-    <circle cx="64" cy="78" r="4" fill="#090814"/>
-    <circle cx="64" cy="78" r="2" fill="#67e8f9"/>
+  <!-- seal, top-left third -->
+  <g transform="translate(96 168) scale(2.35)">
+    <circle cx="64" cy="64" r="62" fill="#fbf7ef"/>
+    <circle cx="64" cy="64" r="60" fill="none" stroke="#c2410c" stroke-width="4"/>
+    <g stroke="#c2410c" stroke-width="2.4" transform="translate(64 64)">
+      <g id="t"><line x1="0" y1="-53" x2="0" y2="-46"/></g>
+      <use href="#t" transform="rotate(7.5)"/><use href="#t" transform="rotate(15)"/><use href="#t" transform="rotate(22.5)"/>
+      <use href="#t" transform="rotate(30)"/><use href="#t" transform="rotate(37.5)"/><use href="#t" transform="rotate(45)"/>
+      <use href="#t" transform="rotate(52.5)"/><use href="#t" transform="rotate(60)"/><use href="#t" transform="rotate(67.5)"/>
+      <use href="#t" transform="rotate(75)"/><use href="#t" transform="rotate(82.5)"/><use href="#t" transform="rotate(90)"/>
+      <use href="#t" transform="rotate(97.5)"/><use href="#t" transform="rotate(105)"/><use href="#t" transform="rotate(112.5)"/>
+      <use href="#t" transform="rotate(120)"/><use href="#t" transform="rotate(127.5)"/><use href="#t" transform="rotate(135)"/>
+      <use href="#t" transform="rotate(142.5)"/><use href="#t" transform="rotate(150)"/><use href="#t" transform="rotate(157.5)"/>
+      <use href="#t" transform="rotate(165)"/><use href="#t" transform="rotate(172.5)"/><use href="#t" transform="rotate(180)"/>
+      <use href="#t" transform="rotate(187.5)"/><use href="#t" transform="rotate(195)"/><use href="#t" transform="rotate(202.5)"/>
+      <use href="#t" transform="rotate(210)"/><use href="#t" transform="rotate(217.5)"/><use href="#t" transform="rotate(225)"/>
+      <use href="#t" transform="rotate(232.5)"/><use href="#t" transform="rotate(240)"/><use href="#t" transform="rotate(247.5)"/>
+      <use href="#t" transform="rotate(255)"/><use href="#t" transform="rotate(262.5)"/><use href="#t" transform="rotate(270)"/>
+      <use href="#t" transform="rotate(277.5)"/><use href="#t" transform="rotate(285)"/><use href="#t" transform="rotate(292.5)"/>
+      <use href="#t" transform="rotate(300)"/><use href="#t" transform="rotate(307.5)"/><use href="#t" transform="rotate(315)"/>
+      <use href="#t" transform="rotate(322.5)"/><use href="#t" transform="rotate(330)"/><use href="#t" transform="rotate(337.5)"/>
+      <use href="#t" transform="rotate(345)"/><use href="#t" transform="rotate(352.5)"/>
+    </g>
+    <circle cx="64" cy="64" r="41" fill="none" stroke="#c2410c" stroke-width="2"/>
+    <path fill="#c2410c" d="M44 92 L60 36 h8 L52 92 Z"/>
+    <path fill="#c2410c" d="M84 92 L68 36 h-8 L76 92 Z"/>
+    <rect fill="#c2410c" x="48" y="70" width="32" height="8" rx="1"/>
+    <circle cx="64" cy="74" r="2.2" fill="#fbf7ef"/>
   </g>
 
   <!-- copy -->
-  <g font-family="Inter, 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" fill="#f5f3ff">
-    <text x="480" y="252" font-size="112" font-weight="800" letter-spacing="8">AXIOM</text>
-    <text x="484" y="318" font-size="40" font-weight="500" fill="#c4b5fd">The transactional write gate for coding agents.</text>
-    <g font-size="26" font-weight="500" fill="#a5b4fc">
-      <text x="484" y="392">Plan → canonical Manifest → set-level checks → two-phase apply</text>
-    </g>
-    <g font-size="22" fill="#94a3b8">
-      <text x="484" y="452">MCP server · CLI · PreToolUse hook · GitHub Action · VS Code</text>
-      <text x="484" y="490" fill="#67e8f9" font-family="ui-monospace, 'Cascadia Code', Consolas, monospace">npx -y @codai/axiom-mcp mcp --root /path/to/repo</text>
-    </g>
+  <g fill="#1c1917">
+    <text x="452" y="262" font-family="'Instrument Serif', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif" font-size="128" letter-spacing="6">AXIOM</text>
+    <text x="456" y="330" font-family="Inter, 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="38" font-weight="500" fill="#44403c">The transactional write gate for coding agents.</text>
+    <text x="456" y="404" font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-size="24" fill="#57534e">Plan → Manifest → checks → two-phase apply → journal</text>
+    <text x="456" y="452" font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-size="22" fill="#c2410c">sha256:dec8730b170a208a90835ff215e4aba9331268a764d4cf5868934e4d4ddc4cf4</text>
+    <text x="456" y="516" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="22" fill="#78716c">MCP server · CLI · PreToolUse hook · GitHub Action · VS Code</text>
   </g>
-  <text x="1184" y="600" text-anchor="end" font-family="ui-monospace, Consolas, monospace" font-size="20" fill="#64748b">dragoscv.github.io/axiom</text>
+  <text x="1200" y="590" text-anchor="end" font-family="ui-monospace, Consolas, monospace" font-size="20" fill="#78716c">dragoscv.github.io/axiom</text>
 </svg>
