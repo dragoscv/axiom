@@ -213,7 +213,10 @@ jobs:
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
           gh release upload "$tag" bin/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
+          # A cancelled earlier run can leave the release as a DRAFT, which `releases/latest`
+          # (and therefore install.sh / install.ps1) never resolves. Publish + mark latest.
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft --jq '.isDraft, .assets[].name'
 
   mcp-registry:
     # D-29: list io.github.dragoscv/axiom on registry.modelcontextprotocol.io. The registry
@@ -254,8 +257,15 @@ jobs:
         working-directory: packages/mcp
         run: |
           set -euo pipefail
+          v=$(node -p 'require("./package.json").version')
+          # Idempotent like `changeset publish`: the registry rejects a duplicate version with
+          # 400 "cannot publish duplicate version" (a re-run of the same tag, run 35549765572).
+          have=$(curl -fsSL "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/${v}" 2>/dev/null \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.server??j).version??"")}catch{console.log("")}})' || true)
+          if [ "$have" = "$v" ]; then echo "io.github.dragoscv/axiom@$v is already on the registry - nothing to publish"; exit 0; fi
           for i in 1 2 3 4 5 6; do
-            if ../../mcp-publisher publish; then exit 0; fi
+            if ../../mcp-publisher publish 2>&1 | tee publish.log; then exit 0; fi
+            if grep -q 'duplicate version' publish.log; then echo "already published (raced a parallel run)"; exit 0; fi
             echo "attempt $i failed; waiting 30 s for the npm packument"; sleep 30
           done
           echo "::error::mcp-publisher publish failed after 6 attempts"; exit 1
