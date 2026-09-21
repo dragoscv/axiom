@@ -162,7 +162,9 @@ jobs:
           "$bin" check "$root/bundle.json" --root "$root"
           "$bin" apply "$root/bundle.json" --root "$root" --confirm "$digest" > /dev/null
           test -f "$root/src/hello.ts"
-          printf '%s' "{\"session_id\":\"s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"$root\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"src/ok.ts\",\"content\":\"x\"}}" | "$bin" gate --stdin
+          # Build the hook payload with node so a Windows `D:\a\_temp` cwd is JSON-escaped
+          # (a raw backslash made the gate deny with "payload is not JSON", run 35549452689).
+          node -e 'process.stdout.write(JSON.stringify({session_id:"s",hook_event_name:"PreToolUse",cwd:process.argv[1],tool_name:"Write",tool_input:{file_path:"src/ok.ts",content:"x"}}))' "$root" | "$bin" gate --stdin
           echo "smoke OK: $("$bin" --version)"
 
       - name: Upload binary
