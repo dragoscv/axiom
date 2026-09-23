@@ -38,7 +38,7 @@ flowchart LR
 | Page | Purpose |
 |---|---|
 | [Apply](guides/apply.md) | Guarantees, non-guarantees, `.axiom/` layout, two-phase flow, rollback, dry-run, PR mode, Windows notes |
-| [Checks](guides/checks.md) | The 17 predicates with params, verdict semantics, built-in profiles, custom profiles |
+| [Checks](guides/checks.md) | The 18 predicates with params, verdict semantics, built-in profiles, custom profiles |
 | [Signing](guides/signing.md) | DSSE envelopes, trust store, anti-rollback counter, root binding, CI key ceremony |
 | [Verify tree](guides/verify-tree.md) | `axiom verify --tree`, `--pre`, in-toto attestation and how to verify it later |
 | [Snapshot](guides/snapshot.md) | `axiom_repo_snapshot`: deterministic inventory of a root, diffing two snapshots |

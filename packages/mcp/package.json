@@ -1,7 +1,7 @@
 {
   "name": "@codai/axiom-mcp",
   "mcpName": "io.github.dragoscv/axiom",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "AXIOM v2 MCP server (stdio) and CLI: validate, compile, check and transactionally apply content-addressed manifest bundles inside an allowlisted set of roots",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

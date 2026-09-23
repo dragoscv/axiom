@@ -1,5 +1,18 @@
 # @codai/axiom-mcp
 
+## 2.3.0
+
+### Patch Changes
+
+- Updated dependencies [3e357c2]
+  - @codai/axiom-checks@2.3.0
+  - @codai/axiom-apply@2.3.0
+  - @codai/axiom-axm@2.3.0
+  - @codai/axiom-canon@2.3.0
+  - @codai/axiom-emitters-web@2.3.0
+  - @codai/axiom-plan@2.3.0
+  - @codai/axiom-schema@2.3.0
+
 ## 2.2.1
 
 ### Patch Changes

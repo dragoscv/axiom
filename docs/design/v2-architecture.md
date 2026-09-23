@@ -18,7 +18,7 @@ flowchart TB
   end
   subgraph engines [Engines — schema + canon only]
     plan["@codai/axiom-plan<br/>compile · CAS · ref · patch · emitter registry"]
-    checks["@codai/axiom-checks<br/>17 predicates · profiles · guard runner"]
+    checks["@codai/axiom-checks<br/>18 predicates · profiles · guard runner"]
     apply["@codai/axiom-apply<br/>containment · 2PC · journal · git PR · verifyTree"]
   end
   subgraph dsl [DSL]

@@ -188,7 +188,7 @@ flowchart TB
   schema["@codai/axiom-schema<br/>Zod v4 · ERROR_CODES · JSON Schema"]
   canon["@codai/axiom-canon<br/>JCS · sha256 · in-toto · DSSE"]
   plan["@codai/axiom-plan<br/>compile · CAS · ref · patch"]
-  checks["@codai/axiom-checks<br/>17 predicates · profiles · guards"]
+  checks["@codai/axiom-checks<br/>18 predicates · profiles · guards"]
   apply["@codai/axiom-apply<br/>containment · 2PC · journal · verify-tree"]
   axm["@codai/axiom-axm<br/>.axm parser"]
   lsp["@codai/axiom-axm-lsp<br/>language server"]
@@ -226,7 +226,7 @@ private `testkit`; nobody depends on `mcp`. Enforced by `check-package-deps`.
 | [`@codai/axiom-schema`](packages/schema/README.md) | Zod v4 schemas for Plan, Manifest, CheckReport, ApplyResult, Profile, Journal, RepoSnapshot; closed `ERROR_CODES`; JSON Schema export | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-schema?label=)](https://www.npmjs.com/package/@codai/axiom-schema) |
 | [`@codai/axiom-canon`](packages/canon/README.md) | JCS (RFC 8785), sha256, in-toto Statement v1, DSSE Ed25519 envelopes | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-canon?label=)](https://www.npmjs.com/package/@codai/axiom-canon) |
 | [`@codai/axiom-plan`](packages/plan/README.md) | Plan → ManifestBundle compiler; inline / CAS / `ref` / `patch` / `template` sources; `verifyBundle`, `diffManifests` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-plan?label=)](https://www.npmjs.com/package/@codai/axiom-plan) |
-| [`@codai/axiom-checks`](packages/checks/README.md) | 17 predicates incl. `expr.cel`, `expr.cedar`, `guard.external`, `manifest.requireSigned`; profiles `default` / `strict` / `permissive` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-checks?label=)](https://www.npmjs.com/package/@codai/axiom-checks) |
+| [`@codai/axiom-checks`](packages/checks/README.md) | 18 predicates incl. `expr.cel`, `expr.cedar`, `guard.external`, `manifest.requireSigned`; profiles `default` / `strict` / `permissive` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-checks?label=)](https://www.npmjs.com/package/@codai/axiom-checks) |
 | [`@codai/axiom-apply`](packages/apply/README.md) | Containment, staging, two-phase commit, journal, rollback, lock, dry-run diff, PR mode, `verifyTree` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-apply?label=)](https://www.npmjs.com/package/@codai/axiom-apply) |
 | [`@codai/axiom-axm`](packages/axm/README.md) | `.axm` DSL → `Plan` (Chevrotain) with positioned diagnostics; `formatAxm` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-axm?label=)](https://www.npmjs.com/package/@codai/axiom-axm) |
 | [`@codai/axiom-axm-lsp`](packages/axm-lsp/README.md) | Language server for `.axm`: diagnostics, completion, hover, symbols, formatting, semantic tokens | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-axm-lsp?label=)](https://www.npmjs.com/package/@codai/axiom-axm-lsp) |
@@ -258,7 +258,7 @@ apply. Catalogue, params and profile authoring: [docs/guides/checks.md](docs/gui
 
 ## Status & roadmap
 
-**2.2.x shipped.** Plan compiler with every source type, 17 predicates, fail-closed apply with
+**2.3.x shipped.** Plan compiler with every source type, 18 predicates, fail-closed apply with
 journal/rollback/PR mode, MCP SDK v2 (2026-07-28 wire, `--wire 2025` fallback) over stdio and
 HTTP with 17 tools, fail-closed gate, `.axm` DSL + LSP + VS Code extension, DSSE signing,
 `verify --tree` + attestation + GitHub Action, CI on ubuntu/windows/macos, 18 repo guards.

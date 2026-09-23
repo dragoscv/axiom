@@ -1,5 +1,12 @@
 # @codai/axiom-apply
 
+## 2.3.0
+
+### Patch Changes
+
+- @codai/axiom-canon@2.3.0
+  - @codai/axiom-schema@2.3.0
+
 ## 2.2.1
 
 ### Patch Changes

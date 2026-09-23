@@ -98,11 +98,11 @@ describe("diagnostics", () => {
 });
 
 describe("completion", () => {
-  it("lists all 17 built-in predicate ids after `using ` (parity with @codai/axiom-checks)", () => {
+  it("lists all 18 built-in predicate ids after `using ` (parity with @codai/axiom-checks)", () => {
     const text = 'axiom "2"\nplan p {\n  intent "x"\n  check c using \n}\n';
     const got = labels(text, "using ").sort();
     const registry = builtinRegistry().list().sort();
-    expect(registry).toHaveLength(17);
+    expect(registry).toHaveLength(18);
     expect(got).toEqual(registry);
     expect([...PREDICATE_IDS].sort()).toEqual(registry);
     for (const id of registry) expect(PREDICATES[id]).toBeTruthy();
