@@ -1,6 +1,6 @@
 # Checks: predicates and profiles
 
-*The 17 built-in predicates, their `params`, the fail-closed verdict rules, and how profiles compose them.*
+_The 18 built-in predicates, their `params`, the fail-closed verdict rules, and how profiles compose them._
 
 `@codai/axiom-checks` runs a list of `CheckRef`s over a `ManifestBundle` and
 returns a `CheckReport`. Every check is a **typed predicate** with a
@@ -8,7 +8,12 @@ Zod-validated `params` object; `expr.cel` (S-301) is one such predicate whose
 param is a CEL expression evaluated over the same facts.
 
 ```json
-{ "id": "no-env", "predicate": "path.deny", "params": { "globs": [".env*"] }, "severity": "error" }
+{
+  "id": "no-env",
+  "predicate": "path.deny",
+  "params": { "globs": [".env*"] },
+  "severity": "error"
+}
 ```
 
 - `id` is the check's name in the report; unique per merged list.
@@ -24,10 +29,10 @@ Globs everywhere are [picomatch](https://github.com/micromatch/picomatch) with
 
 `verdict` is one of:
 
-| Verdict | When |
-|---------|------|
-| `pass` | no finding with severity `error` |
-| `fail` | at least one `error` finding from a predicate |
+| Verdict | When                                                                                                                                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pass`  | no finding with severity `error`                                                                                                                 |
+| `fail`  | at least one `error` finding from a predicate                                                                                                    |
 | `error` | something could not be evaluated: unknown predicate, invalid params, a fact provider threw, a predicate threw, or `guard.external` was requested |
 
 `error` is never downgraded. `apply` treats anything other than `pass` as
@@ -79,26 +84,34 @@ the predicate reads.
 
 Every artifact path must match at least one glob. `requires: manifest`.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `globs` | string[] (min 1, each non-empty) | yes |
+| Param   | Type                             | Required |
+| ------- | -------------------------------- | -------- |
+| `globs` | string[] (min 1, each non-empty) | yes      |
 
 Fails on each path outside the allowed set. Finding id `path.allow`.
 
 ```json
-{ "id": "only-src", "predicate": "path.allow", "params": { "globs": ["src/**", "docs/**"] } }
+{
+  "id": "only-src",
+  "predicate": "path.allow",
+  "params": { "globs": ["src/**", "docs/**"] }
+}
 ```
 
 ### `path.deny`
 
 No artifact path may match any glob. `requires: manifest`.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `globs` | string[] (min 1) | yes |
+| Param   | Type             | Required |
+| ------- | ---------------- | -------- |
+| `globs` | string[] (min 1) | yes      |
 
 ```json
-{ "id": "no-env", "predicate": "path.deny", "params": { "globs": [".env*", "**/*.pem"] } }
+{
+  "id": "no-env",
+  "predicate": "path.deny",
+  "params": { "globs": [".env*", "**/*.pem"] }
+}
 ```
 
 ### `path.reservedNames`
@@ -115,11 +128,11 @@ schema validation). `requires: manifest`. Params: `{}` (strict, no keys).
 Scans the first 4 MiB of every non-deleted artifact's bytes (decoded as UTF-8,
 non-fatal) against named regexes. `requires: manifest, content`.
 
-| Param | Type | Default |
-|-------|------|---------|
-| `disable` | string[] of pattern names | `[]` |
-| `allowPaths` | glob[] of paths to skip | `[]` |
-| `pii` | boolean — also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) | `false` |
+| Param        | Type                                                                      | Default |
+| ------------ | ------------------------------------------------------------------------- | ------- |
+| `disable`    | string[] of pattern names                                                 | `[]`    |
+| `allowPaths` | glob[] of paths to skip                                                   | `[]`    |
+| `pii`        | boolean — also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) | `false` |
 
 Pattern names (`SECRET_PATTERN_NAMES`), by kind:
 
@@ -169,8 +182,15 @@ UUIDs and sequential placeholders therefore pass; every real test PAN (Visa
 `4111 1111 1111 1111`, Amex `378282246310005`, …) is still caught.
 
 ```json
-{ "id": "content.noSecrets", "predicate": "content.noSecrets",
-  "params": { "pii": true, "disable": ["phoneRo"], "allowPaths": ["docs/**", "**/*.test.ts"] } }
+{
+  "id": "content.noSecrets",
+  "predicate": "content.noSecrets",
+  "params": {
+    "pii": true,
+    "disable": ["phoneRo"],
+    "allowPaths": ["docs/**", "**/*.test.ts"]
+  }
+}
 ```
 
 **Globs and Next.js route groups.** Every glob parameter (`path.*`, `allowPaths`,
@@ -185,13 +205,17 @@ as written.
 Fails on any non-deleted artifact larger than `max`. Uses `manifest.bytes` when
 present, otherwise the resolved content length. `requires: manifest`.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `max` | int ≥ 0 | yes |
+| Param   | Type                               | Required       |
+| ------- | ---------------------------------- | -------------- |
+| `max`   | int ≥ 0                            | yes            |
 | `globs` | string[] — restrict to these paths | no (all paths) |
 
 ```json
-{ "id": "small-svgs", "predicate": "content.maxBytes", "params": { "max": 65536, "globs": ["**/*.svg"] } }
+{
+  "id": "small-svgs",
+  "predicate": "content.maxBytes",
+  "params": { "max": 65536, "globs": ["**/*.svg"] }
+}
 ```
 
 ### `content.encodingUtf8`
@@ -199,36 +223,48 @@ present, otherwise the resolved content length. `requires: manifest`.
 Fails on any non-deleted artifact whose bytes are not valid UTF-8.
 `requires: manifest, content`.
 
-| Param | Type | Required |
-|-------|------|----------|
+| Param   | Type     | Required       |
+| ------- | -------- | -------------- |
 | `globs` | string[] | no (all paths) |
 
 ```json
-{ "id": "utf8-sources", "predicate": "content.encodingUtf8", "params": { "globs": ["**/*.{ts,md,json}"] } }
+{
+  "id": "utf8-sources",
+  "predicate": "content.encodingUtf8",
+  "params": { "globs": ["**/*.{ts,md,json}"] }
+}
 ```
 
 ### `manifest.maxArtifacts`
 
 Fails when `artifactCount > max`. `requires: manifest`.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `max` | int ≥ 0 | yes |
+| Param | Type    | Required |
+| ----- | ------- | -------- |
+| `max` | int ≥ 0 | yes      |
 
 ```json
-{ "id": "manifest.maxArtifacts", "predicate": "manifest.maxArtifacts", "params": { "max": 200 } }
+{
+  "id": "manifest.maxArtifacts",
+  "predicate": "manifest.maxArtifacts",
+  "params": { "max": 200 }
+}
 ```
 
 ### `manifest.maxTotalBytes`
 
 Fails when the sum of `artifacts[].bytes` exceeds `max`. `requires: manifest`.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `max` | int ≥ 0 | yes |
+| Param | Type    | Required |
+| ----- | ------- | -------- |
+| `max` | int ≥ 0 | yes      |
 
 ```json
-{ "id": "manifest.maxTotalBytes", "predicate": "manifest.maxTotalBytes", "params": { "max": 8388608 } }
+{
+  "id": "manifest.maxTotalBytes",
+  "predicate": "manifest.maxTotalBytes",
+  "params": { "max": 8388608 }
+}
 ```
 
 ### `manifest.requireSigned`
@@ -238,11 +274,11 @@ root's trust store and, optionally, enforces the anti-rollback counter. Full
 protocol, key handling and CLI in [signing.md](signing.md). `requires: manifest`;
 needs a root (no root → `verdict: error`).
 
-| Param | Type | Default | Meaning |
-|-------|------|---------|---------|
-| `minSignatures` | int 1–16 | `1` | distinct trusted keys that must have produced a valid signature |
-| `antiRollback` | boolean | `false` | require `manifest.counter` and `counter > .axiom/trust/state.json#lastCounter` (and `≥ keys.json#minCounter`) |
-| `trustFile` | string | `.axiom/trust/keys.json` | root-relative POSIX path of the trust store |
+| Param           | Type     | Default                  | Meaning                                                                                                       |
+| --------------- | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `minSignatures` | int 1–16 | `1`                      | distinct trusted keys that must have produced a valid signature                                               |
+| `antiRollback`  | boolean  | `false`                  | require `manifest.counter` and `counter > .axiom/trust/state.json#lastCounter` (and `≥ keys.json#minCounter`) |
+| `trustFile`     | string   | `.axiom/trust/keys.json` | root-relative POSIX path of the trust store                                                                   |
 
 Finding ids: `signature.missing`, `signature.unknownKey`, `signature.bad`,
 `signature.notCanonical`, `signature.rollback` (`facts.reason` ∈ `NO_COUNTER |
@@ -251,8 +287,11 @@ unreadable/invalid → `ERR_PROVIDER_FAILED`, corrupt state → `ERR_TRUST_STATE
 all as provider errors (`verdict: error`).
 
 ```json
-{ "id": "manifest.requireSigned", "predicate": "manifest.requireSigned",
-  "params": { "minSignatures": 1, "antiRollback": true } }
+{
+  "id": "manifest.requireSigned",
+  "predicate": "manifest.requireSigned",
+  "params": { "minSignatures": 1, "antiRollback": true }
+}
 ```
 
 `apply` advances `lastCounter` only when the effective checks include this predicate
@@ -272,10 +311,10 @@ Parses every artifact matching `files` as JSON, counts keys in `dependencies` +
 `devDependencies`, fails when the count exceeds `max`. Non-JSON or non-object
 content is ignored. `requires: manifest, content`.
 
-| Param | Type | Default |
-|-------|------|---------|
-| `max` | int ≥ 0 | required |
-| `files` | glob[] | `["**/package.json"]` |
+| Param   | Type    | Default               |
+| ------- | ------- | --------------------- |
+| `max`   | int ≥ 0 | required              |
+| `files` | glob[]  | `["**/package.json"]` |
 
 ```json
 { "id": "deps.max", "predicate": "deps.max", "params": { "max": 50 } }
@@ -286,14 +325,17 @@ content is ignored. `requires: manifest, content`.
 Same parsing as `deps.max`; one finding `deps.deny.<pkg>` per denied dependency.
 `requires: manifest, content`.
 
-| Param | Type | Default |
-|-------|------|---------|
-| `packages` | string[] (min 1) | required |
-| `files` | glob[] | `["**/package.json"]` |
+| Param      | Type             | Default               |
+| ---------- | ---------------- | --------------------- |
+| `packages` | string[] (min 1) | required              |
+| `files`    | glob[]           | `["**/package.json"]` |
 
 ```json
-{ "id": "no-telemetry", "predicate": "deps.deny",
-  "params": { "packages": ["@vercel/analytics", "pino", "@opentelemetry/api"] } }
+{
+  "id": "no-telemetry",
+  "predicate": "deps.deny",
+  "params": { "packages": ["@vercel/analytics", "pino", "@opentelemetry/api"] }
+}
 ```
 
 ### `repo.noOverwriteOf`
@@ -302,13 +344,16 @@ Fails when an `overwrite` or `delete` targets a path that matches a glob **and
 already exists** in the repo. `create` ops are ignored (they fail at apply with
 `ERR_EXISTS` anyway). `requires: manifest, repo` — skipped without a root.
 
-| Param | Type | Required |
-|-------|------|----------|
-| `globs` | string[] (min 1) | yes |
+| Param   | Type             | Required |
+| ------- | ---------------- | -------- |
+| `globs` | string[] (min 1) | yes      |
 
 ```json
-{ "id": "repo.noOverwriteOf", "predicate": "repo.noOverwriteOf",
-  "params": { "globs": [".github/**", "**/*.lock", "pnpm-lock.yaml"] } }
+{
+  "id": "repo.noOverwriteOf",
+  "predicate": "repo.noOverwriteOf",
+  "params": { "globs": [".github/**", "**/*.lock", "pnpm-lock.yaml"] }
+}
 ```
 
 ### `repo.requireCompanion`
@@ -317,8 +362,8 @@ The brivio `check-ripple` shape. For each rule, when any artifact path matches
 `when`, every `expect[].match` must be satisfied by at least one artifact path
 **or** (unless `mustChange`) one existing repo file. `requires: manifest, repo`.
 
-| Param | Type |
-|-------|------|
+| Param   | Type                                                                                                      |
+| ------- | --------------------------------------------------------------------------------------------------------- |
 | `rules` | `{ when: glob, expect: { name: string, match: glob, mustChange?: boolean = false }[] (min 1) }[]` (min 1) |
 
 `mustChange: true` demands that the companion be **in this plan** — an existing
@@ -329,11 +374,87 @@ bite on a fresh clone. Finding id `repo.requireCompanion.<name>`,
 `facts.mustChange` echoes the flag.
 
 ```json
-{ "id": "ripple", "predicate": "repo.requireCompanion", "params": { "rules": [
-  { "when": "packages/mcp/src/tools/**",
-    "expect": [ { "name": "docs", "match": "docs/reference/mcp-tools.md" },
-                { "name": "spec", "match": "packages/mcp/spec/tools.json" } ] }
-] } }
+{
+  "id": "ripple",
+  "predicate": "repo.requireCompanion",
+  "params": {
+    "rules": [
+      {
+        "when": "packages/mcp/src/tools/**",
+        "expect": [
+          { "name": "docs", "match": "docs/reference/mcp-tools.md" },
+          { "name": "spec", "match": "packages/mcp/spec/tools.json" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### `repo.requireReference`
+
+Content-level ripple. `repo.requireCompanion` asks "does a companion _path_
+exist"; this asks "does the companion _mention this artifact_". For each rule,
+every artifact matching `when` (except the companion itself and `delete` ops)
+renders `mustContain` and requires the companion `in` to contain it. `requires:
+manifest, content, repo` — skipped without a root.
+
+| Param                 | Type                                                                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rules[].name`        | string — finding id suffix                                                                                                                                       |
+| `rules[].when`        | glob over artifact paths                                                                                                                                         |
+| `rules[].in`          | repo-relative **path** of the companion (not a glob)                                                                                                             |
+| `rules[].mustContain` | template; `${path}` = the triggering artifact's full path, `${basename}` = its last segment, `${dirname}` = the rest (`""` at the root)                          |
+| `rules[].mustChange`  | boolean, default `false` — the companion must be in **this plan**; an existing repo file does not count                                                          |
+| `rules[].jsonPointer` | optional RFC 6901 pointer (`""` = whole document, else starts with `/`); when set, `in` is parsed as JSON and the value there must contain the rendered template |
+
+**Where the companion is read from**, in order: the plan blob if `in` is an
+artifact (`facts.source: "plan"`; a plan `delete` of `in` counts as absent);
+otherwise the repo file via `repo.read` (`source: "repo"`), unless
+`mustChange`. Neither → `source: "absent"`, one finding per trigger.
+
+**What "contains" means.** Without `jsonPointer`: plain substring over the
+UTF-8 text. With it, by the resolved value's type: string → substring; array →
+**member equality** (a string element equal to the rendered template, so
+`"ply.ts"` does not satisfy `["apply.ts"]`); object → own key. Anything else
+(number, boolean, null, unresolvable pointer) cannot contain a string and is a
+provider error, not a pass.
+
+**Fails closed** (`verdict: error`, `facts.code: ERR_PROVIDER_FAILED`,
+`__provider: true`, never downgraded by a `warn` CheckRef) when the companion
+exists but cannot be read, is not UTF-8, is not JSON while `jsonPointer` is
+set, or the pointer does not resolve to a string/array/object. A planned
+companion whose blob is unavailable yields no finding here — the runner already
+reports the missing fact.
+
+Finding id `repo.requireReference.<name>`, `path` = the triggering artifact,
+`facts: { in, expected, source: "plan" | "repo" | "absent" }` plus
+`mustChange` on absent-companion findings and `jsonPointer` on pointer
+findings.
+
+```json
+{
+  "id": "tools-registered",
+  "predicate": "repo.requireReference",
+  "params": {
+    "rules": [
+      {
+        "name": "spec",
+        "when": "packages/mcp/src/tools/*.ts",
+        "in": "packages/mcp/spec/tools.json",
+        "jsonPointer": "/tools",
+        "mustContain": "${basename}"
+      },
+      {
+        "name": "sitemap",
+        "when": "apps/web/src/app/(marketing)/**/page.tsx",
+        "in": "apps/web/src/app/sitemap.ts",
+        "mustContain": "${dirname}",
+        "mustChange": true
+      }
+    ]
+  }
+}
 ```
 
 ### `guard.external`
@@ -344,15 +465,15 @@ only when the profile sets `facts.allowGuards: true` **and** the server/CLI was
 started with `--allow-guards`. Otherwise it returns one `error` finding
 (`code: ERR_FACT_DISABLED`, "external guards disabled") → `verdict: error`.
 
-| Param | Type | Default |
-|-------|------|---------|
-| `command` | string | required — relative: resolved under `<root>/scripts/`; absolute: must be in `--guard-allowlist` |
-| `args` | string[] | `[]` |
-| `cwd` | `"root" \| "staging"` | `"root"` |
-| `timeoutMs` | int 1–900000 (15 min; S-406 — anything over a client's per-call timeout belongs in an `axiom_check_start` task) | `30000` |
-| `env` | record<string,string> | — (added to the scrubbed env) |
-| `stdin` | `"bundle" \| "manifest" \| "none"` | `"bundle"` |
-| `legacyText` | boolean | `false` — accept brivio-style `OK    name` / `FAIL  name: reason` stdout |
+| Param        | Type                                                                                                            | Default                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `command`    | string                                                                                                          | required — relative: resolved under `<root>/scripts/`; absolute: must be in `--guard-allowlist` |
+| `args`       | string[]                                                                                                        | `[]`                                                                                            |
+| `cwd`        | `"root" \| "staging"`                                                                                           | `"root"`                                                                                        |
+| `timeoutMs`  | int 1–900000 (15 min; S-406 — anything over a client's per-call timeout belongs in an `axiom_check_start` task) | `30000`                                                                                         |
+| `env`        | record<string,string>                                                                                           | — (added to the scrubbed env)                                                                   |
+| `stdin`      | `"bundle" \| "manifest" \| "none"`                                                                              | `"bundle"`                                                                                      |
+| `legacyText` | boolean                                                                                                         | `false` — accept brivio-style `OK    name` / `FAIL  name: reason` stdout                        |
 
 **Command resolution.** No shell is ever involved (`spawn` with an args array,
 `windowsHide: true`). A relative `command` (with or without a `scripts/`
@@ -379,26 +500,26 @@ the runner supplied one (otherwise `ERR_PREDICATE_PARAMS`).
 type GuardOutput = {
   ok: boolean;
   findings?: Array<{
-    id: string;                       // finding id, e.g. "lint.todo"
+    id: string; // finding id, e.g. "lint.todo"
     severity?: "error" | "warn" | "info"; // default: "error" when ok:false, "info" when ok:true
     message: string;
-    path?: string;                    // RelPath; non-conforming values are kept in facts.rawPath
+    path?: string; // RelPath; non-conforming values are kept in facts.rawPath
     facts?: Record<string, unknown>;
   }>;
 };
 ```
 
-| Guard behaviour | Result |
-|-----------------|--------|
-| exit 0, valid JSON | findings mapped (none → `[]`) |
-| exit ≠ 0, valid JSON | same mapping |
-| `ok: false` with no findings | one `error` finding "guard reported ok:false without findings" |
-| exit 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` (fail closed) |
-| exit ≠ 0, non-JSON stdout | one `error` finding, `code: ERR_GUARD_OUTPUT` |
-| wall clock > `timeoutMs` | process tree killed, one `error` finding, `code: ERR_GUARD_TIMEOUT` |
-| runner cancelled (`axiom_task_cancel`, server stop) | process tree killed, one `error` finding, `code: ERR_TASK_CANCELLED` |
-| spawn failure (ENOENT etc.) | one `error` finding, `code: ERR_GUARD_OUTPUT` |
-| `legacyText: true` and no JSON | `FAIL  name: reason` lines → `error` findings `{id: name, message: reason}`; only `OK` lines → `[]` |
+| Guard behaviour                                     | Result                                                                                              |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| exit 0, valid JSON                                  | findings mapped (none → `[]`)                                                                       |
+| exit ≠ 0, valid JSON                                | same mapping                                                                                        |
+| `ok: false` with no findings                        | one `error` finding "guard reported ok:false without findings"                                      |
+| exit 0, non-JSON stdout                             | one `error` finding, `code: ERR_GUARD_OUTPUT` (fail closed)                                         |
+| exit ≠ 0, non-JSON stdout                           | one `error` finding, `code: ERR_GUARD_OUTPUT`                                                       |
+| wall clock > `timeoutMs`                            | process tree killed, one `error` finding, `code: ERR_GUARD_TIMEOUT`                                 |
+| runner cancelled (`axiom_task_cancel`, server stop) | process tree killed, one `error` finding, `code: ERR_TASK_CANCELLED`                                |
+| spawn failure (ENOENT etc.)                         | one `error` finding, `code: ERR_GUARD_OUTPUT`                                                       |
+| `legacyText: true` and no JSON                      | `FAIL  name: reason` lines → `error` findings `{id: name, message: reason}`; only `OK` lines → `[]` |
 
 **Evidence.** Every finding the guard produces — mapped findings, the
 "ok:false without findings" fallback, `ERR_GUARD_OUTPUT` and `ERR_GUARD_TIMEOUT`
@@ -416,8 +537,11 @@ provider status is `ok`, `error` (disabled, resolution failure, timeout, bad
 output) or `skipped` (no guard checks in the set).
 
 ```json
-{ "id": "repo-guards", "predicate": "guard.external",
-  "params": { "command": "scripts/axiom-guard-adapter.mjs", "timeoutMs": 60000 } }
+{
+  "id": "repo-guards",
+  "predicate": "guard.external",
+  "params": { "command": "scripts/axiom-guard-adapter.mjs", "timeoutMs": 60000 }
+}
 ```
 
 See [integration/brivio.md](../integration/brivio.md) for wiring brivio's `run-guards.mjs`.
@@ -429,20 +553,20 @@ facts (PLAN.md S-301, decision D-15). Evaluated by `@marcbachmann/cel-js` 8,
 loaded lazily on first use so the MCP eager bundle does not pay for it.
 `requires: manifest, content` (`repo` is read when referenced — see below).
 
-| Param | Type | Default |
-|-------|------|---------|
-| `expression` | string, 1–4096 chars | required |
-| `message` | string ≤ 2000 | `expression evaluated to false: <expression>` |
-| `severity` | `"error" \| "warn" \| "info"` | the CheckRef severity |
+| Param        | Type                          | Default                                       |
+| ------------ | ----------------------------- | --------------------------------------------- |
+| `expression` | string, 1–4096 chars          | required                                      |
+| `message`    | string ≤ 2000                 | `expression evaluated to false: <expression>` |
+| `severity`   | `"error" \| "warn" \| "info"` | the CheckRef severity                         |
 
 **Activation** — the only variables an expression may reference:
 
-| Variable | Shape |
-|----------|-------|
-| `manifest` | the canonical `ManifestBody`: `name`, `profile`, `planDigest`, `artifacts[]`, `checks[]`, `toolchain`, … — integers are CEL `int` |
-| `artifacts` | alias of `manifest.artifacts`: `{ path, op, mode, digest?: { sha256 }, bytes?, origin? }` — `delete` entries have no `digest`/`bytes` |
-| `content` | map `path → { bytes: int, sha256: string, text?: string }` for every non-delete artifact whose blob is available; `text` only when the blob is valid UTF-8 and ≤ 256 KiB |
-| `repo` | `{ exists: map path → bool (for every artifact path), packageJson?, gitHead?, gitDirty? }` — only when a root is authorised (`facts.allowRepo`). Referencing `repo` without one is an `error` finding (`ERR_PROVIDER_FAILED`), never a pass |
+| Variable    | Shape                                                                                                                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest`  | the canonical `ManifestBody`: `name`, `profile`, `planDigest`, `artifacts[]`, `checks[]`, `toolchain`, … — integers are CEL `int`                                                                                                           |
+| `artifacts` | alias of `manifest.artifacts`: `{ path, op, mode, digest?: { sha256 }, bytes?, origin? }` — `delete` entries have no `digest`/`bytes`                                                                                                       |
+| `content`   | map `path → { bytes: int, sha256: string, text?: string }` for every non-delete artifact whose blob is available; `text` only when the blob is valid UTF-8 and ≤ 256 KiB                                                                    |
+| `repo`      | `{ exists: map path → bool (for every artifact path), packageJson?, gitHead?, gitDirty? }` — only when a root is authorised (`facts.allowRepo`). Referencing `repo` without one is an `error` finding (`ERR_PROVIDER_FAILED`), never a pass |
 
 **Semantics.** The result must be `bool`: `true` → no finding; `false` → exactly
 **one** finding (`id: expr.cel`, `facts.expression`) with `message`; anything
@@ -456,8 +580,8 @@ indexed maps to guard optional fields.
 **Determinism bar (D-15), enforced in the predicate, not trusted from the lib:**
 
 - **Function allowlist** — only `has all exists exists_one map filter size
-  contains startsWith endsWith matches lowerAscii upperAscii trim split join
-  indexOf lastIndexOf substring string int uint double bool bytes dyn type`.
+contains startsWith endsWith matches lowerAscii upperAscii trim split join
+indexOf lastIndexOf substring string int uint double bool bytes dyn type`.
   `timestamp`, `duration`, `now`, `base64`, `hex`, `json`, `cel.bind`,
   `optional.*`, `at` and any unknown name → `ERR_PREDICATE_PARAMS`.
 - **RE2-safe regex** — `matches()` takes a string **literal** only; lookaround
@@ -474,28 +598,51 @@ A 345-case vector suite (`packages/checks/src/predicates/cel-vectors.json`:
 identical) and fast-check properties against a JS reference guard this.
 
 ```json
-{ "id": "no-large-ts", "predicate": "expr.cel", "severity": "error",
+{
+  "id": "no-large-ts",
+  "predicate": "expr.cel",
+  "severity": "error",
   "params": {
     "expression": "artifacts.filter(a, a.path.endsWith('.ts')).all(a, a.op == 'delete' || a.bytes < 200000)",
-    "message": "TypeScript artifacts must stay under 200 KB" } }
+    "message": "TypeScript artifacts must stay under 200 KB"
+  }
+}
 ```
 
 A worked profile that combines three expressions:
 
 ```json
 {
-  "apiVersion": "axiom.dev/v2", "kind": "Profile", "name": "web-cel",
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Profile",
+  "name": "web-cel",
   "extends": "default",
   "checks": [
-    { "id": "cel.no-todo", "predicate": "expr.cel", "severity": "warn",
-      "params": { "expression": "content.all(k, !('text' in content[k]) || !content[k].text.contains('TODO'))",
-                  "message": "new content must not contain TODO" } },
-    { "id": "cel.exec-only-scripts", "predicate": "expr.cel",
-      "params": { "expression": "artifacts.all(a, a.mode != '0755' || a.path.startsWith('scripts/'))",
-                  "message": "0755 is allowed only under scripts/" } },
-    { "id": "cel.create-is-new", "predicate": "expr.cel",
-      "params": { "expression": "artifacts.filter(a, a.op == 'create').all(a, !repo.exists[a.path])",
-                  "message": "create must not target an existing file" } }
+    {
+      "id": "cel.no-todo",
+      "predicate": "expr.cel",
+      "severity": "warn",
+      "params": {
+        "expression": "content.all(k, !('text' in content[k]) || !content[k].text.contains('TODO'))",
+        "message": "new content must not contain TODO"
+      }
+    },
+    {
+      "id": "cel.exec-only-scripts",
+      "predicate": "expr.cel",
+      "params": {
+        "expression": "artifacts.all(a, a.mode != '0755' || a.path.startsWith('scripts/'))",
+        "message": "0755 is allowed only under scripts/"
+      }
+    },
+    {
+      "id": "cel.create-is-new",
+      "predicate": "expr.cel",
+      "params": {
+        "expression": "artifacts.filter(a, a.op == 'create').all(a, !repo.exists[a.path])",
+        "message": "create must not target an existing file"
+      }
+    }
   ]
 }
 ```
@@ -515,12 +662,12 @@ first use. On a host where it is not installed every `expr.cedar` check is an
 closed, never a silent pass. `requires: manifest, content` (`repo` is read when
 the policy text mentions `exists` or `repo`).
 
-| Param | Type | Default |
-|-------|------|---------|
-| `policies` | Cedar policy-set text, 1–65536 chars, ≤ 256 static policies, **no templates** | required |
-| `mode` | `"forbid"` \| `"permit"` | `"forbid"` |
-| `message` | string ≤ 2000 | `denied by cedar policy <ids>` / `denied by cedar policy (default deny)` |
-| `severity` | `"error" \| "warn" \| "info"` | the CheckRef severity |
+| Param      | Type                                                                          | Default                                                                  |
+| ---------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `policies` | Cedar policy-set text, 1–65536 chars, ≤ 256 static policies, **no templates** | required                                                                 |
+| `mode`     | `"forbid"` \| `"permit"`                                                      | `"forbid"`                                                               |
+| `message`  | string ≤ 2000                                                                 | `denied by cedar policy <ids>` / `denied by cedar policy (default deny)` |
+| `severity` | `"error" \| "warn" \| "info"`                                                 | the CheckRef severity                                                    |
 
 **Modes.** Cedar is default-deny: a request is allowed only when some `permit`
 matches and no `forbid` does. `mode: "forbid"` appends
@@ -533,13 +680,13 @@ empty `facts.reason`.
 **Authorization model** — one `isAuthorized` request per artifact, all sharing
 one entity store:
 
-| Slot | Value |
-|------|-------|
-| `principal` | `Axiom::Plan::"<manifest.name>"` |
-| `action` | `Axiom::Action::"create"` \| `"overwrite"` \| `"delete"` (the artifact's `op`) |
-| `resource` | `Axiom::Artifact::"<path>"` with attributes `path`, `op`, `mode`, `ext`, `dir`, and when present `sha256`, `bytes` (Cedar `Long`), `origin`, `text` (UTF-8 blob ≤ 256 KiB), `exists` (repo) — guard optional ones with `resource has bytes` |
-| parent entity | `Axiom::Manifest::"<manifestDigest>"` (`resource in Axiom::Manifest::"…"` holds for every artifact) with `name`, `profile`, `planDigest`, `artifactCount`, `checks` (ids), `toolchain`, `counter?`, `preImage?` |
-| `context` | `{ manifest: { name, profile }, repo?: { gitHead?, gitDirty? } }` — `repo` only with an authorised root |
+| Slot          | Value                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `principal`   | `Axiom::Plan::"<manifest.name>"`                                                                                                                                                                                                            |
+| `action`      | `Axiom::Action::"create"` \| `"overwrite"` \| `"delete"` (the artifact's `op`)                                                                                                                                                              |
+| `resource`    | `Axiom::Artifact::"<path>"` with attributes `path`, `op`, `mode`, `ext`, `dir`, and when present `sha256`, `bytes` (Cedar `Long`), `origin`, `text` (UTF-8 blob ≤ 256 KiB), `exists` (repo) — guard optional ones with `resource has bytes` |
+| parent entity | `Axiom::Manifest::"<manifestDigest>"` (`resource in Axiom::Manifest::"…"` holds for every artifact) with `name`, `profile`, `planDigest`, `artifactCount`, `checks` (ids), `toolchain`, `counter?`, `preImage?`                             |
+| `context`     | `{ manifest: { name, profile }, repo?: { gitHead?, gitDirty? } }` — `repo` only with an authorised root                                                                                                                                     |
 
 Cedar strings support `==`, `like "glob*"` and set `.contains()`; there is no
 regex. Numbers are 64-bit `Long`s (overflow is an error). Sets and `if … then …
@@ -568,17 +715,17 @@ offline evaluator to ship. Cedar's WASM is the reference implementation,
 has no host callbacks, and its policy language was designed for exactly this
 principal/action/resource shape.
 
-**OWASP Agent Control Standard mapping.** In ACS terms AXIOM is a *Guardian*
-placed on the agent's **write** channel: the *Actor* is the coding agent (the
-`Axiom::Plan` principal), the *Actions* are the artifact `op`s, and the
-*Resources* are the artifact paths. Of the ACS decisions
+**OWASP Agent Control Standard mapping.** In ACS terms AXIOM is a _Guardian_
+placed on the agent's **write** channel: the _Actor_ is the coding agent (the
+`Axiom::Plan` principal), the _Actions_ are the artifact `op`s, and the
+_Resources_ are the artifact paths. Of the ACS decisions
 `allow | deny | modify | ask | defer`, a check produces exactly two — `pass` is
 `allow`, an `expr.cedar` finding is `deny` on the whole write set (a manifest
 is applied atomically, so a partial allow does not exist). AXIOM never emits
 `modify` (it does not rewrite an agent's manifest), never `ask` from a check
 (the human gate is `confirmDigest` on `axiom_apply`, upstream of the policy),
 and never `defer` (a policy that cannot be evaluated is `error`, which
-`apply` treats as `deny`). The journal is the ACS *audit record*.
+`apply` treats as `deny`). The journal is the ACS _audit record_.
 
 ```json
 { "id": "cedar.write-policy", "predicate": "expr.cedar", "severity": "error",
@@ -602,13 +749,13 @@ are in [profiles.md](../reference/profiles.md).
 
 ### `default`
 
-| id | predicate | params |
-|----|-----------|--------|
-| `path.reservedNames` | `path.reservedNames` | `{}` |
-| `content.noSecrets` | `content.noSecrets` | `{}` |
-| `manifest.maxArtifacts` | `manifest.maxArtifacts` | `{ "max": 2000 }` |
-| `manifest.maxTotalBytes` | `manifest.maxTotalBytes` | `{ "max": 67108864 }` (64 MiB) |
-| `repo.noOverwriteOf` | `repo.noOverwriteOf` | `{ "globs": [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env*"] }` |
+| id                       | predicate                | params                                                                          |
+| ------------------------ | ------------------------ | ------------------------------------------------------------------------------- |
+| `path.reservedNames`     | `path.reservedNames`     | `{}`                                                                            |
+| `content.noSecrets`      | `content.noSecrets`      | `{}`                                                                            |
+| `manifest.maxArtifacts`  | `manifest.maxArtifacts`  | `{ "max": 2000 }`                                                               |
+| `manifest.maxTotalBytes` | `manifest.maxTotalBytes` | `{ "max": 67108864 }` (64 MiB)                                                  |
+| `repo.noOverwriteOf`     | `repo.noOverwriteOf`     | `{ "globs": [".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env*"] }` |
 
 `limits: { maxArtifacts: 2000, maxTotalBytes: 67108864 }`.
 
@@ -616,17 +763,17 @@ are in [profiles.md](../reference/profiles.md).
 
 Adds, on top of everything in `default`:
 
-| id | predicate | params |
-|----|-----------|--------|
-| `manifest.noDeletes` | `manifest.noDeletes` | `{}` |
-| `deps.max` | `deps.max` | `{ "max": 50 }` |
-| `path.deny` | `path.deny` | `{ "globs": ["**/node_modules/**"] }` |
+| id                   | predicate            | params                                |
+| -------------------- | -------------------- | ------------------------------------- |
+| `manifest.noDeletes` | `manifest.noDeletes` | `{}`                                  |
+| `deps.max`           | `deps.max`           | `{ "max": 50 }`                       |
+| `path.deny`          | `path.deny`          | `{ "globs": ["**/node_modules/**"] }` |
 
 ### `permissive`
 
-| id | predicate | params |
-|----|-----------|--------|
-| `path.reservedNames` | `path.reservedNames` | `{}` |
+| id                   | predicate            | params |
+| -------------------- | -------------------- | ------ |
+| `path.reservedNames` | `path.reservedNames` | `{}`   |
 
 ## Custom profiles and `extends`
 
@@ -645,11 +792,21 @@ equal the file stem. Resolution (`loadProfile`):
 
 ```json
 {
-  "apiVersion": "axiom.dev/v2", "kind": "Profile", "name": "web",
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Profile",
+  "name": "web",
   "extends": "strict",
   "checks": [
-    { "id": "path.allow", "predicate": "path.allow", "params": { "globs": ["apps/web/**", "packages/ui/**"] } },
-    { "id": "content.noSecrets", "predicate": "content.noSecrets", "params": { "allowPaths": ["**/*.test.ts"] } }
+    {
+      "id": "path.allow",
+      "predicate": "path.allow",
+      "params": { "globs": ["apps/web/**", "packages/ui/**"] }
+    },
+    {
+      "id": "content.noSecrets",
+      "predicate": "content.noSecrets",
+      "params": { "allowPaths": ["**/*.test.ts"] }
+    }
   ]
 }
 ```

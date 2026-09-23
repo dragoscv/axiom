@@ -192,10 +192,10 @@ describe("expr.cedar predicate through runChecks", () => {
   const one = (params: unknown, severity: "error" | "warn" | "info" = "error") =>
     profileWith([{ id: "cedar", predicate: "expr.cedar", params: params as never, severity }]);
 
-  it("is registered (17 built-ins) and requires only manifest + content", () => {
+  it("is registered (18 built-ins) and requires only manifest + content", () => {
     const reg = builtinRegistry();
     expect(reg.list()).toContain("expr.cedar");
-    expect(reg.list()).toHaveLength(17);
+    expect(reg.list()).toHaveLength(18);
     expect(exprCedar.requires).toEqual(["manifest", "content"]);
   });
 

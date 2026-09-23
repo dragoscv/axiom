@@ -124,10 +124,10 @@ describe("expr.cel predicate through runChecks", () => {
   const one = (params: unknown, severity: "error" | "warn" | "info" = "error") =>
     profileWith([{ id: "cel", predicate: "expr.cel", params: params as never, severity }]);
 
-  it("is registered (17 built-ins) and requires only manifest + content", () => {
+  it("is registered (18 built-ins) and requires only manifest + content", () => {
     const reg = builtinRegistry();
     expect(reg.list()).toContain("expr.cel");
-    expect(reg.list()).toHaveLength(17);
+    expect(reg.list()).toHaveLength(18);
     expect(exprCel.requires).toEqual(["manifest", "content"]);
   });
 

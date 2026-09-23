@@ -6,7 +6,7 @@ import { depsDeny, depsMax } from "./deps.js";
 import { guardExternal } from "./guard.js";
 import { manifestMaxArtifacts, manifestMaxTotalBytes, manifestNoDeletes } from "./manifest.js";
 import { pathAllow, pathDeny, pathReservedNames } from "./path.js";
-import { repoNoOverwriteOf, repoRequireCompanion } from "./repo.js";
+import { repoNoOverwriteOf, repoRequireCompanion, repoRequireReference } from "./repo.js";
 import { manifestRequireSigned } from "./signature.js";
 
 export {
@@ -73,6 +73,7 @@ export {
   pathReservedNames,
   repoNoOverwriteOf,
   repoRequireCompanion,
+  repoRequireReference,
 };
 
 export const BUILTIN_PREDICATES: readonly AnyPredicate[] = [
@@ -90,6 +91,7 @@ export const BUILTIN_PREDICATES: readonly AnyPredicate[] = [
   depsDeny,
   repoNoOverwriteOf,
   repoRequireCompanion,
+  repoRequireReference,
   guardExternal,
   exprCel,
   exprCedar,

@@ -122,6 +122,8 @@ export const PREDICATES: Readonly<Record<string, string>> = {
   "repo.noOverwriteOf": "Existing files matching `globs` may not be overwritten.",
   "repo.requireCompanion":
     "When a path matches `when`, a companion matching `expect` must exist (in the plan or the repo; `mustChange: true` = in the plan).",
+  "repo.requireReference":
+    "When a path matches `when`, the companion file `in` must contain the rendered `mustContain` template (`${path}`, `${basename}`, `${dirname}`), optionally under a `jsonPointer`.",
   "guard.external": "Run an allow-listed external guard script (JSON stdout contract).",
   "expr.cel":
     "A boolean CEL `expression` over `manifest`, `artifacts`, `content`, `repo` (pure, allow-listed).",
