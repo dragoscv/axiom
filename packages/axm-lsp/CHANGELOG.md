@@ -1,5 +1,13 @@
 # @codai/axiom-axm-lsp
 
+## 2.4.0
+
+### Patch Changes
+
+- Updated dependencies [77ebf23]
+  - @codai/axiom-schema@2.4.0
+  - @codai/axiom-axm@2.4.0
+
 ## 2.3.1
 
 ### Patch Changes

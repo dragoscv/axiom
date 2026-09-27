@@ -91,7 +91,7 @@ async function writeRecordAtomic(dir: string, name: string, body: unknown): Prom
   try {
     await fs.rename(tmp, final);
   } catch (err) {
-    await fs.rm(tmp, { force: true });
+    await rmQuiet(tmp);
     throw err;
   }
   return final;
@@ -113,6 +113,25 @@ async function readdirOrEmpty(dir: string): Promise<string[]> {
 function transient(err: unknown): boolean {
   const c = errnoCode(err);
   return c === "EEXIST" || c === "EPERM" || c === "EACCES" || c === "EBUSY";
+}
+
+/**
+ * Delete a lock / ticket / intent file. The same Windows sharing violation that `transient` covers
+ * for create+read hits DELETE too: a waiter that is reading the holder has the file open, and
+ * `unlink` answers EPERM until it closes (lock.test "non-overlapping concurrent applies", 1 in
+ * ~20 full-suite runs under load). Retry briefly; a vanished file is success.
+ */
+async function rmQuiet(p: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rm(p, { force: true });
+      return;
+    } catch (err) {
+      const c = errnoCode(err);
+      if ((c !== "EPERM" && c !== "EACCES" && c !== "EBUSY") || attempt >= 40) throw err;
+      await sleep(Math.min(5 * (attempt + 1), 50));
+    }
+  }
 }
 
 /** `undefined` = vanished or transiently unreadable (never pruned); `null` = corrupt. */
@@ -159,7 +178,7 @@ async function listTickets(root: string, prune: boolean): Promise<Ticket[]> {
       typeof j.since === "string" &&
       typeof j.hostname === "string";
     if (!ok || staleRecord(j.pid as number, j.hostname as string, j.since as string)) {
-      if (prune) await fs.rm(p, { force: true });
+      if (prune) await rmQuiet(p);
       continue;
     }
     out.push({
@@ -242,14 +261,14 @@ export async function acquireLock(
                 cur.pid === holder.pid &&
                 cur.startedAt === holder.startedAt
               ) {
-                await fs.rm(p, { force: true });
+                await rmQuiet(p);
               }
             },
           };
         }
         lastHolder = await readHolder(p);
         if (isStale(lastHolder)) {
-          await fs.rm(p, { force: true });
+          await rmQuiet(p);
           continue;
         }
       } else {
@@ -269,7 +288,7 @@ export async function acquireLock(
       await sleep(Math.min(LOCK_POLL_MS, Math.max(1, deadline - now)));
     }
   } finally {
-    await fs.rm(ticketPath, { force: true });
+    await rmQuiet(ticketPath);
   }
 }
 
@@ -349,7 +368,7 @@ async function listIntents(
       typeof j.host === "string" &&
       typeof j.since === "string";
     if (!ok || staleRecord(j.pid as number, j.host as string, j.since as string)) {
-      if (prune) await fs.rm(file, { force: true });
+      if (prune) await rmQuiet(file);
       continue;
     }
     out.push({
@@ -413,7 +432,7 @@ async function withRegistryMutex<T>(root: string, fn: () => Promise<T>): Promise
         aged = st !== undefined && Date.now() - st.mtimeMs > REGISTRY_MUTEX_STALE_MS;
       }
       if (deadPid || aged) {
-        await fs.rm(p, { force: true });
+        await rmQuiet(p);
         continue;
       }
     }
@@ -426,7 +445,7 @@ async function withRegistryMutex<T>(root: string, fn: () => Promise<T>): Promise
     return await fn();
   } finally {
     const cur = await readJsonRecord(p);
-    if (cur !== undefined && cur !== null && cur.token === token) await fs.rm(p, { force: true });
+    if (cur !== undefined && cur !== null && cur.token === token) await rmQuiet(p);
   }
 }
 
@@ -477,7 +496,7 @@ export async function registerIntent(
     path: file,
     record,
     release: async () => {
-      await fs.rm(file, { force: true });
+      await rmQuiet(file);
     },
   };
 }
