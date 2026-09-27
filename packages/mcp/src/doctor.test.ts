@@ -2,7 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { newJournal, writeJournal } from "@codai/axiom-apply";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type DoctorOptions, GATE_P95_FAIL_MS, GATE_PROBE_RUNS, runDoctor } from "./doctor.js";
+import {
+  type DoctorOptions,
+  GATE_P95_FAIL_MS,
+  GATE_PROBE_RUNS,
+  runDoctor,
+  stripJsonc,
+} from "./doctor.js";
 import { runInit } from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -122,6 +128,31 @@ describe("axiom doctor (S-702)", () => {
       }),
     );
     expect(byId(await runDoctor(base()), "hook.copilot")?.status).toBe("warn");
+  });
+
+  it("a JSONC .vscode/mcp.json (comments, trailing commas) is read, not reported as invalid", async () => {
+    // brivio's mcp.json carries // comments; strict JSON.parse flagged it "not valid JSON".
+    await runInit({ root: repo.root, profileName: "demo" });
+    await writeFile(
+      join(repo.root, ".vscode", "mcp.json"),
+      [
+        "{",
+        '  "servers": {',
+        "    // local db, see infra/docker-compose.yml",
+        '    "pg": { "command": "npx", "args": ["postgresql://u:p@h:1/db"] },',
+        "    /* the gate */",
+        '    "axiom": { "command": "npx", "args": ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "/w"] },',
+        "  },",
+        "}",
+      ].join("\n"),
+    );
+    const r = await runDoctor(base());
+    expect(byId(r, "mcp.vscode")?.status).toBe("ok");
+    // `//` inside a string (the postgres URL) must survive stripping.
+    expect(JSON.parse(stripJsonc('{"u": "http://x//y", // c\n "b": [1,],}'))).toEqual({
+      u: "http://x//y",
+      b: [1],
+    });
   });
 
   it("a broken journal chain fails", async () => {
