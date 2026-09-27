@@ -9,8 +9,8 @@ Everything below also works with `npx -y @codai/axiom-mcp <verb>` in place of `a
 flowchart LR
   P[plan.json] -->|axiom compile| B[bundle.json<br/>manifestDigest]
   B -->|axiom check| R[CheckReport<br/>pass]
-  B -->|axiom apply --dry-run| D[unified diff]
-  B -->|axiom apply --confirm digest| T[tree written<br/>.axiom/journal · applied]
+  B -->|"axiom apply &#8209;&#8209;dry-run"| D[unified diff]
+  B -->|"axiom apply &#8209;&#8209;confirm digest"| T["tree written<br/>.axiom/journal · applied"]
   T -.->|axiom rollback digest| P0[previous bytes]
 ```
 

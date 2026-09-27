@@ -16,7 +16,7 @@ flowchart LR
     K[private key<br/>AXIOM_SIGNING_KEY · --key-file]
     B[bundle.json] --> S[axiom sign]
     K --> S
-    S --> SB[bundle + signatures[]<br/>manifestDigest unchanged]
+    S --> SB["bundle + signatures<br/>manifestDigest unchanged"]
   end
   subgraph root [Target root — .axiom/trust/]
     KS[keys.json<br/>pinned Ed25519 public keys · rootId?]

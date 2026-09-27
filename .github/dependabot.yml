@@ -44,6 +44,13 @@ updates:
     labels: [dependencies, ci]
     commit-message:
       prefix: "chore(ci)"
+    ignore:
+      # v6 self-updates pnpm to the `packageManager` version but on windows-2025 the resulting
+      # `pnpm install`/`pnpm build` produce no output and no dist (PR #7, run 35556883562):
+      # bundle-size then fails with "packages/mcp/dist/cli.js missing". Stay on v4 until the
+      # Windows path is fixed upstream; re-test by removing this block.
+      - dependency-name: pnpm/action-setup
+        versions: [">=5"]
     groups:
       actions:
         patterns:

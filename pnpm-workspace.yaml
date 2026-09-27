@@ -34,6 +34,7 @@ catalog:
   "@astrojs/starlight": 0.42.2
   astro-mermaid: 2.1.0
   mermaid: 12.0.0
+  happy-dom: 20.14.5
   starlight-links-validator: 0.26.0
   starlight-github-alerts: 0.4.0
   sharp: 0.35.4

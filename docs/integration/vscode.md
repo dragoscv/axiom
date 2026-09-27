@@ -17,9 +17,9 @@ flowchart LR
     CP[Copilot agent] -->|tools/call| MCPC[MCP client]
     CP -->|PreToolUse| HK[axiom gate --stdin]
   end
-  EXT -->|node-ipc| LSP[@codai/axiom-axm-lsp<br/>parseAxm · formatAxm]
+  EXT -->|node-ipc| LSP["@codai/axiom-axm-lsp<br/>parseAxm · formatAxm"]
   MCPC -->|stdio| SRV[axiom mcp --root workspace]
-  LSP --- AXM[@codai/axiom-axm]
+  LSP --- AXM["@codai/axiom-axm"]
   SRV --- AXM
 ```
 

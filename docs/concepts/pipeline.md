@@ -18,7 +18,7 @@ flowchart LR
   D -->|confirmDigest = manifestDigest| AP[apply<br/>two-phase commit]
   AP --> J[journal/<hex>.json<br/>applied/<hex>.json]
   J -.->|rollback digest| AP
-  M -.->|sign · verify --tree| S[signatures[] · in-toto attestation]
+  M -.->|"sign · verify &#8209;&#8209;tree"| S["signatures · in-toto attestation"]
 ```
 
 ## Stage by stage

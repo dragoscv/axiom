@@ -41,7 +41,7 @@ Globs everywhere are [picomatch](https://github.com/micromatch/picomatch) with
 
 ```mermaid
 flowchart TD
-  S[runChecks bundle · profile · root?] --> P{preImage[] present<br/>and root given?}
+  S["runChecks bundle · profile · root?"] --> P{"preImage present<br/>and root given?"}
   P -- drifted --> E[verdict: error<br/>manifest.preImage ERR_PREIMAGE_CHANGED]
   P -- verified / unverified --> L[for each CheckRef in merged order]
   L --> K{predicate registered?}

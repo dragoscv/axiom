@@ -36,7 +36,7 @@ flowchart TB
   RT --> CP & CK & AP
   PR --> CK & HK
   TS --> CK
-  AP -->|verify --tree| AT
+  AP -->|"verify &#8209;&#8209;tree"| AT
   CP -->|axiom sign, key never in server| SG --> CK
 ```
 
