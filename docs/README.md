@@ -50,7 +50,7 @@ flowchart LR
 | Page | Purpose |
 |---|---|
 | [CLI](reference/cli.md) | Every verb and flag, exit codes, examples |
-| [MCP tools](reference/mcp-tools.md) | The 17 tools, tasks and chunked plans, resources, transports, `--wire` eras |
+| [MCP tools](reference/mcp-tools.md) | The 18 tools, tasks and chunked plans, resources, transports, `--wire` eras |
 | [Plan format](reference/plan-format.md) | Field-by-field wire types: Plan, Manifest, Profile, CheckReport, ApplyResult, Journal |
 | [Error codes](reference/error-codes.md) | The closed `ERROR_CODES` enum with meaning and raising surface |
 | [Profiles](reference/profiles.md) | Profile schema, built-in `default` / `strict` / `permissive`, `extends`, discovery, the gate profile |

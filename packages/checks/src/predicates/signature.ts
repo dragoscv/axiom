@@ -22,6 +22,13 @@ import {
   TrustStoreSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
+import {
+  compileSubjectRegex,
+  type KeylessPolicy,
+  keylessPayload,
+  keylessSignaturesOf,
+  verifyManifestKeyless,
+} from "../keyless.js";
 import { definePredicate, type FactContext } from "../types.js";
 import { finding } from "./util.js";
 
@@ -60,7 +67,39 @@ export const SIGNATURE_FINDING_IDS = {
   rollback: "signature.rollback",
   /** The trust store declares a `rootId` and this envelope is unbound or bound to another root (S-409). */
   unbound: "signature.unbound",
+  /** `keyless` policy set and no keyless signature verified (S-705). */
+  keylessMissing: "signature.keylessMissing",
+  /** A keyless signature's certificate was issued by another OIDC issuer. */
+  keylessIssuer: "signature.keylessIssuer",
+  /** A keyless signature's certificate subject (SAN) does not fully match `subjectRegex`. */
+  keylessSubject: "signature.keylessSubject",
+  /** A keyless bundle is malformed, signs another payload, or fails cryptographic verification. */
+  keylessBad: "signature.keylessBad",
 } as const;
+
+export const SUBJECT_REGEX_MAX = 1024;
+
+/** Signer identity policy for Sigstore keyless signatures (S-705). */
+export const KeylessParams = z
+  .object({
+    /** Exact OIDC issuer, e.g. `https://token.actions.githubusercontent.com`. */
+    issuer: z.url({ protocol: /^https$/ }),
+    /** Regex over the certificate SAN; matched against the WHOLE subject (implicitly anchored). */
+    subjectRegex: z
+      .string()
+      .min(1)
+      .max(SUBJECT_REGEX_MAX)
+      .superRefine((src, c) => {
+        try {
+          compileSubjectRegex(src);
+        } catch {
+          c.addIssue({ code: "custom", message: "subjectRegex does not compile" });
+        }
+      }),
+    /** Read the Sigstore trusted root from the TUF cache only (no network). */
+    offline: z.boolean().default(false),
+  })
+  .strict();
 
 export const RequireSignedParams = z
   .object({
@@ -70,6 +109,12 @@ export const RequireSignedParams = z
     antiRollback: z.boolean().default(false),
     /** Relative POSIX path of the trust store under the root. */
     trustFile: z.string().min(1).default(TRUST_FILE_DEFAULT),
+    /**
+     * S-705: require ≥ 1 Sigstore keyless signature whose certificate matches this identity.
+     * Each distinct verified identity also counts toward `minSignatures`. With `keyless` set a
+     * missing trust file means "no Ed25519 keys" instead of `ERR_NOT_FOUND`.
+     */
+    keyless: KeylessParams.optional(),
   })
   .strict();
 
@@ -347,11 +392,39 @@ export const manifestRequireSigned = definePredicate<RequireSignedParamsT>({
   requires: ["manifest"],
   async run(ctx, params) {
     const loaded = await loadTrustStore(ctx, params.trustFile);
-    if ("finding" in loaded) return [loaded.finding];
-    const store = loaded.store;
+    let store: TrustStore;
+    if ("finding" in loaded) {
+      const keylessOnly =
+        params.keyless !== undefined && loaded.finding.facts.code === "ERR_NOT_FOUND";
+      if (!keylessOnly) return [loaded.finding];
+      store = { version: 1, keys: [] };
+    } else {
+      store = loaded.store;
+    }
     const counter = ctx.manifest.counter;
 
-    const { keyids, findings } = verifyBundleSignatures(ctx.bundle, store, counter);
+    const hasEd25519 = (ctx.bundle.signatures ?? []).length > 0;
+    const ed =
+      params.keyless !== undefined && !hasEd25519
+        ? { keyids: [] as string[], findings: [] as Finding[] }
+        : verifyBundleSignatures(ctx.bundle, store, counter);
+    const keyids = [...ed.keyids];
+    const findings = [...ed.findings];
+    if (params.keyless !== undefined) {
+      const k = await verifyKeylessSignatures(ctx, store, params.keyless);
+      if ("finding" in k) return [k.finding];
+      if (k.identities.length === 0) {
+        return dedupe([
+          ...k.findings,
+          fail("signature.keylessMissing", "no keyless signature matches the signer policy", {
+            issuer: params.keyless.issuer,
+            subjectRegex: params.keyless.subjectRegex,
+          }),
+        ]);
+      }
+      keyids.push(...k.identities);
+      findings.push(...k.findings);
+    }
     const out: Finding[] = [];
     if (keyids.length < params.minSignatures) {
       // Report the concrete reasons; if every envelope verified but too few keys, say so.
@@ -402,6 +475,99 @@ export const manifestRequireSigned = definePredicate<RequireSignedParamsT>({
     return [];
   },
 });
+
+type KeylessResult = { identities: string[]; findings: Finding[] } | { finding: Finding };
+
+/**
+ * Verify every keyless Sigstore bundle carried by the manifest bundle. A store with a `rootId`
+ * requires the root-bound payload for that id; otherwise the unbound `JCS(manifest)` payload.
+ * Verification that cannot run (module missing, trusted root unavailable) → provider error.
+ */
+async function verifyKeylessSignatures(
+  ctx: FactContext,
+  store: TrustStore,
+  policy: KeylessPolicy & { offline: boolean },
+): Promise<KeylessResult> {
+  const carried = keylessSignaturesOf(ctx.bundle);
+  if ("invalid" in carried) {
+    return {
+      identities: [],
+      findings: [
+        fail("signature.keylessBad", "keyless signatures are malformed", { reason: "MALFORMED" }),
+      ],
+    };
+  }
+  const bound = store.rootId !== undefined;
+  const payload = bound
+    ? keylessPayload({ manifest: ctx.manifest, rootId: store.rootId })
+    : keylessPayload(ctx.manifest);
+  if (!bound && `sha256:${sha256Hex(payload)}` !== ctx.bundle.manifestDigest) {
+    return {
+      identities: [],
+      findings: [
+        fail("signature.keylessBad", "manifest does not hash to manifestDigest", {
+          reason: "PAYLOAD_MISMATCH",
+        }),
+      ],
+    };
+  }
+  const payloadType = bound ? AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE : AXIOM_MANIFEST_PAYLOAD_TYPE;
+  const identities = new Set<string>();
+  const findings: Finding[] = [];
+  for (const [i, sb] of carried.entries()) {
+    let v: Awaited<ReturnType<typeof verifyManifestKeyless>>;
+    try {
+      v = await verifyManifestKeyless(sb, payload, policy, {
+        payloadType,
+        offline: policy.offline,
+      });
+    } catch (e) {
+      const code = isAxiomErrorLike(e) ? e.code : "ERR_PROVIDER_FAILED";
+      const reason = isAxiomErrorLike(e) ? e.details?.reason : undefined;
+      return {
+        finding: providerError(
+          code,
+          `keyless verification unavailable: ${e instanceof Error ? e.message : String(e)}`,
+          {
+            index: i,
+            ...(typeof reason === "string" ? { reason } : {}),
+          },
+        ),
+      };
+    }
+    if (v.ok && v.issuer !== undefined && v.subject !== undefined) {
+      identities.add(`keyless:${v.issuer}|${v.subject}`);
+      continue;
+    }
+    const facts: Record<string, unknown> = { index: i, reason: v.failure ?? "UNKNOWN" };
+    if (v.issuer !== undefined) facts.issuer = v.issuer;
+    if (v.subject !== undefined) facts.subject = v.subject;
+    if (v.failure === "ISSUER_MISMATCH") {
+      findings.push(
+        fail("signature.keylessIssuer", `keylessSignatures[${i}] has another issuer`, facts),
+      );
+    } else if (v.failure === "SUBJECT_MISMATCH" || v.failure === "NO_IDENTITY") {
+      findings.push(
+        fail("signature.keylessSubject", `keylessSignatures[${i}] subject does not match`, facts),
+      );
+    } else {
+      findings.push(
+        fail("signature.keylessBad", `keylessSignatures[${i}] failed verification`, facts),
+      );
+    }
+  }
+  return { identities: [...identities].sort(), findings };
+}
+
+function isAxiomErrorLike(
+  e: unknown,
+): e is { code: string; details?: Record<string, unknown> | undefined } {
+  return (
+    e instanceof Error &&
+    e.name === "AxiomError" &&
+    typeof (e as { code?: unknown }).code === "string"
+  );
+}
 
 function dedupe(findings: Finding[]): Finding[] {
   const seen = new Set<string>();

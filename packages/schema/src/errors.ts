@@ -31,7 +31,11 @@ export const ERROR_CODES = [
   "ERR_CHECKS_FAILED",
   "ERR_PREIMAGE_CHANGED",
   "ERR_JOURNAL_CORRUPT",
+  /** A journal's hash chain is broken: an entry was edited, removed or reordered (S-706). */
+  "ERR_JOURNAL_CHAIN",
   "ERR_EBUSY",
+  /** Another staged / in-flight manifest on the same root touches an overlapping path (S-703). */
+  "ERR_CONFLICT",
   // schema
   "ERR_INVALID_PLAN",
   "ERR_INVALID_MANIFEST",
@@ -47,6 +51,8 @@ export const ERROR_CODES = [
   // signing (D-16)
   "ERR_SIGNATURE_MISSING",
   "ERR_SIGNATURE_INVALID",
+  /** Keyless (Sigstore) signing requested but no ambient OIDC token / network is available (S-705). */
+  "ERR_KEYLESS_UNAVAILABLE",
   /** Anti-rollback state file (`.axiom/trust/state.json`) unreadable or fails schema. */
   "ERR_TRUST_STATE_CORRUPT",
   /** Rollback of a partially committed apply itself failed; the tree may be inconsistent. */

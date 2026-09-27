@@ -8,10 +8,34 @@ CLI, the `gate --stdin` hook and the engine the GitHub Action installs. The othe
 ([codai](../integration/codai.md) does). Node ≥ 22.14 is required for every channel except the
 standalone binaries.
 
+**The usual path — three commands:**
+
+```sh
+npm i -g @codai/axiom-mcp      # global `axiom` bin (hooks need it; npx is too slow for a hook)
+axiom init                     # in the repository root: MCP entry, hook, profiles, .gitignore
+axiom doctor                   # verifies bin, hooks, gate latency, lock, journals, profiles; exit 2 = a check failed
+```
+
+`axiom init` detects the harness from the marker directories in the root (`.github`, `.claude`,
+`.codex`, `.vscode`; none → copilot + vscode) or takes `--harness`, and is idempotent:
+
+| Harness | Files `axiom init` writes |
+|---|---|
+| Copilot CLI (`copilot`) | `.github/hooks/axiom-gate.json` · `.vscode/mcp.json` |
+| VS Code (`vscode`) | `.github/hooks/axiom-gate.json` · `.vscode/mcp.json` |
+| Claude Code (`claude`) | `.claude/settings.json` (one `hooks.PreToolUse` entry merged in) · `.vscode/mcp.json` |
+| Codex (`codex`) | no hook (Codex has no hook API) — a note pointing at [harnesses.md § Codex](../integration/harnesses.md#codex) · `.vscode/mcp.json` |
+| every run | `.axiom/profiles/<repo-name>.json` (extends `default`) · `.axiom/gate-profile.json` · `.gitignore` lines `.axiom/*`, `!.axiom/profiles/`, `!.axiom/gate-profile.json` |
+
+An existing file is never overwritten without `--force`: JSON files are merged (other servers
+and hooks are kept), a file that is not plain JSON is skipped with a note, and each file is
+reported as `created`, `merged`, `updated` or `skipped`. Details of both verbs:
+[quickstart.md § 1](quickstart.md#1-wire-the-repo--axiom-init--axiom-doctor).
+
 | You want to… | Use | Command |
 |---|---|---|
 | Try it, or run a long-lived MCP server from an editor | `npx` | `npx -y @codai/axiom-mcp mcp --root .` |
-| Run the CLI or a **PreToolUse hook** | global bin | `npm i -g @codai/axiom-mcp` → `axiom --version` |
+| Run the CLI or a **PreToolUse hook** | global bin | `npm i -g @codai/axiom-mcp` → `axiom init` → `axiom doctor` |
 | Run without Node installed (CI images, locked-down hosts) | standalone binary (from 2.2.1) | `curl -fsSL https://dragoscv.github.io/axiom/install.sh \| sh` · `irm https://dragoscv.github.io/axiom/install.ps1 \| iex` |
 | The same binary through a package manager (macOS, Linux) | Homebrew | `brew install dragoscv/tap/axiom` |
 | Edit `.axm` files with diagnostics and completion | VS Code extension | `axiom-axm-<version>.vsix` from the [GitHub release](https://github.com/dragoscv/axiom/releases) |
@@ -39,12 +63,16 @@ install prompt so the harness never blocks on it.
 ```sh
 npm install -g @codai/axiom-mcp        # or: pnpm add -g @codai/axiom-mcp
 axiom --version
-axiom --help
+axiom init                             # wire the repository you are in
+axiom doctor                           # the `bin` check confirms PATH resolves to this version
 ```
 
 The package has **no runtime dependencies**; the engines are bundled into `dist/cli-main.js` and
 lazy chunks, so the install is a single tarball. Upgrade with the same command; the version is in
 the first line of `axiom --help`.
+
+`axiom doctor` warns when the `axiom` a hook would find on `PATH` is missing or a different
+version from the CLI you ran it with — the usual cause of "the hook does nothing".
 
 Per-OS notes:
 

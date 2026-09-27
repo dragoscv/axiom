@@ -464,6 +464,18 @@
           "commitMessage": {
             "description": "pr mode: commit message (passed to git on stdin)",
             "type": "string"
+          },
+          "lockTimeoutMs": {
+            "description": "How long to wait in the root's lock queue (ms); timeout → ERR_LOCKED with details { holder, waitedMs, queuePosition }",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "keepBackups": {
+            "description": "Pre-image backup sets kept under .axiom/backup after commit (default 3)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
           }
         },
         "required": [
@@ -564,6 +576,20 @@
       "parameters": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "axiom_status",
+      "risk": "READ",
+      "description": "Read-only snapshot of a root's write state, same as `axiom status --json`: who holds .axiom/lock (pid, host, digest, since, stale), the wait queue, registered in-flight intents (paths), interrupted journals that need `axiom_rollback`, the last applied chain entry and whether the journal hash chain verifies. Never takes the lock.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          }
+        }
       }
     },
     {

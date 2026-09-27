@@ -42,6 +42,8 @@ describe("spec/tools.json parity", () => {
     expect(risk.axiom_plan_begin).toBe("ACT");
     expect(risk.axiom_plan_add).toBe("ACT");
     expect(risk.axiom_plan_seal).toBe("ACT");
+    // S-706: status snapshot never takes the lock
+    expect(risk.axiom_status).toBe("READ");
   });
 
   it("riskClass follows annotations; names are unique and snake_case", () => {
@@ -70,6 +72,7 @@ describe("spec/tools.json parity", () => {
       "axiom_repo_snapshot",
       "axiom_rollback",
       "axiom_roots_list",
+      "axiom_status",
       "axiom_task_cancel",
       "axiom_task_get",
     ]);

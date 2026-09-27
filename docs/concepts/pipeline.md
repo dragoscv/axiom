@@ -132,8 +132,10 @@ Three properties fall out of this shape:
   someone else after the apply are left alone. If the rollback itself fails the result is
   `ERR_ROLLBACK` and the journal is kept for inspection.
 
-`mode: pr` wraps exactly this in `git switch -c` … `git commit -F -` with explicit paths and no
-shell ([apply.md § PR mode](../guides/apply.md#pr-mode)).
+`mode: pr` runs exactly this inside an isolated linked worktree at `.axiom/wt/<hex12>` on a new
+branch from `HEAD`, then `git commit -F -` with explicit paths and no shell; the shared checkout's
+`HEAD`, index and files are never touched and the worktree is removed afterwards
+([apply.md § PR mode](../guides/apply.md#pr-mode)).
 
 ## What the journal gives you afterwards
 

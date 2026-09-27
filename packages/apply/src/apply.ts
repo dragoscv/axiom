@@ -37,26 +37,29 @@ import {
   sha256Of,
 } from "./fsx.js";
 import {
+  addWorktree,
   assertPathsClean,
   assertRepoToplevel,
   branchExists,
   compareUrlFor,
-  currentBranch,
   defaultBranchName,
   defaultCommitMessage,
   headCommit,
+  removeWorktree,
   runGit,
   validateBranchName,
 } from "./git.js";
 import {
   listJournals,
   newJournal,
+  readHistory,
   readJournal,
+  recordTerminal,
   removeJournal,
   setPhase,
   writeJournal,
 } from "./journal.js";
-import { withLock } from "./lock.js";
+import { type Intent, LOCK_TIMEOUT_MS, registerIntent, withLock } from "./lock.js";
 import { realpathNative } from "./realpath.js";
 import { renameRetry, unlinkRetry, writeAtomic } from "./write.js";
 
@@ -83,7 +86,7 @@ export interface ApplyOptions {
   confirmDigest?: string;
   keepBackups?: number;
   preChecks?: (staged: StagedTree) => Promise<CheckReport>;
-  /** Test hook: override the lock wait (ms). */
+  /** How long to wait in the lock queue (ms, default `LOCK_TIMEOUT_MS`); timeout → `ERR_LOCKED`. */
   lockTimeoutMs?: number;
   /** PR mode: branch to create (default `axiom/<name>/<digest12>`). */
   branch?: string;
@@ -110,11 +113,16 @@ export function backupDir(root: string, digest: DigestRef): string {
 export function appliedPath(root: string, digest: DigestRef): string {
   return path.join(root, ".axiom", "applied", `${hexOf(digest)}.json`);
 }
+/** PR mode (S-704): the axiom-owned linked worktree for a digest. */
+export function worktreeDir(root: string, digest: DigestRef): string {
+  return path.join(root, ".axiom", "wt", hexOf(digest).slice(0, 12));
+}
 
 function toApplyError(err: unknown): ApplyError {
   if (err instanceof AxiomError) {
     const out: ApplyError = { code: err.code, message: err.message };
     if (err.path !== undefined && isValidRelPath(err.path)) out.path = err.path;
+    if (err.details !== undefined && Object.keys(err.details).length > 0) out.details = err.details;
     return out;
   }
   return { code: "ERR_INTERNAL", message: err instanceof Error ? err.message : String(err) };
@@ -175,6 +183,12 @@ async function writeAppliedMarker(rootReal: string, result: ApplyResult): Promis
   await writeAtomic(p, new TextEncoder().encode(JSON.stringify(result)));
 }
 
+/**
+ * Keep the backups of the `keep` most recent applies. Order comes from the journal chain
+ * (S-706/S-707: a copy or a clock change can reset an mtime, a chain `seq` cannot); a backup
+ * the chain does not know (pre-2.4 root, chain unreadable) falls back to mtime and sorts after
+ * every chained one, so it is pruned first.
+ */
 async function pruneBackups(rootReal: string, keep: number): Promise<void> {
   const dir = path.join(rootReal, ".axiom", "backup");
   let names: string[];
@@ -184,13 +198,35 @@ async function pruneBackups(rootReal: string, keep: number): Promise<void> {
     if (errnoCode(err) === "ENOENT") return;
     throw err;
   }
-  const entries: { name: string; mtime: number }[] = [];
+  const seqOf = new Map<string, number>();
+  try {
+    for (const h of await readHistory(rootReal)) {
+      const hex = hexOf(h.manifestDigest);
+      if (!seqOf.has(hex)) seqOf.set(hex, h.seq);
+    }
+  } catch {
+    // chain unreadable → mtime order for everything (never block an apply on pruning)
+  }
+  const entries: { name: string; seq: number; mtime: number }[] = [];
   for (const n of names) {
     const st = await lstatOrNull(path.join(dir, n));
-    if (st?.isDirectory()) entries.push({ name: n, mtime: st.mtimeMs });
+    if (st?.isDirectory()) entries.push({ name: n, seq: seqOf.get(n) ?? -1, mtime: st.mtimeMs });
   }
-  entries.sort((a, b) => b.mtime - a.mtime || (a.name < b.name ? 1 : -1));
+  entries.sort((a, b) => b.seq - a.seq || b.mtime - a.mtime || (a.name < b.name ? 1 : -1));
   for (const e of entries.slice(Math.max(0, keep))) await rmrf(path.join(dir, e.name));
+}
+
+/**
+ * Append the terminal journal to the tamper-evident chain (S-706). The apply itself already
+ * happened; a broken chain must not turn a successful write into a thrown error, so the fault is
+ * reported on stderr-free result data by the caller (`axiom verify --journal` fails closed).
+ */
+async function chainTerminal(rootReal: string, journal: Journal): Promise<void> {
+  try {
+    await recordTerminal(rootReal, journal);
+  } catch {
+    // ERR_JOURNAL_CHAIN (chain already broken) or IO: surfaced by `verify --journal` / `status`.
+  }
 }
 
 /**
@@ -229,7 +265,9 @@ async function rollbackJournal(rootReal: string, journal: Journal): Promise<Jour
   }
   await rmrf(stg);
   await rmrf(backupDir(rootReal, j.manifestDigest));
-  return setPhase(rootReal, j, "rolled-back");
+  const out = await setPhase(rootReal, j, "rolled-back");
+  await chainTerminal(rootReal, out);
+  return out;
 }
 
 /** CLI entry: roll back an applied/committing manifest by digest. Returns the final journal. */
@@ -281,6 +319,8 @@ async function prepare(
   wantDiff: boolean,
   /** Re-apply of an applied digest: `create` targets that exist are overwritten, not `ERR_EXISTS`. */
   reapply = false,
+  /** Root whose `.axiom/cas` holds CAS blobs (PR mode: the shared root, not the worktree). */
+  casRoot: string = rootReal,
 ): Promise<Prepared> {
   const { manifest, manifestDigest } = bundle;
   validateArtifactPaths(manifest.artifacts);
@@ -324,7 +364,7 @@ async function prepare(
   }
 
   // Resolve every blob before writing anything.
-  const casDir = path.join(rootReal, ".axiom", "cas");
+  const casDir = path.join(casRoot, ".axiom", "cas");
   const contents = new Map<string, Uint8Array>();
   for (const a of manifest.artifacts) {
     if (a.op === "delete") continue;
@@ -496,64 +536,201 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     return fail(rootReal, err);
   }
 
-  // PR mode preflight (§4.3): validate branch, repo toplevel, clean touched paths, create branch.
   const touched = bundle.manifest.artifacts.map((a) => a.path);
-  let prBranch: string | undefined;
-  let prPrevBranch: string | undefined;
-  if (mode === "pr") {
-    try {
-      const branch =
-        options.branch ?? defaultBranchName(bundle.manifest.name, bundle.manifestDigest);
-      await validateBranchName(rootReal, branch);
-      await assertRepoToplevel(rootReal);
-      await assertPathsClean(rootReal, touched);
-      if (await branchExists(rootReal, branch)) {
-        throw new AxiomError("ERR_GIT_BRANCH_EXISTS", "branch already exists", {
-          details: { branch },
-        });
-      }
-      prPrevBranch = await currentBranch(rootReal);
-      await runGit(rootReal, ["switch", "--quiet", "-c", branch]);
-      prBranch = branch;
-    } catch (err) {
-      return fail(rootReal, err);
-    }
-  }
-  /** Best-effort: return to the previous branch and drop the axiom branch. */
-  const abandonBranch = async (): Promise<void> => {
-    if (prBranch === undefined) return;
-    try {
-      await runGit(
-        rootReal,
-        prPrevBranch === undefined
-          ? ["switch", "--quiet", "-"]
-          : ["switch", "--quiet", prPrevBranch],
-      );
-      await runGit(rootReal, ["branch", "--quiet", "-D", prBranch]);
-    } catch {
-      /* best-effort */
-    }
+  const sharedRoot = rootReal;
+  /** Self-check: the result we hand out must be schema-valid. */
+  const finalize = (r: ApplyResult): ApplyResult => {
+    const v = ApplyResultSchema.safeParse(r);
+    return v.success
+      ? v.data
+      : fail(sharedRoot, new AxiomError("ERR_INTERNAL", "result failed schema validation"));
   };
 
-  let lockErr: unknown;
-  let result: ApplyResult | undefined;
-  try {
-    result = await withLock(
-      rootReal,
+  /**
+   * The 2PC engine (§4.2) against the tree `rootReal` (the shared root, or a PR worktree —
+   * the parameter deliberately shadows the outer root so the body is mode-agnostic). CAS
+   * blobs are read from `casRoot`. Caller holds the shared root's lock.
+   */
+  const runEngine = async (rootReal: string, casRoot: string): Promise<ApplyResult> => {
+    await recoverIfNeeded(rootReal);
+
+    // Idempotency (design §apply): applied marker + on-disk match → noop; marker but
+    // drifted files → re-apply, reporting which artifacts were re-written.
+    let drifted: string[] | undefined;
+    if ((await lstatOrNull(appliedPath(rootReal, bundle.manifestDigest))) !== null) {
+      drifted = await driftedArtifacts(rootReal, bundle.manifest.artifacts);
+      if (drifted.length === 0) {
+        return {
+          ...base,
+          status: "noop",
+          root: rootReal,
+          files: bundle.manifest.artifacts.map((a) => {
+            const f: AppliedFile = { path: a.path, op: a.op, status: "unchanged" };
+            if (a.digest !== undefined) f.digest = a.digest;
+            return f;
+          }),
+        } satisfies ApplyResult;
+      }
+    }
+
+    let prepared: Prepared;
+    try {
+      prepared = await prepare(
+        rootReal,
+        bundle,
+        mode === "dry-run",
+        drifted !== undefined,
+        casRoot,
+      );
+    } catch (err) {
+      await rmrf(stagingDir(rootReal, bundle.manifestDigest));
+      return fail(rootReal, err);
+    }
+    const { staged } = prepared;
+
+    try {
+      if (options.preChecks !== undefined) {
+        const report = await options.preChecks(staged);
+        if (report.verdict !== "pass") {
+          throw new AxiomError("ERR_CHECKS_FAILED", `pre-apply checks: ${report.verdict}`, {
+            details: {
+              verdict: report.verdict,
+              findings: report.findings.filter((f) => f.severity === "error").map((f) => f.id),
+            },
+          });
+        }
+      }
+    } catch (err) {
+      await rmrf(staged.stagingDir);
+      return fail(rootReal, err);
+    }
+
+    if (mode === "dry-run") {
+      const diff = unifiedDiff(prepared.diffEntries);
+      await rmrf(staged.stagingDir);
+      const dry: ApplyResult = {
+        ...base,
+        status: "applied",
+        root: rootReal,
+        files: prepared.files,
+        diff,
+      };
+      if (drifted !== undefined) dry.drifted = drifted;
+      return dry;
+    }
+
+    // Phase 1 complete → journal `staged`, fsynced.
+    const steps: JournalStep[] = staged.files.map((f) => ({
+      path: f.path,
+      op: f.op,
+      done: false,
+    }));
+    let journal = newJournal(bundle.manifestDigest, steps);
+    const journalFile = await writeJournal(rootReal, journal);
+
+    // Phase 2.
+    try {
+      journal = await commit(rootReal, staged, journal);
+    } catch (err) {
+      try {
+        await rollbackJournal(rootReal, journal);
+      } catch (rbErr) {
+        return {
+          ...fail(rootReal, rollbackFailure(err, rbErr), "failed"),
+          journal: journalFile,
+        };
+      }
+      return { ...fail(rootReal, err, "rolled-back"), journal: journalFile };
+    }
+    await chainTerminal(rootReal, journal);
+
+    const done: ApplyResult = {
+      ...base,
+      status: "applied",
+      root: rootReal,
+      files: prepared.files,
+      journal: journalFile,
+    };
+    if (drifted !== undefined) done.drifted = drifted;
+    await writeAppliedMarker(rootReal, done);
+    await rmrf(staged.stagingDir);
+    await pruneBackups(rootReal, keep);
+    return done;
+  };
+
+  const lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+
+  if (mode === "dry-run") {
+    // Read-only: never registers an intent, never fails ERR_CONFLICT.
+    try {
+      return finalize(
+        await withLock(
+          sharedRoot,
+          bundle.manifestDigest,
+          () => runEngine(sharedRoot, sharedRoot),
+          lockTimeoutMs,
+        ),
+      );
+    } catch (err) {
+      return fail(sharedRoot, err);
+    }
+  }
+
+  /**
+   * S-704 PR mode: the SHARED tree's HEAD, index and files are never touched. Everything
+   * happens in an axiom-owned linked worktree at `.axiom/wt/<hex12>` on a new branch started
+   * from HEAD; the worktree is removed afterwards and, unless the commit landed, so is the branch.
+   * Held under the shared root's lock so git operations on one repo are serialised.
+   */
+  const runPr = async (): Promise<ApplyResult> => {
+    const branch = options.branch ?? defaultBranchName(bundle.manifest.name, bundle.manifestDigest);
+    await validateBranchName(sharedRoot, branch);
+    await assertRepoToplevel(sharedRoot);
+    // Not needed for correctness any more (the worktree starts clean from HEAD), but kept: it
+    // is a documented promise (ERR_GIT_DIRTY), and a PR built from HEAD would otherwise
+    // silently ignore the user's uncommitted edits to the very paths it rewrites.
+    await assertPathsClean(sharedRoot, touched);
+    if (await branchExists(sharedRoot, branch)) {
+      throw new AxiomError("ERR_GIT_BRANCH_EXISTS", "branch already exists", {
+        details: { branch },
+      });
+    }
+    const wtPath = worktreeDir(sharedRoot, bundle.manifestDigest);
+    return withLock(
+      sharedRoot,
       bundle.manifestDigest,
       async () => {
-        await recoverIfNeeded(rootReal);
-
-        // Idempotency (design §apply): applied marker + on-disk match → noop; marker but
-        // drifted files → re-apply, reporting which artifacts were re-written.
-        let drifted: string[] | undefined;
-        if ((await lstatOrNull(appliedPath(rootReal, bundle.manifestDigest))) !== null) {
-          drifted = await driftedArtifacts(rootReal, bundle.manifest.artifacts);
-          if (drifted.length === 0) {
+        // A leftover from a crashed run of the same digest (we hold the lock: nobody uses it).
+        await removeWorktree(sharedRoot, wtPath);
+        // Re-checked under the lock so a branch we fail to create is never one we then delete.
+        if (await branchExists(sharedRoot, branch)) {
+          return fail(
+            sharedRoot,
+            new AxiomError("ERR_GIT_BRANCH_EXISTS", "branch already exists", {
+              details: { branch },
+            }),
+          );
+        }
+        await fs.mkdir(path.dirname(wtPath), { recursive: true });
+        let createdBranch = false;
+        let keepBranch = false;
+        let engineApplied = false;
+        try {
+          let wtReal: string;
+          try {
+            wtReal = await addWorktree(sharedRoot, wtPath, branch);
+            createdBranch = true;
+          } catch (err) {
+            // It did not exist before (checked above, under our intent): if it does now, it is ours.
+            createdBranch = await branchExists(sharedRoot, branch).catch(() => false);
+            throw err;
+          }
+          // Idempotency in PR mode is content-based: HEAD already holds the manifest's result.
+          if ((await driftedArtifacts(wtReal, bundle.manifest.artifacts)).length === 0) {
             return {
               ...base,
               status: "noop",
-              root: rootReal,
+              root: sharedRoot,
               files: bundle.manifest.artifacts.map((a) => {
                 const f: AppliedFile = { path: a.path, op: a.op, status: "unchanged" };
                 if (a.digest !== undefined) f.digest = a.digest;
@@ -561,148 +738,66 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
               }),
             } satisfies ApplyResult;
           }
-        }
-
-        let prepared: Prepared;
-        try {
-          prepared = await prepare(rootReal, bundle, mode === "dry-run", drifted !== undefined);
+          // The worktree's own `.axiom/` (journal, staging, marker) is discarded with it.
+          const { journal: _wtJournal, ...r } = await runEngine(wtReal, sharedRoot);
+          if (r.status !== "applied") return { ...r, root: sharedRoot };
+          engineApplied = true;
+          const paths = r.files
+            .filter((f) => f.status === "written" || f.status === "deleted")
+            .map((f) => f.path);
+          if (paths.length > 0) await runGit(wtReal, ["add", "--", ...paths]);
+          const message =
+            options.commitMessage ??
+            defaultCommitMessage(
+              bundle.manifest.name,
+              bundle.manifestDigest,
+              bundle.manifest.planDigest,
+            );
+          await runGit(wtReal, ["commit", "--quiet", "-F", "-"], { stdin: message });
+          const commitSha = await headCommit(wtReal);
+          keepBranch = true;
+          const git: NonNullable<ApplyResult["git"]> = { branch, commit: commitSha };
+          const compareUrl = await compareUrlFor(sharedRoot, branch);
+          if (compareUrl !== undefined) git.compareUrl = compareUrl;
+          return { ...r, root: sharedRoot, git };
         } catch (err) {
-          await rmrf(stagingDir(rootReal, bundle.manifestDigest));
-          return fail(rootReal, err);
-        }
-        const { staged } = prepared;
-
-        try {
-          if (options.preChecks !== undefined) {
-            const report = await options.preChecks(staged);
-            if (report.verdict !== "pass") {
-              throw new AxiomError("ERR_CHECKS_FAILED", `pre-apply checks: ${report.verdict}`, {
-                details: {
-                  verdict: report.verdict,
-                  findings: report.findings.filter((f) => f.severity === "error").map((f) => f.id),
-                },
-              });
-            }
+          // Nothing reached the shared tree; a commit that did not land is reported rolled-back.
+          return fail(sharedRoot, err, engineApplied ? "rolled-back" : "failed");
+        } finally {
+          await removeWorktree(sharedRoot, wtPath);
+          if (createdBranch && !keepBranch) {
+            await runGit(sharedRoot, ["branch", "--quiet", "-D", branch]).catch(() => undefined);
           }
-        } catch (err) {
-          await rmrf(staged.stagingDir);
-          return fail(rootReal, err);
         }
-
-        if (mode === "dry-run") {
-          const diff = unifiedDiff(prepared.diffEntries);
-          await rmrf(staged.stagingDir);
-          const dry: ApplyResult = {
-            ...base,
-            status: "applied",
-            root: rootReal,
-            files: prepared.files,
-            diff,
-          };
-          if (drifted !== undefined) dry.drifted = drifted;
-          return dry;
-        }
-
-        // Phase 1 complete → journal `staged`, fsynced.
-        const steps: JournalStep[] = staged.files.map((f) => ({
-          path: f.path,
-          op: f.op,
-          done: false,
-        }));
-        let journal = newJournal(bundle.manifestDigest, steps);
-        const journalFile = await writeJournal(rootReal, journal);
-
-        // Phase 2.
-        try {
-          journal = await commit(rootReal, staged, journal);
-        } catch (err) {
-          try {
-            await rollbackJournal(rootReal, journal);
-          } catch (rbErr) {
-            return {
-              ...fail(rootReal, rollbackFailure(err, rbErr), "failed"),
-              journal: journalFile,
-            };
-          }
-          return { ...fail(rootReal, err, "rolled-back"), journal: journalFile };
-        }
-
-        const done: ApplyResult = {
-          ...base,
-          status: "applied",
-          root: rootReal,
-          files: prepared.files,
-          journal: journalFile,
-        };
-        if (drifted !== undefined) done.drifted = drifted;
-        await writeAppliedMarker(rootReal, done);
-        await rmrf(staged.stagingDir);
-        await pruneBackups(rootReal, keep);
-        return done;
       },
-      options.lockTimeoutMs,
+      lockTimeoutMs,
     );
-  } catch (err) {
-    lockErr = err;
-  }
-  if (result === undefined) {
-    await abandonBranch();
-    return fail(rootReal, lockErr);
-  }
+  };
 
-  if (prBranch !== undefined) {
-    if (result.status !== "applied") {
-      // failed / rolled-back / noop: nothing to commit, leave the tree on the original branch.
-      await abandonBranch();
-    } else {
-      try {
-        const paths = result.files
-          .filter((f) => f.status === "written" || f.status === "deleted")
-          .map((f) => f.path);
-        if (paths.length > 0) await runGit(rootReal, ["add", "--", ...paths]);
-        const message =
-          options.commitMessage ??
-          defaultCommitMessage(
-            bundle.manifest.name,
-            bundle.manifestDigest,
-            bundle.manifest.planDigest,
-          );
-        await runGit(rootReal, ["commit", "--quiet", "-F", "-"], { stdin: message });
-        const commit = await headCommit(rootReal);
-        const git: NonNullable<ApplyResult["git"]> = { branch: prBranch, commit };
-        const compareUrl = await compareUrlFor(rootReal, prBranch);
-        if (compareUrl !== undefined) git.compareUrl = compareUrl;
-        result = { ...result, git };
-      } catch (err) {
-        // Commit did not happen: undo the fs apply and the branch, report rolled-back.
-        let rbErr: unknown;
-        try {
-          await withLock(
-            rootReal,
-            bundle.manifestDigest,
-            async () => {
-              const j = await readJournal(rootReal, bundle.manifestDigest);
-              if (j !== undefined) await rollbackJournal(rootReal, j);
-              await fs.rm(appliedPath(rootReal, bundle.manifestDigest), { force: true });
-            },
-            options.lockTimeoutMs,
-          );
-        } catch (e) {
-          rbErr = e;
-        }
-        await abandonBranch();
-        const base2 = fail(rootReal, err, rbErr === undefined ? "rolled-back" : "failed");
-        if (result.journal !== undefined) base2.journal = result.journal;
-        if (rbErr !== undefined) base2.error = toApplyError(rollbackFailure(err, rbErr));
-        return base2;
-      }
-    }
+  // S-703: announce what we are about to touch BEFORE queueing for the lock; an overlapping
+  // live intent of another manifest → ERR_CONFLICT up front instead of a late TOCTOU failure.
+  let intent: Intent;
+  try {
+    intent = await registerIntent(sharedRoot, bundle.manifestDigest, touched);
+  } catch (err) {
+    return fail(sharedRoot, err);
   }
-  // Self-check: the result we hand out must be schema-valid.
-  const v = ApplyResultSchema.safeParse(result);
-  return v.success
-    ? v.data
-    : fail(rootReal, new AxiomError("ERR_INTERNAL", "result failed schema validation"));
+  try {
+    const r =
+      mode === "pr"
+        ? await runPr()
+        : await withLock(
+            sharedRoot,
+            bundle.manifestDigest,
+            () => runEngine(sharedRoot, sharedRoot),
+            lockTimeoutMs,
+          );
+    return finalize(r);
+  } catch (err) {
+    return fail(sharedRoot, err);
+  } finally {
+    await intent.release().catch(() => undefined);
+  }
 }
 
 export { sha256Of };

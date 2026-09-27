@@ -1,3 +1,4 @@
+import { lockStatus } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
 import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
 import { z } from "zod";
@@ -228,6 +229,22 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
       mimeType: "application/json",
     },
     async (uri) => json(uri.href, emitterCatalogue()),
+  );
+
+  // S-706: lock holder / queue / intents of every allowlisted root (read-only, never locks).
+  server.registerResource(
+    "lock",
+    "axiom://lock",
+    {
+      title: "Lock status of every allowlisted root (holder, queue, intents)",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      const roots = [];
+      for (const root of [...policy.roots].sort())
+        roots.push({ root, ...(await lockStatus(root)) });
+      return json(uri.href, { roots });
+    },
   );
 
   log.info("server created", {

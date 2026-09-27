@@ -1,9 +1,17 @@
 import { readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { apply, rollback } from "@codai/axiom-apply";
-import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
-import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
+import { apply, readHistory, rollback, verifyChain } from "@codai/axiom-apply";
+import { AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE } from "@codai/axiom-canon";
+import {
+  type GuardOptions,
+  KEYLESS_BUNDLE_FIELD,
+  keylessPayload,
+  loadProfile,
+  runChecks,
+  signManifestKeyless,
+} from "@codai/axiom-checks";
+import { compilePlan, diffManifests, isYamlPath, verifyBundle } from "@codai/axiom-plan";
 import {
   AxiomError,
   isAxiomError,
@@ -29,6 +37,7 @@ import {
 import { createLogger, isLogLevel, LOG_LEVELS, type Logger } from "./log.js";
 import { createRootsPolicy, resolveRoot } from "./roots.js";
 import { diffSnapshots, snapshotRoot } from "./snapshot.js";
+import { collectStatus, renderStatus } from "./status.js";
 import { saveManifest, saveReport, toDigestRef } from "./store.js";
 import { TaskStore } from "./tasks.js";
 import { isWireMode, WIRE_MODES, type WireMode } from "./wire.js";
@@ -42,15 +51,22 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
             [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}]
-  axiom compile <plan.json|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
+  axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]
+                                         (MCP entry + PreToolUse hook + .axiom/profiles/<name>.json + gate profile + .gitignore; idempotent)
+  axiom doctor [--root <dir>] [--json]   (bin on PATH, hooks, gate latency, lock, journals, chain, profiles; exit 2 = a check failed)
+  axiom status [--root <dir>] [--json]   (lock holder/queue/intents, interrupted journals, last applied, chain)
+  axiom log [--root <dir>] [--limit <n>] [--json]   (journal chain, newest first; default 20)
+  axiom compile <plan.json|plan.yaml|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
                                      [--allow-net [--net-allow <host>[,host]]] [--allow-file]   (ref sources; offline by default)
   axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
+  axiom verify --journal --root <dir>            (journal hash chain; broken → exit 1, code ERR_JOURNAL_CHAIN)
   axiom verify <bundle.json> --tree <dir> [--pre] [--attest <out.json>]
                                           (tree ≟ manifest: every artifact digest (or --pre: the declared pre-image set);
                                            --attest writes an in-toto Statement ${"https://axiom.dev/attestation/apply/v1"})
   axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
   axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
+                                         [--lock-timeout <ms>] [--keep-backups <n>]
                                          [--allow-guards] [--guard-allowlist <abs>]...
 	axiom rollback <digest> --root <dir>
   axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal]   (CAS garbage collection; CLI only)
@@ -59,6 +75,8 @@ Usage:
   axiom emitters [--json]                  (template emitters available to \`compile\`)
   axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
   axiom sign <bundle.json> [--key-file <path>] [-o <out.json>] [--root-id <id>]   (private key from --key-file or $${SIGNING_KEY_ENV}; --root-id = root-bound envelope)
+  axiom sign <bundle.json> --keyless [--bound --root <dir> | --root-id <id>] [-o <out.json>]
+                                          (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
   axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/guides/signing.md)
   axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level ...]   (PreToolUse hook; fail-closed; exit 0 allow / 2 deny)
@@ -68,7 +86,8 @@ Usage:
   axiom snapshot-diff <a.json> <b.json>       (RepoSnapshot files → { added, removed, changed })
 	axiom --version | --help
 
-Exit codes: 0 ok · 1 verdict fail / apply failed · 2 usage or error.
+Exit codes: 0 ok · 1 verdict fail / apply failed / chain broken / keyless unavailable · 2 usage or error
+(doctor: 2 = at least one check failed; warnings exit 0).
 The \`mcp\` verb speaks JSON-RPC on stdout and logs JSON lines on stderr; every other verb prints JSON to stdout.
 With --http it serves Streamable HTTP at http://<host:port>/mcp instead (port 0 = random; the URL is logged at
 info level). A non-loopback host requires a bearer token in the env var named by --http-token-env
@@ -96,6 +115,11 @@ class AxmDiagnosticsError extends Error {
 }
 
 async function readPlan(file: string): Promise<unknown> {
+  if (isYamlPath(file)) {
+    const text = await readFile(path.resolve(file), "utf8");
+    const { parsePlanYaml } = await import("./yaml-lazy.js");
+    return parsePlanYaml(text);
+  }
   if (path.extname(file).toLowerCase() !== ".axm") return readJson(file);
   const text = await readFile(path.resolve(file), "utf8");
   const { parseAxm } = await import("./axm-lazy.js");
@@ -225,7 +249,8 @@ async function cmdCompile(argv: string[]): Promise<number> {
     "allow-file": { type: "boolean" },
   });
   const file = positionals[0];
-  if (file === undefined) throw new UsageError("compile: <plan.json|plan.axm> is required");
+  if (file === undefined)
+    throw new UsageError("compile: <plan.json|plan.yaml|plan.axm> is required");
   const store = values.store ?? "inline";
   if (store !== "inline" && store !== "cas") throw new UsageError("--store must be inline|cas");
   const allowNet = values["allow-net"] === true;
@@ -263,7 +288,13 @@ async function cmdVerify(argv: string[]): Promise<number> {
     tree: { type: "string" },
     pre: { type: "boolean" },
     attest: { type: "string" },
+    journal: { type: "boolean" },
   });
+  if (values.journal === true) {
+    if (positionals.length > 0 || values.tree !== undefined || values.attest !== undefined)
+      throw new UsageError("verify --journal takes only --root <dir>");
+    return cmdVerifyJournal(await realRootArg(values.root));
+  }
   const file = positionals[0];
   if (file === undefined) throw new UsageError("verify: <bundle.json> is required");
   const raw = await readJson(file);
@@ -283,6 +314,17 @@ async function cmdVerify(argv: string[]): Promise<number> {
   }
   out({ ...r, signed: sig.keyids.length > 0, signatures: sig });
   return sig.ok ? EXIT_OK : EXIT_FAIL;
+}
+
+/** `axiom verify --journal --root <dir>` (S-706): the journal hash chain. */
+async function cmdVerifyJournal(rootReal: string): Promise<number> {
+  const r = await verifyChain(rootReal);
+  if (r.ok) {
+    out(r);
+    return EXIT_OK;
+  }
+  out({ ...r, code: "ERR_JOURNAL_CHAIN" });
+  return EXIT_FAIL;
 }
 
 /** `axiom verify <bundle> --tree <root> [--pre] [--attest <out>]` (S-403, D-20/D-21). */
@@ -365,10 +407,14 @@ async function cmdApply(argv: string[]): Promise<number> {
     pr: { type: "boolean" },
     branch: { type: "string" },
     message: { type: "string" },
+    "lock-timeout": { type: "string" },
+    "keep-backups": { type: "string" },
     ...GUARD_FLAGS,
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("apply: <bundle.json> is required");
+  const lockTimeoutMs = intFlag(values["lock-timeout"], "--lock-timeout", 0, LOCK_TIMEOUT_MAX_MS);
+  const keepBackups = intFlag(values["keep-backups"], "--keep-backups", 0, KEEP_BACKUPS_MAX);
   const rootReal = await realRootArg(values.root);
   const bundle = parseBundleFile(await readJson(file));
   const dryRun = values["dry-run"] === true;
@@ -403,6 +449,8 @@ async function cmdApply(argv: string[]): Promise<number> {
   if (!dryRun && values.confirm !== undefined) applyOpts.confirmDigest = values.confirm;
   if (values.branch !== undefined) applyOpts.branch = values.branch;
   if (values.message !== undefined) applyOpts.commitMessage = values.message;
+  if (lockTimeoutMs !== undefined) applyOpts.lockTimeoutMs = lockTimeoutMs;
+  if (keepBackups !== undefined) applyOpts.keepBackups = keepBackups;
   const result = await apply(applyOpts);
   if (result.status === "applied" || result.status === "noop") await saveManifest(rootReal, bundle);
   if (
@@ -414,6 +462,23 @@ async function cmdApply(argv: string[]): Promise<number> {
   }
   out(result);
   return result.status === "failed" || result.status === "rolled-back" ? EXIT_FAIL : EXIT_OK;
+}
+
+/** Same bounds as the `axiom_apply` MCP input (tools.ts). */
+const LOCK_TIMEOUT_MAX_MS = 600_000;
+const KEEP_BACKUPS_MAX = 1000;
+
+function intFlag(
+  raw: string | undefined,
+  flag: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n < min || n > max)
+    throw new UsageError(`${flag} must be an integer in ${min}..${max}`);
+  return n;
 }
 
 async function cmdRollback(argv: string[]): Promise<number> {
@@ -494,9 +559,19 @@ async function cmdSign(argv: string[]): Promise<number> {
     "key-file": { type: "string" },
     out: { type: "string", short: "o" },
     "root-id": { type: "string" },
+    keyless: { type: "boolean" },
+    bound: { type: "boolean" },
+    root: { type: "string" },
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("sign: <bundle.json> is required");
+  if (values.keyless === true) {
+    if (values["key-file"] !== undefined)
+      throw new UsageError("sign --keyless does not take --key-file");
+    return cmdSignKeyless(file, values);
+  }
+  if (values.bound === true || values.root !== undefined)
+    throw new UsageError("sign: --bound / --root are only valid with --keyless");
   const bundle = parseBundleFile(await readJson(file));
   const src: Parameters<typeof signBundle>[1] = {};
   if (values["key-file"] !== undefined) src.keyFile = values["key-file"];
@@ -510,6 +585,154 @@ async function cmdSign(argv: string[]): Promise<number> {
     ...(values["root-id"] === undefined ? {} : { rootId: values["root-id"], bound: true }),
     out: target,
   });
+  return EXIT_OK;
+}
+
+/**
+ * `axiom sign <bundle> --keyless [--bound --root <dir> | --root-id <id>]` (S-705). Signs the SAME
+ * payload bytes as the Ed25519 path (`JCS(manifest)`, or `JCS({manifest, rootId})` under the
+ * bound type) as a Sigstore bundle and appends it to `bundle.keylessSignatures`. `--bound` takes
+ * the root id from `--root-id`, else from the root's trust store (`axiom trust root-id`).
+ */
+async function cmdSignKeyless(
+  file: string,
+  values: { out?: string; "root-id"?: string; bound?: boolean; root?: string },
+): Promise<number> {
+  const bundle = parseBundleFile(await readJson(file));
+  let rootId = values["root-id"];
+  if (values.bound === true && rootId === undefined) {
+    const rootReal = await realRootArg(values.root);
+    rootId = (await loadTrustStore(rootReal))?.rootId;
+    if (rootId === undefined)
+      throw new UsageError(
+        "sign --keyless --bound: the root's trust store has no rootId (axiom trust root-id <id>) — or pass --root-id",
+      );
+  } else if (values.bound !== true && values.root !== undefined) {
+    throw new UsageError("sign --keyless: --root requires --bound");
+  }
+  const payload =
+    rootId === undefined
+      ? keylessPayload(bundle.manifest)
+      : keylessPayload({ manifest: bundle.manifest, rootId });
+  let sig: Awaited<ReturnType<typeof signManifestKeyless>>;
+  try {
+    sig = await signManifestKeyless(
+      payload,
+      rootId === undefined ? {} : { payloadType: AXIOM_MANIFEST_BOUND_PAYLOAD_TYPE },
+    );
+  } catch (err) {
+    if (isAxiomError(err) && err.code === "ERR_KEYLESS_UNAVAILABLE") {
+      out(err.toJSON());
+      return EXIT_FAIL;
+    }
+    throw err;
+  }
+  const signed = parseBundleFile({
+    ...bundle,
+    [KEYLESS_BUNDLE_FIELD]: [...(bundle.keylessSignatures ?? []), sig],
+  });
+  const target = values.out ?? file;
+  await writeFile(path.resolve(target), `${JSON.stringify(signed, null, 2)}\n`, "utf8");
+  out({
+    manifestDigest: signed.manifestDigest,
+    keyless: true,
+    keylessSignatures: signed.keylessSignatures?.length ?? 0,
+    ...(rootId === undefined ? {} : { rootId, bound: true }),
+    out: target,
+  });
+  return EXIT_OK;
+}
+
+/** `--root` for the read-only/setup verbs: explicit dir, else the current directory. */
+async function localRoot(root: string | undefined): Promise<string> {
+  return realRootArg(root ?? ".");
+}
+
+async function cmdInit(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    harness: { type: "string" },
+    "profile-name": { type: "string" },
+    force: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const { runInit, isHarnessArg } = await import("./ops-lazy.js");
+  const harness = values.harness ?? "auto";
+  if (!isHarnessArg(harness))
+    throw new UsageError("--harness must be auto|copilot|claude|codex|vscode");
+  const rootReal = await localRoot(values.root);
+  const initOpts: Parameters<typeof runInit>[0] = { root: rootReal, harness };
+  if (values["profile-name"] !== undefined) initOpts.profileName = values["profile-name"];
+  if (values.force === true) initOpts.force = true;
+  const r = await runInit(initOpts);
+  if (values.json) {
+    out(r);
+    return EXIT_OK;
+  }
+  console.log(`axiom init ${r.root} (harness: ${r.harnesses.join("+")}, profile: ${r.profile})`);
+  for (const f of r.files) {
+    console.log(
+      `  ${f.action.padEnd(8)} ${f.path}${f.reason === undefined ? "" : ` (${f.reason})`}`,
+    );
+  }
+  for (const n of r.notes) console.log(`  note: ${n}`);
+  return EXIT_OK;
+}
+
+/** Set by `main()`: argv[1] of this process, so `doctor` can time this very CLI's gate. */
+let CLI_ENTRY: string | undefined;
+
+async function cmdDoctor(argv: string[]): Promise<number> {
+  const { values } = opts(argv, { root: { type: "string" }, json: { type: "boolean" } });
+  const { runDoctor } = await import("./ops-lazy.js");
+  const root = path.resolve(values.root ?? ".");
+  const doctorOpts: Parameters<typeof runDoctor>[0] = { root, version: MIGRATE_VERSION };
+  // Inside a single executable (D-27) argv[1] is the binary itself: run it directly.
+  if (CLI_ENTRY !== undefined)
+    doctorOpts.gateCommand =
+      path.resolve(CLI_ENTRY) === path.resolve(process.execPath)
+        ? [process.execPath]
+        : [process.execPath, CLI_ENTRY];
+  const r = await runDoctor(doctorOpts);
+  if (values.json) out(r);
+  else {
+    for (const c of r.checks) {
+      console.log(`${c.status.toUpperCase().padEnd(4)} ${c.id}: ${c.message}`);
+      if (c.hint !== undefined && c.status !== "ok") console.log(`     fix: ${c.hint}`);
+    }
+  }
+  return r.ok ? EXIT_OK : EXIT_USAGE;
+}
+
+async function cmdStatus(argv: string[]): Promise<number> {
+  const { values } = opts(argv, { root: { type: "string" }, json: { type: "boolean" } });
+  const s = await collectStatus(await localRoot(values.root));
+  if (values.json) out(s);
+  else for (const line of renderStatus(s)) console.log(line);
+  return EXIT_OK;
+}
+
+const LOG_LIMIT_DEFAULT = 20;
+const LOG_LIMIT_MAX = 100_000;
+
+async function cmdLog(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    limit: { type: "string", short: "n" },
+    json: { type: "boolean" },
+  });
+  const limit = intFlag(values.limit, "--limit", 1, LOG_LIMIT_MAX) ?? LOG_LIMIT_DEFAULT;
+  const rootReal = await localRoot(values.root);
+  const entries = await readHistory(rootReal, { limit });
+  if (values.json) {
+    out({ root: rootReal, entries });
+    return EXIT_OK;
+  }
+  for (const e of entries) {
+    console.log(
+      `#${e.seq} ${e.at} ${e.state.padEnd(11)} ${e.manifestDigest}${e.name === undefined ? "" : ` ${e.name}`} (${e.files} files)${e.code === undefined ? "" : ` ${e.code}`}`,
+    );
+  }
   return EXIT_OK;
 }
 
@@ -682,6 +905,10 @@ async function cmdSnapshotDiff(argv: string[]): Promise<number> {
 
 const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   mcp: cmdMcp,
+  init: cmdInit,
+  doctor: cmdDoctor,
+  status: cmdStatus,
+  log: cmdLog,
   compile: cmdCompile,
   verify: cmdVerify,
   check: cmdCheck,
@@ -703,6 +930,7 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
 export async function main(argv: readonly string[], version: string): Promise<number> {
   const HELP = help(version);
   MIGRATE_VERSION = version;
+  CLI_ENTRY = process.argv[1];
   const [verb, ...rest] = argv;
   if (verb === undefined || verb === "--help" || verb === "-h" || verb === "help") {
     process.stdout.write(HELP);

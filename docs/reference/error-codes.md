@@ -55,7 +55,8 @@ real filesystem, and by the gate on every write target.
 
 | Code | Meaning | Raised by |
 |---|---|---|
-| `ERR_LOCKED` | `.axiom/lock` held by a live process after the wait (30 s for apply, 1 s for `gc`); `details.holder` names it | apply, mcp (`gc`) |
+| `ERR_LOCKED` | `.axiom/lock` held by a live process after the wait in the FIFO queue (`.axiom/queue/`) — apply default 30 s, `--lock-timeout` / `lockTimeoutMs` 0–600 000 ms; `gc` 1 s. `details: { holder?: { pid, host, digest, since }, waitedMs, queuePosition, lock }` (`queuePosition` 1-based). Also the intent registry mutex staying busy > 10 s (`details: { lock }`). What to do: `axiom status` shows the holder; retry with a longer timeout — a dead or > 1 h old holder is reclaimed automatically | apply, mcp (`gc`) |
+| `ERR_CONFLICT` | before queueing for the lock, a live intent (`.axiom/intents/`) of a **different** manifest on the same root touches an overlapping path — the same path, or one is a directory prefix of the other (case-insensitive on Windows/macOS). `details: { otherDigest, paths[] }` (sorted); nothing is registered or written. Never raised by a dry-run or a re-apply of the same digest. What to do: wait for `otherDigest` to finish (`axiom status`), recompile against the new tree, apply again | apply |
 | `ERR_ROOT_NOT_ALLOWED` | requested root is not equal to or inside a `--root` | mcp (roots policy — shared by CLI and server) |
 | `ERR_ROOT_REQUIRED` | no `root` given and zero or several roots are allowlisted | mcp |
 | `ERR_ROOT_NOT_DIR` | root does not exist or is not a directory | mcp, apply |
@@ -63,6 +64,7 @@ real filesystem, and by the gate on every write target.
 | `ERR_CHECKS_FAILED` | pre-apply check verdict was not `pass` (`fail` **or** `error`) | apply |
 | `ERR_PREIMAGE_CHANGED` | the tree differs from `ManifestBody.preImage` at check/first-apply time (`details.phase: "prepare"`), or a file changed between staging and commit (TOCTOU guard, no phase) | apply, checks (`manifest.preImage` finding), plan |
 | `ERR_JOURNAL_CORRUPT` | journal file unreadable, not JSON or fails schema | apply |
+| `ERR_JOURNAL_CHAIN` | the journal hash chain `.axiom/journal/chain.jsonl` does not verify — a line was edited, removed, reordered, or its tail is torn. `details: { seq, reason: prev-mismatch\|seq-gap\|parse, file, entries? }`. `axiom verify --journal` exits `1` with `code: "ERR_JOURNAL_CHAIN"` and `firstBad`; `doctor` fails its `chain` check; `appendChainEntry` refuses to extend a broken chain (an apply still succeeds — its entry is just not appended). What to do: treat as tampering or a crash mid-write; inspect the line at `seq` against the journals and backups (skill `debug-apply-journal`) before trusting the history | apply, mcp (`verify --journal`) |
 | `ERR_EBUSY` | rename/unlink kept failing (Windows open handle) after 5 retries; also more than 8 concurrent tasks or 16 open plan sessions on the server | apply, mcp (tasks) |
 | `ERR_ROLLBACK` | a commit failed **and** the scoped rollback failed; `status: failed`, journal left in place; message carries both errors | apply |
 
@@ -91,6 +93,7 @@ real filesystem, and by the gate on every write target.
 |---|---|---|
 | `ERR_SIGNATURE_MISSING` | a trust store exists but the bundle carries no signature at all (`axiom verify --root`, `axiom_manifest_verify`) | mcp (`keys.ts`), canon |
 | `ERR_SIGNATURE_INVALID` | signature verification failed — unknown key, bad signature, non-canonical payload, payload/digest mismatch, rollback, unbound/mis-bound envelope — or unusable key material (`sign`, `trust add`) | mcp, canon, checks |
+| `ERR_KEYLESS_UNAVAILABLE` | Sigstore keyless signing or verification **could not run** (fail closed, never a pass). `details.reason`: `NO_OIDC` (no `SIGSTORE_ID_TOKEN` / GitHub Actions OIDC env), `SIGN_FAILED` (Fulcio/Rekor/network), `MODULE_MISSING` / `MODULE_LOAD_FAILED` / `MODULE_SHAPE` (optional `sigstore` dependency absent or unusable); on verify also `TRUSTED_ROOT` (TUF trusted root unavailable, e.g. empty cache with `offline: true`) or `VERIFY_FAILED`. `axiom sign --keyless` prints it on stdout and exits `1`; `manifest.requireSigned { keyless }` turns it into a provider finding (`facts.code`, `facts.reason`) → verdict `error`. What to do: run in CI with `id-token: write`, install `sigstore`, or warm the TUF cache | checks, mcp (`sign --keyless`) |
 | `ERR_TRUST_STATE_CORRUPT` | `.axiom/trust/state.json` unreadable, not JSON, fails schema, or its HMAC is missing/wrong while `state.key` exists — never treated as "no state" | checks, mcp, apply |
 
 ## Template sources

@@ -51,7 +51,8 @@
     "zod": "catalog:"
   },
   "optionalDependencies": {
-    "@cedar-policy/cedar-wasm": "catalog:"
+    "@cedar-policy/cedar-wasm": "catalog:",
+    "sigstore": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

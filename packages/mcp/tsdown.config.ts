@@ -63,6 +63,7 @@ export default defineConfig([
       // And `./verify-tree-lazy.js`: `axiom verify --tree` (+ attestation) is CI-only.
       // And `./gc-lazy.js`: `axiom gc` is CLI-only and rare.
       // And `./mcp-lazy.js`: the MCP SDK itself — only `axiom mcp` needs it (S-405).
+      // And `./ops-lazy.js`: `axiom init` / `axiom doctor` (S-701/S-702), run once per repo.
       neverBundle: [
         /^node:/,
         CEDAR_WASM,
@@ -73,7 +74,35 @@ export default defineConfig([
         /verify-tree-lazy/,
         /gc-lazy/,
         /mcp-lazy/,
+        /ops-lazy/,
+        /yaml-lazy/,
       ],
+    },
+  },
+  {
+    ...shared,
+    // Standalone YAML plan front-end (S-707): `yaml` is CJS, so it is folded into this one file
+    // (no shared runtime-helper chunk that the eager `cli-main.js` would import statically).
+    entry: { "yaml-lazy": "src/yaml-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    outputOptions: { inlineDynamicImports: true },
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/, CEDAR_WASM],
+    },
+  },
+  {
+    ...shared,
+    // Standalone `axiom init` / `axiom doctor` chunk (S-701/S-702): setup, CLI only.
+    entry: { "ops-lazy": "src/ops-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {

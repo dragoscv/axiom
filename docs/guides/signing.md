@@ -1,6 +1,6 @@
-# Signing manifests (DSSE, Ed25519)
+# Signing manifests (DSSE, Ed25519, Sigstore keyless)
 
-*Detached DSSE envelopes over the canonical manifest, a per-root trust store, anti-rollback counters and root binding — decision D-16 / S-409.*
+*Detached DSSE envelopes over the canonical manifest, a per-root trust store, anti-rollback counters, root binding (D-16 / S-409) and Sigstore keyless signatures bound to an OIDC identity (S-705).*
 
 A `ManifestBundle` can carry detached **DSSE v1.0.2** envelopes over its canonical
 `manifest`. A root that keeps a trust store under `.axiom/trust/` can then require, via
@@ -276,9 +276,100 @@ axiom trust remove <keyid> --root /repo
 Over MCP, `axiom_manifest_verify { bundle, root }` reports the same `signatures` block and
 `axiom_apply` advances the state under the same conditions as the CLI.
 
+## Keyless signatures (Sigstore, S-705)
+
+A CI job usually has no business holding a long-lived private key. With `--keyless` the
+signature is made by an **ephemeral** key whose Fulcio certificate binds it to the job's OIDC
+identity (issuer + subject — for GitHub Actions, the workflow file and ref), and the signature is
+logged in Rekor. The root then pins the *identity* instead of a key.
+
+```sh
+axiom sign bundle.json --keyless [-o signed.json]                  # unbound payload
+axiom sign bundle.json --keyless --bound --root /repo              # root-bound: rootId from the root's trust store
+axiom sign bundle.json --keyless --root-id github:<owner>/<repo>   # root-bound, id given explicitly
+```
+
+- The payload is the **same bytes** as the Ed25519 path: `JCS(manifest)`, or
+  `JCS({ manifest, rootId })` with payload type `application/vnd.axiom.manifest-bound+json` when
+  bound. `--bound` without `--root-id` reads `rootId` from `.axiom/trust/keys.json`
+  (`axiom trust root-id <id>` first); `--root` is only valid with `--bound`; `--key-file` is
+  refused.
+- The Sigstore bundle is appended to `bundle.keylessSignatures[]`, beside `signatures[]` and
+  outside the canonical body — `manifestDigest` does not change. The CLI prints
+  `{ manifestDigest, keyless: true, keylessSignatures, rootId?, bound?, out }`.
+- **Signing is online only**: it needs an ambient OIDC token (`SIGSTORE_ID_TOKEN`, or GitHub
+  Actions' `ACTIONS_ID_TOKEN_REQUEST_URL` + `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, i.e.
+  `permissions: id-token: write`), Fulcio and Rekor. No token source, the optional `sigstore`
+  dependency not loadable, or any network/signing failure → exit `1` with
+  `code: ERR_KEYLESS_UNAVAILABLE` and `details.reason`; nothing is written.
+
+```yaml
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm i -g @codai/axiom-mcp
+      - run: axiom sign bundle.json --keyless --root-id github:${{ github.repository }}
+```
+
+### Signer identity policy
+
+`manifest.requireSigned` takes a `keyless` object; with it set, a missing trust file means "no
+Ed25519 keys" instead of `ERR_NOT_FOUND`, so a root can require keyless signatures only:
+
+```json
+{
+  "id": "manifest.requireSigned",
+  "predicate": "manifest.requireSigned",
+  "params": {
+    "keyless": {
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subjectRegex": "https://github\\.com/<owner>/<repo>/\\.github/workflows/sign\\.yml@refs/heads/main",
+      "offline": false
+    }
+  },
+  "severity": "error"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `issuer` | exact OIDC issuer URL (`https:` only) the Fulcio certificate must carry — `https://token.actions.githubusercontent.com` for GitHub Actions. Checked by sigstore **and** again by AXIOM. |
+| `subjectRegex` | regex over the certificate subject (SAN), ≤ 1024 chars, **anchored to the whole subject** (`^(?:…)$` is added for you). For a workflow identity the subject is `https://github.com/<owner>/<repo>/.github/workflows/<file>@refs/heads/main`; escape the dots so `.` cannot match any character, and do not end with `.*` unless you mean "any ref". A pattern that does not compile is a profile schema error. |
+| `offline` | `false` (default): the Sigstore trusted root is fetched/refreshed via TUF. `true`: the trusted root is read **only** from the local TUF cache — no network request at all. |
+
+**Verification is offline except for the trusted root.** The certificate chain to the Fulcio
+CA, the SCT, the Rekor inclusion promise/proof and the DSSE signature are all checked from the
+bundle itself; only the Sigstore trusted root comes from TUF. With `offline: true` an empty or
+expired cache is `ERR_KEYLESS_UNAVAILABLE` rather than a network call.
+
+**Fail-closed.** Every way verification cannot *run* — `sigstore` not installed, trusted root
+unavailable (online or offline) — is `verdict: error` with `ERR_KEYLESS_UNAVAILABLE`, never a
+pass. Findings when it runs:
+
+| Finding id | Meaning |
+|---|---|
+| `signature.keylessMissing` | `keyless` is set and no keyless signature matched the policy (always reported alongside the specific reasons below) |
+| `signature.keylessIssuer` | a certificate was issued for another OIDC issuer |
+| `signature.keylessSubject` | a certificate subject does not fully match `subjectRegex` |
+| `signature.keylessBad` | the bundle is malformed (`MALFORMED`), signs another payload (`PAYLOAD_MISMATCH` — including an unbound payload on a store with a `rootId`), or fails cryptographic verification |
+
+Each distinct verified identity (`keyless:<issuer>|<subject>`) counts toward `minSignatures`
+next to distinct Ed25519 keys, so `minSignatures: 2` can mean "the release key **and** the CI
+workflow". `antiRollback` and `rootId` binding apply to keyless signatures exactly as to
+Ed25519 ones.
+
 ## Limitations
 
-- Ed25519 only; no RSA/ECDSA, no certificates, no Sigstore/Fulcio, no timestamps.
+- Two signature kinds only: Ed25519 DSSE envelopes against pinned keys, and Sigstore keyless
+  (Fulcio certificate + Rekor entry) against a pinned OIDC identity. No RSA/ECDSA keys, no
+  customer-supplied X.509 PKI.
+- Keyless signing needs the network and an OIDC token; keyless verification needs a current
+  Sigstore trusted root (network, or a warm TUF cache with `offline: true`). `sigstore` is an
+  optional dependency of `@codai/axiom-checks`, loaded lazily; where it cannot be loaded, keyless
+  signing and verification fail closed with `ERR_KEYLESS_UNAVAILABLE`.
 - Root binding is opt-in (`rootId` on the store); an unbound store accepts any root.
 - `state.json` is authenticated by a per-root `state.key`, not signed by the trust keys: an
   attacker who can read **and** write `.axiom/trust/` can still delete both files and start

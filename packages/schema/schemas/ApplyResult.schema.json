@@ -156,7 +156,9 @@
             "ERR_CHECKS_FAILED",
             "ERR_PREIMAGE_CHANGED",
             "ERR_JOURNAL_CORRUPT",
+            "ERR_JOURNAL_CHAIN",
             "ERR_EBUSY",
+            "ERR_CONFLICT",
             "ERR_INVALID_PLAN",
             "ERR_INVALID_MANIFEST",
             "ERR_INVALID_PROFILE",
@@ -168,6 +170,7 @@
             "ERR_FACT_DISABLED",
             "ERR_SIGNATURE_MISSING",
             "ERR_SIGNATURE_INVALID",
+            "ERR_KEYLESS_UNAVAILABLE",
             "ERR_TRUST_STATE_CORRUPT",
             "ERR_ROLLBACK",
             "ERR_EMITTER_UNKNOWN",
@@ -202,6 +205,13 @@
           "minLength": 1,
           "maxLength": 1024,
           "description": "Relative POSIX path, NFC, no reserved names"
+        },
+        "details": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
         }
       },
       "required": [

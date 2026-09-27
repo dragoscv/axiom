@@ -466,6 +466,66 @@
             "additionalProperties": false
           }
         },
+        "keylessSignatures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mediaType": {
+                "type": "string"
+              },
+              "verificationMaterial": {},
+              "dsseEnvelope": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "format": "base64",
+                    "contentEncoding": "base64",
+                    "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                  },
+                  "payloadType": {
+                    "type": "string"
+                  },
+                  "signatures": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sig": {
+                          "type": "string",
+                          "format": "base64",
+                          "contentEncoding": "base64",
+                          "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                        },
+                        "keyid": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sig"
+                      ],
+                      "additionalProperties": {}
+                    }
+                  }
+                },
+                "required": [
+                  "payload",
+                  "payloadType",
+                  "signatures"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "mediaType",
+              "verificationMaterial",
+              "dsseEnvelope"
+            ],
+            "additionalProperties": {}
+          }
+        },
         "blobs": {
           "default": {},
           "type": "object",
@@ -624,7 +684,9 @@
                   "ERR_CHECKS_FAILED",
                   "ERR_PREIMAGE_CHANGED",
                   "ERR_JOURNAL_CORRUPT",
+                  "ERR_JOURNAL_CHAIN",
                   "ERR_EBUSY",
+                  "ERR_CONFLICT",
                   "ERR_INVALID_PLAN",
                   "ERR_INVALID_MANIFEST",
                   "ERR_INVALID_PROFILE",
@@ -636,6 +698,7 @@
                   "ERR_FACT_DISABLED",
                   "ERR_SIGNATURE_MISSING",
                   "ERR_SIGNATURE_INVALID",
+                  "ERR_KEYLESS_UNAVAILABLE",
                   "ERR_TRUST_STATE_CORRUPT",
                   "ERR_ROLLBACK",
                   "ERR_EMITTER_UNKNOWN",
@@ -2049,6 +2112,66 @@
             "additionalProperties": false
           }
         },
+        "keylessSignatures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mediaType": {
+                "type": "string"
+              },
+              "verificationMaterial": {},
+              "dsseEnvelope": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "format": "base64",
+                    "contentEncoding": "base64",
+                    "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                  },
+                  "payloadType": {
+                    "type": "string"
+                  },
+                  "signatures": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sig": {
+                          "type": "string",
+                          "format": "base64",
+                          "contentEncoding": "base64",
+                          "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                        },
+                        "keyid": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sig"
+                      ],
+                      "additionalProperties": {}
+                    }
+                  }
+                },
+                "required": [
+                  "payload",
+                  "payloadType",
+                  "signatures"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "mediaType",
+              "verificationMaterial",
+              "dsseEnvelope"
+            ],
+            "additionalProperties": {}
+          }
+        },
         "blobs": {
           "default": {},
           "type": "object",
@@ -2310,7 +2433,9 @@
                 "ERR_CHECKS_FAILED",
                 "ERR_PREIMAGE_CHANGED",
                 "ERR_JOURNAL_CORRUPT",
+                "ERR_JOURNAL_CHAIN",
                 "ERR_EBUSY",
+                "ERR_CONFLICT",
                 "ERR_INVALID_PLAN",
                 "ERR_INVALID_MANIFEST",
                 "ERR_INVALID_PROFILE",
@@ -2322,6 +2447,7 @@
                 "ERR_FACT_DISABLED",
                 "ERR_SIGNATURE_MISSING",
                 "ERR_SIGNATURE_INVALID",
+                "ERR_KEYLESS_UNAVAILABLE",
                 "ERR_TRUST_STATE_CORRUPT",
                 "ERR_ROLLBACK",
                 "ERR_EMITTER_UNKNOWN",
@@ -2356,6 +2482,13 @@
               "minLength": 1,
               "maxLength": 1024,
               "description": "Relative POSIX path, NFC, no reserved names"
+            },
+            "details": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
             }
           },
           "required": [
@@ -2426,6 +2559,18 @@
         "commitMessage": {
           "description": "pr mode: commit message (passed to git on stdin)",
           "type": "string"
+        },
+        "lockTimeoutMs": {
+          "description": "How long to wait in the root's lock queue (ms); timeout → ERR_LOCKED with details { holder, waitedMs, queuePosition }",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "keepBackups": {
+          "description": "Pre-image backup sets kept under .axiom/backup after commit (default 3)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
         }
       },
       "required": [
@@ -2588,7 +2733,9 @@
                 "ERR_CHECKS_FAILED",
                 "ERR_PREIMAGE_CHANGED",
                 "ERR_JOURNAL_CORRUPT",
+                "ERR_JOURNAL_CHAIN",
                 "ERR_EBUSY",
+                "ERR_CONFLICT",
                 "ERR_INVALID_PLAN",
                 "ERR_INVALID_MANIFEST",
                 "ERR_INVALID_PROFILE",
@@ -2600,6 +2747,7 @@
                 "ERR_FACT_DISABLED",
                 "ERR_SIGNATURE_MISSING",
                 "ERR_SIGNATURE_INVALID",
+                "ERR_KEYLESS_UNAVAILABLE",
                 "ERR_TRUST_STATE_CORRUPT",
                 "ERR_ROLLBACK",
                 "ERR_EMITTER_UNKNOWN",
@@ -2634,6 +2782,13 @@
               "minLength": 1,
               "maxLength": 1024,
               "description": "Relative POSIX path, NFC, no reserved names"
+            },
+            "details": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
             }
           },
           "required": [
@@ -3182,7 +3337,9 @@
                   "ERR_CHECKS_FAILED",
                   "ERR_PREIMAGE_CHANGED",
                   "ERR_JOURNAL_CORRUPT",
+                  "ERR_JOURNAL_CHAIN",
                   "ERR_EBUSY",
+                  "ERR_CONFLICT",
                   "ERR_INVALID_PLAN",
                   "ERR_INVALID_MANIFEST",
                   "ERR_INVALID_PROFILE",
@@ -3194,6 +3351,7 @@
                   "ERR_FACT_DISABLED",
                   "ERR_SIGNATURE_MISSING",
                   "ERR_SIGNATURE_INVALID",
+                  "ERR_KEYLESS_UNAVAILABLE",
                   "ERR_TRUST_STATE_CORRUPT",
                   "ERR_ROLLBACK",
                   "ERR_EMITTER_UNKNOWN",
@@ -3424,6 +3582,286 @@
       },
       "required": [
         "roots"
+      ]
+    }
+  },
+  {
+    "name": "axiom_status",
+    "description": "Read-only snapshot of a root's write state, same as `axiom status --json`: who holds .axiom/lock (pid, host, digest, since, stale), the wait queue, registered in-flight intents (paths), interrupted journals that need `axiom_rollback`, the last applied chain entry and whether the journal hash chain verifies. Never takes the lock.",
+    "riskClass": "READ",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "root": {
+          "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "lock": {
+          "type": "object",
+          "properties": {
+            "held": {
+              "type": "boolean"
+            },
+            "holder": {
+              "type": "object",
+              "properties": {
+                "pid": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "host": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                },
+                "stale": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "pid",
+                "stale"
+              ]
+            },
+            "queue": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pid": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "since": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pid",
+                  "since"
+                ]
+              }
+            },
+            "intents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "digest": {
+                    "type": "string"
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "pid": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "since": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "digest",
+                  "paths",
+                  "pid",
+                  "since"
+                ]
+              }
+            }
+          },
+          "required": [
+            "held",
+            "queue",
+            "intents"
+          ]
+        },
+        "interrupted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "manifestDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "sha256:<64 lowercase hex>"
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "staged",
+                  "committing",
+                  "committed",
+                  "rolling-back",
+                  "rolled-back"
+                ]
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "pid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "files": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "done": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "manifestDigest",
+              "phase",
+              "startedAt",
+              "pid",
+              "files",
+              "done"
+            ]
+          }
+        },
+        "corrupt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lastApplied": {
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "manifestDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "committed",
+                "rolled-back",
+                "failed"
+              ]
+            },
+            "at": {
+              "type": "string"
+            },
+            "prev": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "files": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "seq",
+            "manifestDigest",
+            "state",
+            "at",
+            "prev",
+            "files"
+          ]
+        },
+        "chain": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "entries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "head": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "sha256:<64 lowercase hex>"
+            },
+            "firstBad": {
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "prev-mismatch",
+                    "seq-gap",
+                    "parse"
+                  ]
+                }
+              },
+              "required": [
+                "seq",
+                "reason"
+              ]
+            },
+            "missingJournals": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "ok",
+            "entries",
+            "head",
+            "missingJournals"
+          ]
+        }
+      },
+      "required": [
+        "root",
+        "lock",
+        "interrupted",
+        "corrupt",
+        "chain"
       ]
     }
   },

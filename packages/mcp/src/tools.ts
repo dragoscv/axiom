@@ -29,6 +29,7 @@ import {
   SNAPSHOT_MAX_FILES_DEFAULT,
   snapshotRoot,
 } from "./snapshot.js";
+import { collectStatus } from "./status.js";
 import { loadManifest, saveManifest, saveReport, toDigestRef } from "./store.js";
 import {
   type PlanSessionStore,
@@ -262,6 +263,61 @@ export const ManifestDiffOutput = z.object({
   changed: z.array(
     z.object({ path: z.string(), from: z.string().nullable(), to: z.string().nullable() }),
   ),
+});
+
+/** `lockStatus()` of `@codai/axiom-apply` — also the body of the `axiom://lock` resource. */
+export const LockStatusOutput = z.object({
+  held: z.boolean(),
+  holder: z
+    .object({
+      pid: z.int(),
+      host: z.string().optional(),
+      digest: z.string().optional(),
+      since: z.string().optional(),
+      stale: z.boolean(),
+    })
+    .optional(),
+  queue: z.array(z.object({ pid: z.int(), since: z.string() })),
+  intents: z.array(
+    z.object({ digest: z.string(), paths: z.array(z.string()), pid: z.int(), since: z.string() }),
+  ),
+});
+
+const ChainEntryOutput = z.object({
+  seq: z.int().positive(),
+  manifestDigest: DigestRefSchema,
+  state: z.enum(["committed", "rolled-back", "failed"]),
+  at: z.string(),
+  prev: DigestRefSchema,
+  files: z.int().nonnegative(),
+  code: z.string().optional(),
+});
+
+/** Same document as `axiom status --json` (S-706). */
+export const StatusOutput = z.object({
+  root: z.string(),
+  lock: LockStatusOutput,
+  interrupted: z.array(
+    z.object({
+      manifestDigest: DigestRefSchema,
+      phase: JournalPhaseSchema,
+      startedAt: z.string(),
+      pid: z.int(),
+      files: z.int().nonnegative(),
+      done: z.int().nonnegative(),
+    }),
+  ),
+  corrupt: z.array(z.string()),
+  lastApplied: ChainEntryOutput.optional(),
+  chain: z.object({
+    ok: z.boolean(),
+    entries: z.int().nonnegative(),
+    head: DigestRefSchema,
+    firstBad: z
+      .object({ seq: z.int().positive(), reason: z.enum(["prev-mismatch", "seq-gap", "parse"]) })
+      .optional(),
+    missingJournals: z.int().nonnegative(),
+  }),
 });
 
 export const RootsListOutput = z.object({
@@ -658,10 +714,37 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         .string()
         .optional()
         .describe("pr mode: commit message (passed to git on stdin)"),
+      lockTimeoutMs: z
+        .int()
+        .min(0)
+        .max(600_000)
+        .optional()
+        .describe(
+          "How long to wait in the root's lock queue (ms); timeout → ERR_LOCKED with details { holder, waitedMs, queuePosition }",
+        ),
+      keepBackups: z
+        .int()
+        .min(0)
+        .max(1000)
+        .optional()
+        .describe("Pre-image backup sets kept under .axiom/backup after commit (default 3)"),
     },
     outputSchema: ApplyResultSchema,
     annotations: WRITE,
-    async handler(ctx, { bundle, root, profile, confirmDigest, mode, branch, commitMessage }) {
+    async handler(
+      ctx,
+      {
+        bundle,
+        root,
+        profile,
+        confirmDigest,
+        mode,
+        branch,
+        commitMessage,
+        lockTimeoutMs,
+        keepBackups,
+      },
+    ) {
       const parsed = parseBundle(bundle);
       if (confirmDigest !== parsed.manifestDigest) {
         throw new AxiomError(
@@ -684,6 +767,8 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         confirmDigest,
         ...(branch === undefined ? {} : { branch }),
         ...(commitMessage === undefined ? {} : { commitMessage }),
+        ...(lockTimeoutMs === undefined ? {} : { lockTimeoutMs }),
+        ...(keepBackups === undefined ? {} : { keepBackups }),
         preChecks: () => checkBundle(ctx, parsed, profile, rootReal),
       });
       if (result.status === "applied" || result.status === "noop") {
@@ -811,6 +896,29 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       return { roots };
     },
     summarize: (o) => o,
+  }),
+  defineTool({
+    name: "axiom_status",
+    title: "Write state of a root",
+    description:
+      "Read-only snapshot of a root's write state, same as `axiom status --json`: who holds .axiom/lock (pid, host, digest, since, stale), the wait queue, registered in-flight intents (paths), interrupted journals that need `axiom_rollback`, the last applied chain entry and whether the journal hash chain verifies. Never takes the lock.",
+    inputSchema: { root: RootArg },
+    outputSchema: StatusOutput,
+    annotations: READ,
+    async handler(ctx, { root }) {
+      const { rootReal } = await resolveRoot(ctx.policy, root);
+      return collectStatus(rootReal);
+    },
+    summarize: (o) => ({
+      root: o.root,
+      held: o.lock.held,
+      holder: o.lock.holder,
+      queue: o.lock.queue.length,
+      intents: o.lock.intents.length,
+      interrupted: o.interrupted.length,
+      lastApplied: o.lastApplied?.manifestDigest,
+      chainOk: o.chain.ok,
+    }),
   }),
   defineTool({
     name: "axiom_repo_snapshot",

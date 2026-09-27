@@ -103,21 +103,21 @@ Full design (types, containment order, journal format, tool table, EBNF for v2.1
 ### Phase 0 — Hygiene (before any v2 code)
 | ID | Story | Status |
 |----|-------|--------|
-| S-001 | Commit the uncommitted 1.0.21–1.0.24 work as-is (`chore: land uncommitted 1.0.21–1.0.24 tree`) | todo |
-| S-002 | `git mv` all root reports/scratch/outputs to `docs/archive/v1/`; add `.gitignore` for `out*/`, `test-results/`, `*-app/`, `.axiom/` | todo |
-| S-003 | Fix `pnpm-workspace.yaml` (`allowBuilds` placeholder), move `workflows/ci.yml` under `.github/` or delete | todo |
-| S-004 | Write `PLAN.md` + `TRACKER.csv` (this) | doing |
+| S-001 | Commit the uncommitted 1.0.21–1.0.24 work as-is (`chore: land uncommitted 1.0.21–1.0.24 tree`) | done |
+| S-002 | `git mv` all root reports/scratch/outputs to `docs/archive/v1/`; add `.gitignore` for `out*/`, `test-results/`, `*-app/`, `.axiom/` | done |
+| S-003 | Fix `pnpm-workspace.yaml` (`allowBuilds` placeholder), move `workflows/ci.yml` under `.github/` or delete | done |
+| S-004 | Write `PLAN.md` + `TRACKER.csv` (this) | done |
 | S-005 | Tag `v1.0.24-final`; `npm deprecate` 1.x after v2.0.0 ships | done |
 
 ### Phase 1 — v2.0.0 (minimal shippable) — est. 9 agent-days
 | ID | Story | Acceptance | Status |
 |----|-------|-----------|--------|
-| S-101 | Workspace reset: pnpm catalog, TS 7, tsdown, Biome, Vitest 5, Changesets, Node ≥22.14 | `pnpm lint typecheck test build` green on Win + Ubuntu | todo |
-| S-102 | `schema`: Plan/Manifest/CheckReport/ApplyResult/Profile/Journal Zod v4 + errors enum + JSON Schema export | 100% schema tests; `check-schema-json-fresh` guard | todo |
-| S-103 | `canon`: JCS + sha256 + in-toto Statement builder (from codai rules-core, with vectors) | RFC 8785 vectors pass; fast-check `JCS(parse(JCS(x)))==JCS(x)` | todo |
-| S-104 | `plan`: compile Plan → ManifestBundle (inline + CAS) | golden digests identical on 3 OSes | todo |
-| S-105 | `checks`: registry + built-in predicates (`path.allow/deny`, `path.reservedNames`, `content.noSecrets` [PII regexes from v1], `content.maxBytes`, `manifest.maxArtifacts`, `deps.max/deny`, `repo.noOverwriteOf`, `repo.requireCompanion`) + profiles | each predicate unit-tested incl. fail-closed | todo |
-| S-106 | `apply`: containment, staging, 2PC, journal, rollback, idempotency, dry-run diff, lock, Windows specifics | fast-check: containment never escapes (10k), apply×2 = noop, rollback after fault at any step restores byte-identical tree | todo |
+| S-101 | Workspace reset: pnpm catalog, TS 7, tsdown, Biome, Vitest 5, Changesets, Node ≥22.14 | `pnpm lint typecheck test build` green on Win + Ubuntu | done |
+| S-102 | `schema`: Plan/Manifest/CheckReport/ApplyResult/Profile/Journal Zod v4 + errors enum + JSON Schema export | 100% schema tests; `check-schema-json-fresh` guard | done |
+| S-103 | `canon`: JCS + sha256 + in-toto Statement builder (from codai rules-core, with vectors) | RFC 8785 vectors pass; fast-check `JCS(parse(JCS(x)))==JCS(x)` | done |
+| S-104 | `plan`: compile Plan → ManifestBundle (inline + CAS) | golden digests identical on 3 OSes | done |
+| S-105 | `checks`: registry + built-in predicates (`path.allow/deny`, `path.reservedNames`, `content.noSecrets` [PII regexes from v1], `content.maxBytes`, `manifest.maxArtifacts`, `deps.max/deny`, `repo.noOverwriteOf`, `repo.requireCompanion`) + profiles | each predicate unit-tested incl. fail-closed | done |
+| S-106 | `apply`: containment, staging, 2PC, journal, rollback, idempotency, dry-run diff, lock, Windows specifics | fast-check: containment never escapes (10k), apply×2 = noop, rollback after fault at any step restores byte-identical tree | done |
 | S-107 | `mcp`: stdio server, 8 tools w/ annotations + outputSchema, resources `axiom://…`, roots allowlist, stderr-only logging; CLI verbs | in-process Client smoke; bad input → structured error; no `console.log` outside cli | done |
 | S-108 | Repo guards: `check-package-deps`, `check-bundle-size`, `check-cold-start`, `check-error-codes`, `check-tool-parity`, `check-no-stdout`, `check-no-shell-spawn`, `check-vacuous-assertions`, `check-golden-digests`, `check-action-pins`, `check-changeset-present` | `pnpm guards` green; runs pre-commit + CI | done |
 | S-109 | CI: ubuntu/windows/macos × node 22/24; lint→typecheck→test→build→guards→perf; npm trusted publishing (OIDC) | provenance visible on npmjs.com | done (provenance verifiable after first publish) |
@@ -197,15 +197,15 @@ Goal: a new repo is gated in one command and self-diagnoses; several agents writ
 
 | ID | Story | Status |
 |---|---|---|
-| S-701 | `axiom init [--harness copilot\|claude\|codex\|vscode\|auto] [--profile-name]` writes `.vscode/mcp.json` (or harness equivalent), PreToolUse hook JSON per detected harness, `.axiom/profiles/<name>.json` extending `default`, `.axiom/gate-profile.json`, `.gitignore` rules (`.axiom/*` + `!profiles/` + `!gate-profile.json`); idempotent (never overwrites without `--force`, reports what it skipped) | todo |
-| S-702 | `axiom doctor [--root]`: global bin on PATH and version vs npm latest, hook config found + parseable per harness, measured `gate --stdin` latency vs the harness timeout (fail when p95 > 80 % of it), root allowlist, stale lock / interrupted journal, profile loads, `.gitignore` covers runtime state; `--json`; exit code = worst finding | todo |
-| S-703 | Multi-agent conflict detection: `apply` compares the staged manifest's path set with other staged/in-flight manifests under `.axiom/staging` and fails early `ERR_CONFLICT` (new code) naming the other digest + overlapping paths; FIFO lock queue (ticket files) instead of blind polling; `--lock-timeout <ms>` on CLI + MCP; MCP resource `axiom://lock` (holder pid, digest, since) | todo |
-| S-704 | PR mode in an isolated worktree: `apply --mode pr` creates `.axiom/wt/<hex12>` (`git worktree add -b axiom/<name>/<hex12>`), applies there, commits, removes the worktree; the shared tree's HEAD/index are never touched (test asserts `git rev-parse HEAD` + `git status --porcelain` unchanged) | todo |
-| S-705 | Keyless signing: `sign --keyless` via Sigstore (Fulcio cert from ambient OIDC in CI, Rekor entry); `signature.required` gains `identity: {issuer, subjectRegex}` so a profile can demand "signed by this workflow"; offline verify of the bundle (cert chain + SET) stays fail-closed | todo |
-| S-706 | `axiom status` (lock holder, interrupted journals, last N applies) + `axiom log [--json]` (journal history per root); journal entries hash-chained (`prev` = digest of the previous entry) with `verify --journal` detecting a gap or edit | todo |
-| S-707 | Hygiene: `--keep-backups <n>` on CLI/MCP + prune ordered by journal sequence (not mtime); YAML Plans with `# yaml-language-server: $schema=` (same PlanSchema); `check-tracker-sync` also compares PLAN vs TRACKER **status** + fixes the Phase 0/1 drift; MCP conformance 0.2 baseline for spec 2026-07-28 | todo |
-| S-708 | codai follow-ups from the audit: AXIOM disabled for remote/cloud IO sessions (local runner path over a remote shell), missing `node` probed once → `axiom_unavailable`, fallback after an in-gate review is plain direct (no double review) | todo |
-| S-709 | Docs + ripple for every new verb/code/field: `docs/reference/cli.md`, `mcp-tools.md` + `spec/tools.json` + README, `error-codes.md` (ERR_CONFLICT …), `schemas/*.json` regenerated, getting-started rewritten around `axiom init` | todo |
+| S-701 | `axiom init [--harness copilot\|claude\|codex\|vscode\|auto] [--profile-name]` writes `.vscode/mcp.json` (or harness equivalent), PreToolUse hook JSON per detected harness, `.axiom/profiles/<name>.json` extending `default`, `.axiom/gate-profile.json`, `.gitignore` rules (`.axiom/*` + `!profiles/` + `!gate-profile.json`); idempotent (never overwrites without `--force`, reports what it skipped) | done |
+| S-702 | `axiom doctor [--root]`: global bin on PATH and version vs npm latest, hook config found + parseable per harness, measured `gate --stdin` latency vs the harness timeout (fail when p95 > 80 % of it), root allowlist, stale lock / interrupted journal, profile loads, `.gitignore` covers runtime state; `--json`; exit code = worst finding | done |
+| S-703 | Multi-agent conflict detection: `apply` compares the staged manifest's path set with other staged/in-flight manifests under `.axiom/staging` and fails early `ERR_CONFLICT` (new code) naming the other digest + overlapping paths; FIFO lock queue (ticket files) instead of blind polling; `--lock-timeout <ms>` on CLI + MCP; MCP resource `axiom://lock` (holder pid, digest, since) | done |
+| S-704 | PR mode in an isolated worktree: `apply --mode pr` creates `.axiom/wt/<hex12>` (`git worktree add -b axiom/<name>/<hex12>`), applies there, commits, removes the worktree; the shared tree's HEAD/index are never touched (test asserts `git rev-parse HEAD` + `git status --porcelain` unchanged) | done |
+| S-705 | Keyless signing: `sign --keyless` via Sigstore (Fulcio cert from ambient OIDC in CI, Rekor entry); `signature.required` gains `identity: {issuer, subjectRegex}` so a profile can demand "signed by this workflow"; offline verify of the bundle (cert chain + SET) stays fail-closed | done |
+| S-706 | `axiom status` (lock holder, interrupted journals, last N applies) + `axiom log [--json]` (journal history per root); journal entries hash-chained (`prev` = digest of the previous entry) with `verify --journal` detecting a gap or edit | done |
+| S-707 | Hygiene: `--keep-backups <n>` on CLI/MCP + prune ordered by journal sequence (not mtime); YAML Plans with `# yaml-language-server: $schema=` (same PlanSchema); `check-tracker-sync` also compares PLAN vs TRACKER **status** + fixes the Phase 0/1 drift; MCP conformance 0.2 baseline for spec 2026-07-28 | done |
+| S-708 | codai follow-ups from the audit: AXIOM disabled for remote/cloud IO sessions (local runner path over a remote shell), missing `node` probed once → `axiom_unavailable`, fallback after an in-gate review is plain direct (no double review) | done |
+| S-709 | Docs + ripple for every new verb/code/field: `docs/reference/cli.md`, `mcp-tools.md` + `spec/tools.json` + README, `error-codes.md` (ERR_CONFLICT …), `schemas/*.json` regenerated, getting-started rewritten around `axiom init` | done |
 | S-710 | Release v2.4.0 + live verification (npm 9/9, assets, registry, action@v2, Pages, brew) + consumer bump in codai/brivio/metu | todo |
 
 ---

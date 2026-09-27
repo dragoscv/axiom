@@ -33,6 +33,27 @@ flowchart LR
 - Optional: `.axiom/gate-profile.json` and `.axiom/profiles/<name>.json` in the repo
   ([profiles.md](../reference/profiles.md)).
 
+## `axiom init` does the repo-level wiring
+
+Run `axiom init` in the repository root (`--harness auto|copilot|claude|codex|vscode`, default
+`auto` = one harness per marker directory `.github` / `.claude` / `.codex` / `.vscode`, none →
+copilot + vscode). It writes the **repo-scoped** files of this matrix, never the user-level ones
+(`~/.claude.json`, `~/.copilot/mcp-config.json`, `~/.codex/config.toml`):
+
+| Harness | Hook | MCP entry |
+|---|---|---|
+| Claude Code | `.claude/settings.json` — the `PreToolUse` entry from [§ Claude Code](#claude-code) merged in | `.vscode/mcp.json` (add `.mcp.json` by hand for the Claude CLI) |
+| Copilot CLI | `.github/hooks/axiom-gate.json` — exactly the `exec`/`args` file from [§ Copilot CLI](#copilot-cli) | `.vscode/mcp.json` (the CLI reads `~/.copilot/mcp-config.json`; add it there by hand) |
+| VS Code | `.github/hooks/axiom-gate.json` (VS Code loads it) | `.vscode/mcp.json` — `servers.axiom` merged in, `npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` |
+| Codex | **none** — a note only: Codex has no hook API | none — add `[mcp_servers.axiom]` to `~/.codex/config.toml` ([§ Codex](#codex)) |
+
+Plus, for every harness, `.axiom/profiles/<repo-name>.json`, `.axiom/gate-profile.json` and the
+`.gitignore` lines. JSON files are merged, never overwritten without `--force`; JSONC is skipped
+with a note. Then `axiom doctor` confirms the hook files run `axiom gate --stdin` (not `npx`),
+that the global bin is on `PATH` at the same version, and that the gate's **p95 latency** over
+5 spawns is under 4000 ms — 80 % of the 5 s timeout after which every harness below fails open.
+Exit `2` means a check failed.
+
 ## Matrix
 
 | | Claude Code | Copilot CLI | VS Code (Copilot agent) | Codex |
@@ -176,7 +197,8 @@ args = ["-y", "@codai/axiom-mcp", "mcp", "--root", "/abs/path/to/repo"]
 approval_mode = "always"        # keep the human on the destructive tool
 ```
 
-**Hook** — Codex has no PreToolUse hook API. Two ways to still get the seatbelt:
+**Hook** — Codex has no PreToolUse hook API, so `axiom init --harness codex` writes no hook and
+no Codex config; it prints a note pointing here. Two ways to still get the seatbelt:
 
 - Route writes through the MCP tools and turn the raw `apply_patch` tool off in the profile you
   run Codex with, so the only path to disk is `axiom_apply`.
@@ -214,7 +236,8 @@ axiom mcp --root /abs/repo --log-level info   # logs "mcp stdio ready" with the 
 ```
 
 "Configured" is not "fires": after wiring a hook, ask the agent to write `.env` once and watch for
-`AXIOM GATE DENY path.deny` in its transcript.
+`AXIOM GATE DENY path.deny` in its transcript. `axiom doctor` covers the file shapes, the bin
+on `PATH` and the latency; only the live write proves the harness actually loaded the file.
 
 ---
 

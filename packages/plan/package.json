@@ -44,7 +44,8 @@
   },
   "dependencies": {
     "@codai/axiom-canon": "workspace:*",
-    "@codai/axiom-schema": "workspace:*"
+    "@codai/axiom-schema": "workspace:*",
+    "yaml": "catalog:"
   },
   "devDependencies": {
     "fast-check": "catalog:",

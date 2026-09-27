@@ -1,6 +1,6 @@
 # Apply: guarantees, layout and failure modes
 
-*What `apply` promises, what it does not, what `.axiom/` holds afterwards, and how PR mode wraps it in a git branch.*
+*What `apply` promises, what it does not, what `.axiom/` holds afterwards, how several agents share one root, and how PR mode commits to a branch from an isolated worktree.*
 
 `@codai/axiom-apply` takes a verified `ManifestBundle` and a root and either
 writes the change set atomically (from the user tree's point of view) or leaves
@@ -52,8 +52,10 @@ several agents share.
 
 **Single writer per root.** `.axiom/lock` is created with `O_EXCL` and holds
 `{ pid, hostname, startedAt, manifestDigest }`. A lock is stale when its pid is
-dead on the same host or it is older than one hour; waiters retry for 30 s and
-then fail with `ERR_LOCKED` (details carry the holder).
+dead on the same host or it is older than one hour; waiters queue in FIFO order
+for 30 s (`--lock-timeout`) and then fail with `ERR_LOCKED` (details carry the
+holder). Overlapping in-flight applies are refused up front with
+`ERR_CONFLICT` — see [Multi-agent roots](#multi-agent-roots).
 
 **Idempotent.** If `.axiom/applied/<hex>.json` exists and every artifact's
 on-disk digest still matches the manifest, the result is `status: noop` with
@@ -89,7 +91,7 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
   narrows the window to the instant before `rename`; it cannot close it without
   a snapshotting filesystem.
 - **Backups are not version control.** `.axiom/backup/` keeps pre-images for the
-  last `keepBackups` manifests (default 3), then prunes.
+  last `keepBackups` manifests (default 3, `--keep-backups <n>`), then prunes.
 - **No network.** `mode: pr` never pushes or opens a pull request (see below).
 - **`ref` sources are never fetched by apply** (`ERR_REF_OFFLINE` when the blob is not in the
   local CAS); `axiom compile --allow-net` on the same root fetches and pins them first.
@@ -104,19 +106,24 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
 ```
 <root>/.axiom/
   lock                     single-writer lockfile (JSON holder)
+  queue/*.ticket           FIFO waiters for the lock (one per waiting apply)
+  intents/*.json           in-flight path claims of applies that passed validation
   staging/<hex>/           full new tree for one manifest; removed after commit or on any failure
   journal/<hex>.json       Journal { phase, steps[], startedAt, pid }; fsynced before phase 2
+  journal/chain.jsonl      hash-chained log, one line per apply that reached a terminal state
   backup/<hex>/            pre-images of overwritten/deleted files (hardlink, else copy)
   applied/<hex>.json       ApplyResult of a committed apply; presence = idempotency marker
   cas/sha256/<aa>/<hex>    optional content-addressed store (written by compile --store cas)
   manifests/               bundles stored by the MCP server when a root is given to compile
   profiles/<name>.json     custom check profiles
+  wt/<hex12>/              PR mode only: the isolated worktree, removed when the apply ends
   tmp/                     case-sensitivity probe scratch
 ```
 
 `<hex>` is the 64-char manifest digest without the `sha256:` prefix. The
 `default` profile protects `.axiom/**` from being overwritten by a manifest.
-Add `.axiom/` to `.gitignore`.
+`axiom init` adds `.axiom/*` to `.gitignore` with exceptions for
+`.axiom/profiles/` and `.axiom/gate-profile.json`.
 
 ## Two-phase flow
 
@@ -196,11 +203,86 @@ as differing without a hunk), removes staging and returns
 written, no lock file remains, no marker is created. The `manifestDigest` in the
 result is the value to pass as `confirmDigest`.
 
+## Multi-agent roots
+
+Several agents (or several sessions of one) may apply to the same root at once.
+Correctness never depends on them cooperating — the lock and the pre-image
+re-hash at commit still hold — but four mechanisms turn a late, confusing
+failure into an early, explicit one and make the shared state inspectable.
+
+```mermaid
+sequenceDiagram
+  participant A as apply A (src/x.ts)
+  participant B as apply B (src/x.ts)
+  participant I as .axiom/intents
+  participant Q as .axiom/queue + lock
+  A->>I: registerIntent(digest A, paths)
+  B->>I: registerIntent(digest B, paths)
+  I-->>B: ERR_CONFLICT otherDigest A, paths
+  A->>Q: ticket → head of queue → O_EXCL lock
+  A->>Q: 2PC · journal · chain.jsonl · release
+  A->>I: release intent
+```
+
+**Early conflict detection — `ERR_CONFLICT`.** After validation and before
+queueing for the lock, a non-dry-run apply registers an *intent*:
+`.axiom/intents/<hex>-<seq>.json` with `{ manifestDigest, paths (sorted), pid, host, since, seq }`,
+written atomically under a short registry mutex so check-and-register is
+atomic. If a live intent of a **different** digest touches an overlapping path
+— the same path, or one a directory prefix of the other (`a` vs `a/b`),
+compared case-insensitively on Windows and macOS — the apply fails immediately
+with `ERR_CONFLICT`, `details: { otherDigest, paths }`, and nothing is
+registered or written. The same digest (a re-apply) never conflicts with
+itself; a dry-run registers nothing and never fails `ERR_CONFLICT`. Intents of a
+dead pid on this host or older than one hour are ignored and pruned. The intent
+is released when the apply returns. Retry after the other apply finishes, or
+recompile against the tree it produced.
+
+**Fair lock queue.** A waiter writes `.axiom/queue/<sortable-id>-<pid>.ticket`;
+only the head of the queue (oldest live ticket) competes for `.axiom/lock`, so
+waiters are served first-come first-served instead of by polling luck. Tickets
+of dead pids are skipped and removed. The wait is bounded by `--lock-timeout <ms>`
+(CLI, `0..600000`, default 30000; MCP `axiom_apply { lockTimeoutMs }`); on
+timeout the result is `ERR_LOCKED` with
+`details: { holder, waitedMs, queuePosition, lock }` (`queuePosition` 1 = head).
+
+**Inspecting a root.** `axiom status [--root <dir>] [--json]` (MCP
+`axiom_status`, resource `axiom://lock`) is a read-only snapshot that never
+takes the lock: holder (pid, host, digest, since, `STALE`), queue, registered
+intents with their paths, interrupted journals that need `axiom rollback`, the
+last applied entry and whether the chain verifies. `axiom log [--root <dir>] [--limit <n>] [--json]`
+prints the journal chain newest first (default 20):
+`#seq at state manifestDigest name (files) [code]`.
+
+**Tamper-evident journal chain.** Every apply that reaches a terminal state
+(`committed`, `rolled-back`, `failed`) appends one line to
+`.axiom/journal/chain.jsonl`: `{ seq, manifestDigest, state, at, prev, files, code? }`,
+where `prev` is the sha256 of the previous line's exact bytes (64 zeros for
+`seq` 1). `axiom verify --journal --root <dir>` re-walks it and exits `1` with
+`code: ERR_JOURNAL_CHAIN` and `firstBad { seq, reason: prev-mismatch | seq-gap | parse }`
+on any break; it also returns `head` (digest of the last line) and `missing`
+(entries whose journal file was pruned — legal, not a fault). An apply never
+extends a broken chain, and a broken chain never turns a successful write into
+an error: `status` and `doctor` report it. What the chain **cannot** detect on
+its own: an edit or deletion of the **last** line, or truncation of the tail —
+nothing follows them to disagree. Pin `head` somewhere the agent cannot write
+(a CI log, an attestation) when that matters.
+
+**Backup retention.** After a committed apply, `.axiom/backup/` keeps the
+pre-images of the `keepBackups` most recent applies (`--keep-backups <n>`,
+`0..1000`, default 3; MCP `axiom_apply { keepBackups }`) and deletes the rest.
+Order comes from the chain's `seq`, not file mtimes — a copy or a clock change
+can reset an mtime, not a sequence number. Backups the chain does not know
+(roots from before 2.4, or an unreadable chain) fall back to mtime order and
+are pruned first. A pruned backup means that apply can no longer be rolled back.
+
 ## PR mode
 
-`mode: pr` wraps the normal `fs` two-phase apply in a git branch + commit. It
-is the v2 replacement for v1's `applyPR`, which spawned `git` with `shell: true`
-and a caller-supplied branch name (command injection). Sequence:
+`mode: pr` runs the normal two-phase apply in an **isolated linked worktree**
+and commits it to a new branch. The shared checkout's `HEAD`, index and files
+are never touched, so other agents working in the same clone see nothing
+change. It is the v2 replacement for v1's `applyPR`, which spawned `git` with
+`shell: true` and a caller-supplied branch name (command injection). Sequence:
 
 1. **Branch name** — `options.branch` or the deterministic default
   `axiom/<manifest.name>/<manifestDigest hex 0..12>` (no timestamps). It must
@@ -216,23 +298,35 @@ and a caller-supplied branch name (command injection). Sequence:
   manifest touches are inspected; other agents' uncommitted work elsewhere in
   the tree is left alone and is **not** committed.
 4. `refs/heads/<branch>` must not exist → else `ERR_GIT_BRANCH_EXISTS`.
-5. `git switch -c <branch>`, then the ordinary fs apply (lock, staging,
-  journal, TOCTOU check, rename, marker). If that fails or rolls back, axiom
-  switches back to the previous branch and deletes the new one (best effort)
-  and returns the fs result unchanged.
-6. `git add -- <touched paths>` (explicit paths only — this stages deletions of
-  tracked files too), `git commit --quiet -F -` with the message on **stdin**
+5. Under the shared root's lock (intent registered first, as for `fs`): any
+  leftover worktree of the same digest is removed, the branch check is
+  repeated, then a linked worktree is created at `.axiom/wt/<hex12>` on the new
+  branch, started from the current `HEAD` (`git worktree` with
+  `-b <branch> <path> HEAD`). If the worktree already holds the manifest's
+  result the apply is `noop` (PR-mode idempotency is content-based). Otherwise
+  the ordinary two-phase apply runs **inside the worktree** (containment
+  against the worktree's realpath; CAS blobs still read from the shared root's
+  `.axiom/cas`).
+6. `git add -- <written/deleted paths>` in the worktree (explicit paths only —
+  this stages deletions of tracked files too), `git commit --quiet -F -` with the message on **stdin**
   (default: `axiom: apply <name> (<digest12>)` + `Manifest:`/`Plan:` trailers),
-  `git rev-parse HEAD`. If the commit fails, the fs apply is rolled back from
-  its journal and the branch dropped; the result is `rolled-back` with the git
-  error. Hooks (`pre-commit`, `commit-msg`) are **honoured** — a hook that
-  rejects the commit rolls the apply back.
+  `git rev-parse HEAD`. Hooks (`pre-commit`, `commit-msg`) are **honoured** — a
+  hook that rejects the commit fails the apply with status `rolled-back`.
 7. `result.git = { branch, commit, compareUrl? }`. `compareUrl` is derived from
   `git remote get-url origin` when it is GitHub
   (`/compare/<default>...<branch>?expand=1`, default branch from
   `refs/remotes/origin/HEAD`, fallback `main`) or GitLab
   (`/-/merge_requests/new?merge_request[source_branch]=<branch>`); otherwise
   absent.
+8. Always, success or failure: the worktree directory is deleted and its admin
+  entry pruned, together with its own `.axiom/` (journal, staging, marker). The
+  branch is kept only when the commit landed; on any failure a branch this
+  apply created is deleted. Nothing reaches the shared tree either way.
+
+Step 3 is not needed for isolation any more — the worktree starts clean from
+`HEAD` — but it is kept on purpose: a branch built from `HEAD` would otherwise
+silently ignore your uncommitted edits to the very paths it rewrites, so those
+still fail with `ERR_GIT_DIRTY`.
 
 What PR mode does **not** do: push, open a pull request, touch the network, or
 run `git` through a shell. Every invocation is
@@ -249,8 +343,10 @@ git push -u origin <branch>
 gh pr create --head <branch>      # or open result.git.compareUrl
 ```
 
-Idempotency is unchanged: re-applying an already-applied digest is `noop` and
-creates no branch.
+Idempotency in PR mode is content-based: when `HEAD` already holds every
+artifact the manifest declares, the result is `noop` and no branch is left
+behind. Re-running with the same branch name after a landed commit is
+`ERR_GIT_BRANCH_EXISTS` (the branch is yours; push it or delete it).
 
 ## Windows notes
 

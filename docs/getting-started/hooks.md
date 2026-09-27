@@ -159,7 +159,25 @@ and Copilot. The stderr line is what the model sees as the reason.
 for the global bin and 124 ms for `node dist/cli.js`. Every harness kills a hook at its timeout
 (5 s here) and then **fails open**, so an `npx` gate is a gate that never runs.
 
+**Then let `axiom init` write the files.** It writes exactly the two shapes below — nothing else
+in a hook file — and `axiom doctor` checks them afterwards:
+
+| Harness | File `axiom init` writes | How |
+|---|---|---|
+| Copilot CLI · VS Code | `.github/hooks/axiom-gate.json` | whole file, exactly the first JSON block below; an existing different file is `skipped (exists)` unless `--force` |
+| Claude Code | `.claude/settings.json` | merged: the Claude entry below is appended to `hooks.PreToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
+| Codex | — | no hook API; `init` prints a note only ([harnesses.md § Codex](../integration/harnesses.md#codex)) |
+
+`axiom doctor` reports `hook.copilot` / `hook.claude` as `ok` only when the file has a
+PreToolUse entry that runs `axiom gate --stdin` **without** `npx` — an `npx` entry is a `warn`
+because it will time out. It then spawns this CLI's gate 5 times with a benign `Write` payload
+and reports the **p95** against the 5 s hook timeout: above **4000 ms** (80 % of the timeout) is a
+`fail` (exit 2), since the harness would kill the hook and fail open; a benign write being denied
+is a `warn` pointing at `gate-profile.json`.
+
 ### Copilot CLI / VS Code — `~/.copilot/hooks/axiom-gate.json` (user) or `.github/hooks/axiom-gate.json` (repo)
+
+`axiom init` writes this file verbatim (repo scope):
 
 ```json
 {
@@ -189,6 +207,8 @@ Or, mirroring the shell form used by the other house hooks (same bin, resolved t
 ```
 
 ### Claude Code — `.claude/settings.json` (project) or `~/.claude/settings.json`
+
+`axiom init` merges this entry into the project file:
 
 ```json
 {
@@ -273,6 +293,9 @@ strict gate — it is a gate that is silently skipped whenever the machine is bu
 hook runs no repo index, no guards and no git, and why `gate` is its own lazy chunk
 (`dist/gate-lazy.js`, ~300 KB, no MCP SDK) reached straight from the thin `cli.js` entry — loading
 the server code would add the SDK + zod + all engines (~950 KB) to every tool call.
+
+To measure it on *your* machine, under your antivirus and load: `axiom doctor` (check
+`gate.latency`, p95 of 5 spawns, fails above 4000 ms).
 
 ## Limitations
 

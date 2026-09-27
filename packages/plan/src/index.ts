@@ -37,3 +37,4 @@ export {
   type TemplateEmitter,
 } from "./template.js";
 export { type VerifyError, type VerifyResult, verifyBundle } from "./verify.js";
+export { isYamlPath, parsePlanYaml, YAML_MAX_ALIAS_COUNT } from "./yaml.js";

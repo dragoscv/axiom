@@ -151,7 +151,7 @@ describe("compare url", () => {
 });
 
 describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
-  it("happy path: deterministic branch, commits exactly the touched paths, clean tree after", async () => {
+  it("happy path: deterministic branch, commits exactly the touched paths, shared tree untouched", async () => {
     const root = await mkRepo();
     const bundle = bundleOf();
     const spy = vi.spyOn(cp, "spawn");
@@ -163,19 +163,19 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     expect(r.git?.branch).toBe(expectedBranch);
     expect(r.git?.commit).toMatch(/^[a-f0-9]{40}$/);
     expect(r.git?.compareUrl).toBeUndefined(); // no origin
-    expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe(expectedBranch);
-    expect(git(root, ["rev-parse", "HEAD"]).trim()).toBe(r.git?.commit);
-    const status = git(root, ["show", "--name-status", "--format=", "HEAD"])
+    // S-704: the shared tree stays on main; the commit lives on the branch only.
+    expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
+    expect(git(root, ["rev-parse", expectedBranch]).trim()).toBe(r.git?.commit);
+    const status = git(root, ["show", "--name-status", "--format=", expectedBranch])
       .trim()
       .split("\n")
       .map((l) => l.replace(/\s+/g, " "))
       .sort();
     expect(status).toEqual(["A src/a.ts", "D old.txt", "M over.txt"]);
-    expect(
-      git(root, ["status", "--porcelain", "--", "src", "old.txt", "over.txt", "keep.txt"]),
-    ).toBe("");
-    expect(await readText(root, "over.txt")).toBe("v2\n");
-    expect(await exists(root, "old.txt")).toBe(false);
+    expect(git(root, ["status", "--porcelain"])).toBe("");
+    expect(git(root, ["show", `${expectedBranch}:over.txt`])).toBe("v2\n");
+    expect(await readText(root, "over.txt")).toBe("v1\n");
+    expect(await exists(root, "old.txt")).toBe(true);
     // spawn-arg snapshot: shell false, no interpolation, message via stdin
     expect(spy).toHaveBeenCalled();
     for (const call of spy.mock.calls) {
@@ -185,7 +185,7 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
       for (const a of args) expect(a).not.toMatch(/[;&|`$<>]/);
       if (args[0] === "commit") expect(args).toEqual(["commit", "--quiet", "-F", "-"]);
     }
-    const msg = git(root, ["log", "-1", "--format=%B"]);
+    const msg = git(root, ["log", "-1", "--format=%B", expectedBranch]);
     expect(msg).toContain(`axiom: apply demo (${bundle.manifestDigest.slice(7, 19)})`);
     expect(msg).toContain(`Manifest: ${bundle.manifestDigest}`);
   });
@@ -196,8 +196,8 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     const commitMessage = "-x --amend\n\n`id` $(id)\nline3";
     const r = await prApply(bundle, root, { commitMessage, branch: "feature/msg" });
     expect(r.status).toBe("applied");
-    expect(git(root, ["log", "-1", "--format=%B"]).trimEnd()).toBe(commitMessage);
-    expect(git(root, ["log", "--oneline"]).trim().split("\n")).toHaveLength(2);
+    expect(git(root, ["log", "-1", "--format=%B", "feature/msg"]).trimEnd()).toBe(commitMessage);
+    expect(git(root, ["log", "--oneline", "feature/msg"]).trim().split("\n")).toHaveLength(2);
   });
 
   it("dirty touched path → ERR_GIT_DIRTY, no branch created, tree untouched", async () => {
@@ -220,7 +220,9 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     const r = await prApply(bundle, root);
     expect(r.error).toBeUndefined();
     expect(r.status).toBe("applied");
-    const committed = git(root, ["show", "--name-only", "--format=", "HEAD"]).trim().split("\n");
+    const committed = git(root, ["show", "--name-only", "--format=", r.git?.branch ?? ""])
+      .trim()
+      .split("\n");
     expect(committed).not.toContain("keep.txt");
     expect(committed).not.toContain("scratch/untracked.txt");
     expect(await readText(root, "keep.txt")).toBe("someone else's edit\n");
@@ -235,6 +237,83 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     expect(r.error?.code).toBe("ERR_GIT_BRANCH_EXISTS");
     expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
     expect(await exists(root, "src/a.ts")).toBe(false);
+  });
+
+  it("S-704: shared HEAD, symbolic ref and status are byte-identical after a PR apply; no worktree left", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "keep.txt"), "uncommitted edit\n");
+    await writeTree(root, { "scratch/u.txt": "u" });
+    const before = {
+      head: git(root, ["rev-parse", "HEAD"]),
+      sym: git(root, ["symbolic-ref", "HEAD"]),
+      status: git(root, ["status", "--porcelain", "--untracked-files=all"]),
+      index: git(root, ["ls-files", "--stage"]),
+    };
+    const bundle = bundleOf();
+    const r = await prApply(bundle, root);
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe("applied");
+    expect(r.root).toBe(root);
+    expect({
+      head: git(root, ["rev-parse", "HEAD"]),
+      sym: git(root, ["symbolic-ref", "HEAD"]),
+      status: git(root, ["status", "--porcelain", "--untracked-files=all"]),
+      index: git(root, ["ls-files", "--stage"]),
+    }).toEqual(before);
+    const branch = r.git?.branch ?? "";
+    // Exactly one new commit on the branch, parented on the shared HEAD, holding the artifacts.
+    expect(git(root, ["rev-list", "--count", `${before.head.trim()}..${branch}`]).trim()).toBe("1");
+    expect(git(root, ["rev-parse", `${branch}^`])).toBe(before.head);
+    expect(git(root, ["show", `${branch}:src/a.ts`])).toBe("export const a = 1;\n");
+    // Shared tree files untouched.
+    expect(await exists(root, "src/a.ts")).toBe(false);
+    expect(await readText(root, "over.txt")).toBe("v1\n");
+    // Only the main worktree is registered; nothing left under .axiom/wt.
+    const wts = git(root, ["worktree", "list", "--porcelain"])
+      .split("\n")
+      .filter((l) => l.startsWith("worktree "));
+    expect(wts).toHaveLength(1);
+    const wtDir = path.join(root, ".axiom", "wt");
+    expect(await fs.readdir(wtDir).catch(() => [])).toEqual([]);
+  });
+
+  it("S-704: branch exists → ERR_GIT_BRANCH_EXISTS, no worktree, shared tree untouched, branch kept", async () => {
+    const root = await mkRepo();
+    const bundle = bundleOf();
+    const branch = `axiom/demo/${bundle.manifestDigest.slice(7, 19)}`;
+    git(root, ["branch", branch]);
+    const tip = git(root, ["rev-parse", branch]);
+    const status = git(root, ["status", "--porcelain", "--untracked-files=all"]);
+    const r = await prApply(bundle, root);
+    expect(r.error?.code).toBe("ERR_GIT_BRANCH_EXISTS");
+    expect(git(root, ["symbolic-ref", "HEAD"]).trim()).toBe("refs/heads/main");
+    expect(git(root, ["status", "--porcelain", "--untracked-files=all"])).toBe(status);
+    expect(git(root, ["rev-parse", branch])).toBe(tip);
+    expect(
+      git(root, ["worktree", "list", "--porcelain"])
+        .split("\n")
+        .filter((l) => l.startsWith("worktree ")),
+    ).toHaveLength(1);
+  });
+
+  it("S-704: commit failure inside the worktree → rolled-back, branch deleted, worktree removed", async () => {
+    const root = await mkRepo();
+    // A failing pre-commit hook makes `git commit` exit non-zero inside the worktree.
+    const hooks = path.join(root, ".git", "hooks");
+    await fs.mkdir(hooks, { recursive: true });
+    await fs.writeFile(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const r = await prApply(bundleOf(), root);
+    expect(r.status).toBe("rolled-back");
+    expect(r.error?.code).toBe("ERR_GIT_FAILED");
+    expect(git(root, ["branch", "--list"]).trim()).toBe("* main");
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(head);
+    expect(await exists(root, "src/a.ts")).toBe(false);
+    expect(
+      git(root, ["worktree", "list", "--porcelain"])
+        .split("\n")
+        .filter((l) => l.startsWith("worktree ")),
+    ).toHaveLength(1);
   });
 
   it("not a repo → ERR_GIT_NOT_REPO", async () => {

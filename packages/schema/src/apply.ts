@@ -20,6 +20,11 @@ export const ApplyErrorSchema = z
     code: ErrorCodeSchema,
     message: z.string(),
     path: RelPathSchema.optional(),
+    /**
+     * Machine-readable context for the code (e.g. `ERR_CONFLICT` → `{ otherDigest, paths }`,
+     * `ERR_LOCKED` → `{ holder, waitedMs, queuePosition }`). Branch on `code`, read `details`.
+     */
+    details: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

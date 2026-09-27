@@ -4,6 +4,7 @@
  * message travels on stdin (`-F -`), never as an argv token.
  */
 import childProcess from "node:child_process";
+import fs from "node:fs/promises";
 import { AxiomError, type DigestRef } from "@codai/axiom-schema";
 import { IS_WIN32 } from "./fsx.js";
 import { realpathNative } from "./realpath.js";
@@ -354,4 +355,38 @@ export async function headCommit(rootReal: string): Promise<string> {
     });
   }
   return sha;
+}
+
+/**
+ * S-704: create an isolated linked worktree at `wtPath` on a NEW branch `branch` started from
+ * the shared tree's HEAD. The shared tree's HEAD, index and files are never touched. Returns
+ * the realpath of the worktree — containment for the PR apply is checked against it.
+ */
+export async function addWorktree(
+  rootReal: string,
+  wtPath: string,
+  branch: string,
+): Promise<string> {
+  await runGit(rootReal, ["worktree", "add", "--quiet", "-b", branch, wtPath, "HEAD"]);
+  let real = await realpathNative(wtPath);
+  if (IS_WIN32 && real.startsWith("\\\\?\\")) real = real.slice(4);
+  return real;
+}
+
+/**
+ * Best-effort removal of an axiom-owned linked worktree (always a directory under
+ * `<root>/.axiom/wt/`), then a worktree prune to drop its admin entry. The directory is
+ * deleted with `fs.rm`, which lstat's every entry and unlinks links instead of following
+ * them — a forced git-side removal can recurse into a Windows junction's target, this cannot.
+ * Never throws.
+ */
+export async function removeWorktree(rootReal: string, wtPath: string): Promise<void> {
+  await fs
+    .rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    .catch(() => undefined);
+  try {
+    await runGit(rootReal, ["worktree", "prune"]);
+  } catch {
+    /* best-effort */
+  }
 }

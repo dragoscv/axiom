@@ -1,6 +1,6 @@
 # MCP tools, resources and transports
 
-*The 17 tools of `@codai/axiom-mcp`, their inputs and outputs, the `axiom://` resources, stdio and Streamable HTTP transports, and the `--wire` protocol eras.*
+*The 18 tools of `@codai/axiom-mcp`, their inputs and outputs, the `axiom://` resources, stdio and Streamable HTTP transports, and the `--wire` protocol eras.*
 
 > [!NOTE]
 > The v1 HTTP demo API this file used to describe is archived at
@@ -51,11 +51,12 @@ sequenceDiagram
 | `axiom_plan_add` | act | Append a chunk of `Plan.artifacts[]` (validated with `PlanArtifactSchema`; each call ≤ 4 MiB, inline content ≤ 256 KiB per artifact) | `{ sessionId, artifacts[] }` | session descriptor; duplicate path → `ERR_INVALID_PLAN` (with `path`), sealed/over-budget → `ERR_PLAN_SESSION_STATE`, unknown session → `ERR_TASK_NOT_FOUND` |
 | `axiom_plan_seal` | act | Assemble header + artifacts into one Plan and compile it through the **same** code path as `axiom_plan_compile` (options identical, manifest stored under `<root>/.axiom/manifests` when a root is given); the session is consumed even on failure | `{ sessionId, store?, root? }` | `ManifestBundle` |
 | `axiom_apply_dry_run` | read | Containment + pre-image check + staging + unified diff, no user files touched | `{ bundle, root, profile? }` | `ApplyResult { mode: "dry-run", diff, files[] }` |
-| `axiom_apply` | destructive | Two-phase commit: stage → journal → rename; requires `confirmDigest === manifestDigest`; single writer via `.axiom/lock` | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
+| `axiom_apply` | destructive | Two-phase commit: stage → journal → rename; requires `confirmDigest === manifestDigest`; registers an intent (overlap with another in-flight digest → `ERR_CONFLICT`), then waits in the FIFO queue for `.axiom/lock` (single writer; timeout → `ERR_LOCKED`). `mode: "pr"` applies in an axiom-owned worktree `.axiom/wt/<hex12>` on a new branch and never touches the shared tree | `{ bundle, root, profile?, confirmDigest, mode?: fs\|pr, branch?, commitMessage?, lockTimeoutMs? (0..600000, default 30000), keepBackups? (0..1000, default 3) }` | `ApplyResult` — see [`axiom_apply` error details](#axiom_apply-error-details) |
 | `axiom_rollback` | destructive | Reverse-replay the journal of an applied manifest, scoped to its recorded paths | `{ root, manifestDigest }` | `{ manifestDigest, status, phase, steps[], root }` |
 | `axiom_manifest_diff` | read | Structural diff between two manifests (added/removed/changed artifacts) | `{ a, b }` (bundle or `sha256:` ref) | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | read | Parse `.axm` v2 DSL text into a `Plan`; diagnostics carry 1-based `{line, column}` ranges and `ERR_*` codes; `plan` present only when error-free (parser loaded lazily) | `{ source }` | `{ plan?, diagnostics[] }` |
 | `axiom_roots_list` | read | List the allowlisted roots the server may touch | `{}` | `{ roots[] }` |
+| `axiom_status` | read | Write state of a root, same document as `axiom status --json` ([below](#axiom_status)): lock holder, wait queue, in-flight intents, interrupted journals, last applied entry, journal chain verdict; never takes the lock | `{ root? }` | `{ root, lock: { held, holder?, queue[], intents[] }, interrupted[], corrupt[], lastApplied?, chain: { ok, entries, head, firstBad?, missingJournals } }` |
 | `axiom_repo_snapshot` | read | Deterministic, content-addressed inventory of a root ([snapshot.md](../guides/snapshot.md)): regular files and symlinks as `{ path, bytes, sha256?, mode, kind }` sorted by code point, `snapshotDigest = sha256(JCS(body))`; honours the root `.gitignore`, always skips `.git/` and `.axiom/`, never follows symlinks or leaves the root; globs containing `..` → `ERR_CONTAINMENT` | `{ root?, include?[], exclude?[], maxFiles?, maxBytes?, respectGitignore?, withContentDigest? }` | `RepoSnapshot { apiVersion, kind, root: { kind: "relative" }, snapshotDigest, body: { files[], truncated, counts: { files, bytes } } }` — text summary is `{ snapshotDigest, counts, truncated, paths[≤20] }` |
 
 Risk classes are derived from the MCP annotations (`readOnlyHint` → READ, `destructiveHint` →
@@ -70,7 +71,38 @@ operator, not to an agent's tool surface. Its code is a lazy chunk (`dist/migrat
 **Deliberately not tools.** `axiom gc` (CAS garbage collection, [cas.md](../concepts/cas.md)) and network
 fetching of `ref` sources (`compile --allow-net`, [plan-format.md](plan-format.md#ref-sources)) are
 CLI-only: both are operator decisions (disk reclamation, egress), so an agent cannot trigger them
-through the server. The full verb list is in [cli.md](cli.md).
+through the server. So are `axiom init` / `axiom doctor` (they write harness config and spawn the
+gate) and `axiom sign --keyless` (needs an ambient OIDC token). The full verb list is in [cli.md](cli.md).
+
+### `axiom_apply` error details
+
+`ApplyResult.error` is `{ code, message, path?, details? }`; `details` is machine-readable context
+for the code. Branch on `code`, then read `details`:
+
+| `error.code` | `error.details` | Meaning |
+|---|---|---|
+| `ERR_CONFLICT` | `{ otherDigest, paths[] }` (sorted) | a live intent of another manifest on this root touches an overlapping path (same path, or one is a directory prefix of the other; case-insensitive on Windows/macOS). Raised **before** queueing; nothing is registered or written. A re-apply of the same digest never conflicts with itself; `axiom_apply_dry_run` never registers an intent |
+| `ERR_LOCKED` | `{ holder?: { pid, host, digest, since }, waitedMs, queuePosition, lock }` | still not at the lock after `lockTimeoutMs`; `queuePosition` is 1-based (1 = head of the queue) |
+
+A broken journal chain never fails an apply: the write has already happened, the chain entry is
+simply not appended, and `axiom_status` (`chain.ok: false`) / `axiom verify --journal` report it.
+
+### `axiom_status`
+
+Input `{ root? }` (an allowlisted root; optional when exactly one is allowlisted, else
+`ERR_ROOT_REQUIRED`). Output — identical to `axiom status --json`:
+
+| Field | Shape |
+|---|---|
+| `root` | realpath'd root |
+| `lock` | `{ held, holder?: { pid, host?, digest?, since?, stale }, queue: [{ pid, since }], intents: [{ digest, paths[], pid, since }] }` — `queue` = live FIFO tickets under `.axiom/queue/`, `intents` = live in-flight applies under `.axiom/intents/` |
+| `interrupted` | `[{ manifestDigest, phase: staged\|committing\|rolling-back, startedAt, pid, files, done }]` — journals that need `axiom_rollback` (the next apply also recovers) |
+| `corrupt` | journal files under `.axiom/journal/` that do not parse |
+| `lastApplied` | optional; newest `committed` chain entry `{ seq, manifestDigest, state, at, prev, files, code? }` |
+| `chain` | `{ ok, entries, head, firstBad?: { seq, reason: prev-mismatch\|seq-gap\|parse }, missingJournals }` |
+
+The text summary is `{ root, held, holder, queue, intents, interrupted, lastApplied, chainOk }`
+(counts for the lists).
 
 ### Tasks (D-24)
 
@@ -109,7 +141,9 @@ needs `store: "cas"` and therefore a root.
 `axiom://journal/<root-id>` (recent journal entries), `axiom://profile/<name>`
 (built-in check profiles: `default`, `strict`, `permissive`), `axiom://emitters` (static list of
 `{emitter, version, template, description}` rows for the template emitters compiled into this
-server — currently `web@2.0.0`; see [emitters.md](../guides/emitters.md)). Also `axiom://manifest/<sha>`,
+server — currently `web@2.0.0`; see [emitters.md](../guides/emitters.md)), `axiom://lock`
+(`{ roots: [{ root, held, holder?, queue[], intents[] }] }` — the lock status of every
+allowlisted root, sorted by root; read-only, never takes a lock). Also `axiom://manifest/<sha>`,
 `axiom://report/<sha>`, `axiom://applied/<sha>` (stored bundles, reports and results) and
 `axiom://schema/<Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot>`.
 

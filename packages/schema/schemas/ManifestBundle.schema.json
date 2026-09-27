@@ -361,6 +361,66 @@
         "additionalProperties": false
       }
     },
+    "keylessSignatures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mediaType": {
+            "type": "string"
+          },
+          "verificationMaterial": {},
+          "dsseEnvelope": {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "string",
+                "format": "base64",
+                "contentEncoding": "base64",
+                "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+              },
+              "payloadType": {
+                "type": "string"
+              },
+              "signatures": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sig": {
+                      "type": "string",
+                      "format": "base64",
+                      "contentEncoding": "base64",
+                      "pattern": "^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$"
+                    },
+                    "keyid": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sig"
+                  ],
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "required": [
+              "payload",
+              "payloadType",
+              "signatures"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "mediaType",
+          "verificationMaterial",
+          "dsseEnvelope"
+        ],
+        "additionalProperties": {}
+      }
+    },
     "blobs": {
       "default": {},
       "type": "object",

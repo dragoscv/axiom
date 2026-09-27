@@ -256,6 +256,30 @@ export const ManifestBundleSchema = z
     envelope: DsseEnvelopeSchema.optional(),
     /** Detached DSSE signatures over `manifest` (D-16). Not part of `manifestDigest`. */
     signatures: z.array(ManifestSignatureSchema).optional(),
+    /**
+     * Sigstore keyless bundles (S-705) over the same payload as `signatures` — Fulcio certificate
+     * + Rekor entry + DSSE envelope. Verified by `manifest.requireSigned` with a `keyless` policy.
+     * Not part of `manifestDigest`.
+     */
+    keylessSignatures: z
+      .array(
+        z
+          .object({
+            mediaType: z.string(),
+            verificationMaterial: z.unknown(),
+            dsseEnvelope: z
+              .object({
+                payload: z.base64(),
+                payloadType: z.string(),
+                signatures: z
+                  .array(z.object({ sig: z.base64(), keyid: z.string().optional() }).loose())
+                  .min(1),
+              })
+              .loose(),
+          })
+          .loose(),
+      )
+      .optional(),
     /** Inline side-channel keyed by `sha256:<hex>`. */
     blobs: z.record(DigestRefSchema, BlobSchema).default({}),
   })

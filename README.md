@@ -67,6 +67,20 @@ flowchart LR
 | GitHub Action | `uses: dragoscv/axiom/action@v2` | ubuntu · macos · windows runners |
 | MCP Registry | `io.github.dragoscv/axiom` | any registry-aware MCP client |
 
+Then wire a repository in one idempotent step and check it:
+
+```sh
+npm i -g @codai/axiom-mcp
+axiom init      # .vscode/mcp.json + PreToolUse hook (.github/hooks/axiom-gate.json or .claude/settings.json)
+                # + .axiom/profiles/<repo>.json + .axiom/gate-profile.json + .gitignore lines
+axiom doctor    # bin on PATH, hooks, gate p95 latency vs the 5 s hook timeout, lock, journals, profiles
+```
+
+`init` detects the harness (`--harness auto|copilot|claude|codex|vscode`), merges into existing
+JSON instead of overwriting (`--force` to replace), and writes only a note for Codex, which has no
+hook API. `doctor` exits 2 when a check fails. Per-harness files:
+[docs/getting-started/install.md](docs/getting-started/install.md).
+
 Binaries ship with `SHA256SUMS` and Sigstore provenance; npm packages carry npm provenance.
 How to check them: [SECURITY.md](SECURITY.md#verifying-what-you-download).
 
@@ -155,7 +169,7 @@ Scope, `--pre` mode and how to verify the attestation later: [docs/guides/verify
 
 ## Tools
 
-Seventeen MCP tools, each with `annotations` and an `outputSchema`; errors are `isError` results
+Eighteen MCP tools, each with `annotations` and an `outputSchema`; errors are `isError` results
 carrying a code from the closed `ERROR_CODES` enum — a handler never throws.
 
 | Tool | What it does | Annotations |
@@ -176,10 +190,11 @@ carrying a code from the closed `ERROR_CODES` enum — a handler never throws.
 | `axiom_manifest_diff` | Added / removed / changed artifacts between two manifests | read-only |
 | `axiom_axm_parse` | `.axm` DSL text → `Plan` with `{line, column}` diagnostics | read-only |
 | `axiom_roots_list` | The allowlisted roots | read-only |
+| `axiom_status` | Lock holder, queue, in-flight intents, interrupted journals, last apply, journal-chain health | read-only |
 | `axiom_repo_snapshot` | Deterministic, content-addressed inventory of a root (`snapshotDigest`) | read-only |
 
 Inputs, outputs, resources (`axiom://…`), transports (`--wire 2026|2025`) and the error
-contract: [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md). CLI verbs (`sign`, `trust`, `gc`, `migrate v1`,
+contract: [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md). CLI verbs (`init`, `doctor`, `status`, `log`, `sign`, `trust`, `gc`, `migrate v1`,
 `snapshot`, …): [packages/mcp/README.md](packages/mcp/README.md).
 
 ## Architecture
@@ -261,10 +276,14 @@ apply. Catalogue, params and profile authoring: [docs/guides/checks.md](docs/gui
 
 **2.3.x shipped.** Plan compiler with every source type, 18 predicates, fail-closed apply with
 journal/rollback/PR mode, MCP SDK v2 (2026-07-28 wire, `--wire 2025` fallback) over stdio and
-HTTP with 17 tools, fail-closed gate, `.axm` DSL + LSP + VS Code extension, DSSE signing,
+HTTP, fail-closed gate, `.axm` DSL + LSP + VS Code extension, DSSE signing,
 `verify --tree` + attestation + GitHub Action, CI on ubuntu/windows/macos, 18 repo guards.
 **2.2.1** adds standalone binaries with provenance, the MCP Registry listing, the docs site and
-the `action@v2` tag. codai's SWE harness routes every write through the gate by default
+the `action@v2` tag. **2.4.0 (Phase 7, D-34)** adds `axiom init` / `axiom doctor`, multi-agent
+roots (early `ERR_CONFLICT`, FIFO lock queue, `--lock-timeout`), PR mode in an isolated worktree,
+Sigstore keyless signing with an issuer/subject policy, `axiom status` / `axiom log` /
+`verify --journal` over a hash-chained journal, `--keep-backups`, YAML Plans — and the 18th MCP tool,
+`axiom_status`. codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).
 

@@ -92,11 +92,12 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 | `axiom_plan_add` | ACT | `{ sessionId, artifacts[] }` (each call ≤ 4 MiB) | session descriptor; duplicate path across chunks → `ERR_INVALID_PLAN`, over budget (2000 artifacts / 64 MiB) or sealed → `ERR_PLAN_SESSION_STATE` |
 | `axiom_plan_seal` | ACT | `{ sessionId, store?: inline\|cas, root? }` | `ManifestBundle` — compiled by the same code path as `axiom_plan_compile`, so the digest equals a one-shot compile of the assembled Plan (property-tested); the session is consumed |
 | `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
-| `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest }` | `ApplyResult` |
+| `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest, mode?, branch?, commitMessage?, lockTimeoutMs? (0..600000), keepBackups? (0..1000) }` | `ApplyResult` — `error.details` carries `{ otherDigest, paths }` for `ERR_CONFLICT` and `{ holder, waitedMs, queuePosition }` for `ERR_LOCKED` |
 | `axiom_rollback` | SENSITIVE | `{ root, manifestDigest }` | `{ status:"rolled-back", phase, steps }` |
 | `axiom_manifest_diff` | READ | `{ a: bundle\|"sha256:…", b }` | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | READ | `{ source }` (`.axm` text) | `{ plan?, diagnostics: [{ severity, code, message, range: { start: {line, column}, end } }] }` |
 | `axiom_roots_list` | READ | `{}` | `{ roots: [{ path, writable, hasGit }] }` |
+| `axiom_status` | READ | `{ root? }` | `{ root, lock: { held, holder?: { pid, host?, digest?, since?, stale }, queue[], intents[] }, interrupted[], corrupt[], lastApplied?, chain: { ok, entries, head, firstBad?, missingJournals } }` — same as `axiom status --json`; never takes the lock |
 | `axiom_repo_snapshot` | READ | `{ root?, include?[], exclude?[], maxFiles? (20000, cap 50000), maxBytes? (64 MiB), respectGitignore? (true), withContentDigest? (true) }` | `RepoSnapshot { snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind }], truncated, counts } }` — sorted, no timestamps/absolute paths; `.git/`, `.axiom/` always skipped; symlinks recorded, never followed (`docs/guides/snapshot.md`) |
 
 Every tool carries MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
@@ -109,7 +110,8 @@ see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
 `axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot}`,
-`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/guides/emitters.md`).
+`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/guides/emitters.md`),
+`axiom://lock` (`{ roots: [{ root, held, holder?, queue[], intents[] }] }` for every allowlisted root; read-only).
 
 ## Trust model
 
@@ -141,11 +143,18 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 ```
 axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
               [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
-axiom compile <plan.json> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
+axiom init    [--root .] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]
+              (.vscode/mcp.json + PreToolUse hook + .axiom/profiles/<name>.json + .axiom/gate-profile.json + .gitignore; idempotent)
+axiom doctor  [--root .] [--json]               (exit 0 = no failing check, 2 = at least one fail; warnings exit 0)
+axiom status  [--root .] [--json]               (lock holder/queue/intents, interrupted journals, last applied, chain)
+axiom log     [--root .] [--limit 20] [--json]  (journal chain, newest first)
+axiom compile <plan.json|plan.yaml|plan.axm> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
 axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
+axiom verify  --journal --root .                (journal hash chain; broken → exit 1 + code ERR_JOURNAL_CHAIN)
 axiom verify  <bundle.json> --tree <root> [--pre] [--attest out.intoto.json]   (tree matches manifest? docs/guides/verify-tree.md)
 axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
-axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--allow-guards] [--guard-allowlist <abs>]...
+axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--lock-timeout <ms>] [--keep-backups <n>]
+              [--pr [--branch b] [--message m]] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
 axiom gc      --root . [--dry-run] [--older-than 30d] [--keep all-manifests|journal]   (CAS garbage collection; CLI only, no MCP tool)
 axiom diff    <a.json> <b.json>
@@ -153,6 +162,8 @@ axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Jour
 axiom emitters [--json]
 axiom keygen  [--out <dir>] [--name <label>]     (ed25519; private key → <dir>/axiom-signing-<id>.key 0600, public entry → stdout)
 axiom sign    <bundle.json> [--key-file <path>] [-o out.json] [--root-id <id>]   (key from --key-file or $AXIOM_SIGNING_KEY; --root-id = root-bound envelope)
+axiom sign    <bundle.json> --keyless [--bound --root . | --root-id <id>] [-o out.json]
+              (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root . | root-id [<id>|--clear] --root .
 axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level warn]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
@@ -161,7 +172,8 @@ axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>].
 axiom snapshot-diff <a.json> <b.json>          (RepoSnapshot → { added, removed, changed })
 ```
 
-Exit codes: `0` ok · `1` verdict fail / apply failed · `2` usage or error. Non-`mcp` verbs print JSON to stdout.
+Exit codes: `0` ok · `1` verdict fail / apply failed / journal chain broken / keyless unavailable · `2` usage or error
+(`doctor`: `2` = a check failed). Non-`mcp` verbs print JSON to stdout (`init`, `doctor`, `status`, `log`, `check`, `emitters`: human lines unless `--json`).
 
 `ref` sources (`{ type: "ref", uri, digest }`) are offline by default: a digest already in
 `<root>/.axiom/cas` resolves without network, anything else is `ERR_NET_DISABLED`. `--allow-net`

@@ -185,6 +185,44 @@ diffs and the same Plan expressed inline have the **same** `planDigest` (golden 
 
 The predicate catalogue and each `params` shape: [checks.md](../guides/checks.md).
 
+### YAML plans
+
+`axiom compile plan.yaml` (or `.yml`, case-insensitive) accepts a Plan written as YAML. The
+parser (`parsePlanYaml` in `packages/plan/src/yaml.ts`, `yaml` loaded lazily) produces a plain
+object that is then validated by the **same** `PlanSchema` and compiled by the same
+`compilePlan` as the JSON form, so a YAML Plan and its JSON twin yield the **same**
+`planDigest` and `manifestDigest` (pinned against `packages/testkit/golden/plan-basic` in
+`packages/plan/src/yaml.test.ts`).
+
+| Rule | Violation |
+|------|-----------|
+| Exactly one document (`---` separating a second one is rejected, with its line) | `ERR_INVALID_PLAN` |
+| The document root is a mapping | `ERR_INVALID_PLAN` |
+| YAML 1.2 `core` schema only: no `!!binary`, `!!set` or custom tags, no `<<` merge keys; any unresolved tag or parser warning is an error, never a silent string | `ERR_INVALID_PLAN` |
+| At most 100 alias expansions (`YAML_MAX_ALIAS_COUNT`) — alias bombs are rejected | `ERR_INVALID_PLAN` |
+| Mapping keys are unique | `ERR_INVALID_PLAN` |
+
+YAML errors carry `details: { format: "yaml", line?, column? }` (1-based); the CLI exits 2.
+Editor support: a leading `# yaml-language-server: $schema=<url>` line is an ordinary comment and
+is ignored; a top-level `$schema` **key** is stripped before validation (otherwise the strict
+`PlanSchema` would reject it). Quote strings YAML would retype — `mode: "0644"`, not `0644`.
+
+```yaml
+# yaml-language-server: $schema=https://axiom.dev/schemas/plan.json
+apiVersion: axiom.dev/v2
+kind: Plan
+name: golden-basic
+intent: "Three inline files: text, nested path, and a binary payload."
+artifacts:
+  - path: src/index.ts
+    source: { type: inline, content: "export const answer = 42;\n" }
+  - path: bin/run.sh
+    mode: "0755"
+    source: { type: inline, encoding: base64, content: IyEvYmluL3NoCmVjaG8gAGJpbmFyeQo= }
+checks:
+  - { id: no-secrets, predicate: content.noSecrets, params: {} }
+```
+
 ## Manifest and ManifestBundle (output)
 
 `axiom_plan_compile` produces a `ManifestBundle`. Only `bundle.manifest` is
