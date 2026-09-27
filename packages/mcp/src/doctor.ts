@@ -10,6 +10,7 @@ import { journalStatus, lockStatus, verifyChain } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
 import { GateProfileSchema } from "./gate.js";
 import { CLAUDE_HOOK_ENTRY, GITIGNORE_LINES, INIT_FILES } from "./init.js";
+import { realDir } from "./roots.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
 
@@ -377,13 +378,14 @@ async function checkGitignore(root: string): Promise<DoctorCheck> {
 }
 
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
-  const root = opts.root;
   const checks: DoctorCheck[] = [];
-  const st = await stat(root).catch(() => undefined);
+  const st = await stat(opts.root).catch(() => undefined);
   if (st === undefined || !st.isDirectory()) {
-    checks.push(check("root", "fail", `${root} is not a directory`, "pass --root <dir>"));
-    return { root, ok: false, checks };
+    checks.push(check("root", "fail", `${opts.root} is not a directory`, "pass --root <dir>"));
+    return { root: opts.root, ok: false, checks };
   }
+  // Canonical root, same as init/apply (CI: /var → /private/var, Windows 8.3 short names).
+  const root = await realDir(path.resolve(opts.root), "ERR_ROOT_NOT_DIR");
   checks.push(check("root", "ok", root));
   checks.push(await checkBin(opts));
   checks.push(...(await checkHooks(root)));

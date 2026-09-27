@@ -9,6 +9,7 @@ import { readFile, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { resolveContained, writeAtomic } from "@codai/axiom-apply";
 import { AxiomError, ProfileNameSchema } from "@codai/axiom-schema";
+import { realDir } from "./roots.js";
 
 export const HARNESSES = ["copilot", "claude", "codex", "vscode"] as const;
 export type HarnessName = (typeof HARNESSES)[number];
@@ -318,7 +319,8 @@ function mergeClaude(
 }
 
 export async function runInit(opts: InitOptions): Promise<InitResult> {
-  const root = opts.root;
+  // realpath first: resolveContained compares against realpaths (CI: /var → /private/var, RUNNER~1).
+  const root = await realDir(path.resolve(opts.root), "ERR_ROOT_NOT_DIR");
   const harnesses = await detectHarnesses(root, opts.harness ?? "auto");
   const profile = opts.profileName ?? profileNameFor(root);
   if (!ProfileNameSchema.safeParse(profile).success || BUILTIN_PROFILE_NAMES.has(profile)) {

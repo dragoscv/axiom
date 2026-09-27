@@ -28,6 +28,22 @@ const readJson = async (rel: string) =>
   JSON.parse(await readFile(join(repo.root, rel), "utf8")) as Record<string, unknown>;
 
 describe("axiom init (S-701)", () => {
+  it("works when --root is an alias of the real dir (macOS /var → /private/var, Windows RUNNER~1)", async () => {
+    // CI 36299852786: every init/doctor test failed ERR_CONTAINMENT on macOS + Windows runners
+    // because the tmp root was not its own realpath. A junction/symlink gives the same shape.
+    const alias = join(outside.root, "alias");
+    await symlink(repo.root, alias, process.platform === "win32" ? "junction" : "dir");
+    const r = await runInit({ root: alias, profileName: "demo" });
+    expect(r.files.map((f) => f.action)).toEqual([
+      "created",
+      "created",
+      "created",
+      "created",
+      "created",
+    ]);
+    expect((await readJson(".vscode/mcp.json")).servers).toEqual({ axiom: MCP_SERVER_ENTRY });
+  });
+
   it("creates every file on a bare root (default harness copilot+vscode)", async () => {
     const r = await runInit({ root: repo.root, profileName: "demo" });
     expect(r.harnesses).toEqual(["copilot", "vscode"]);

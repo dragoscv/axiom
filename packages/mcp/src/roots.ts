@@ -19,7 +19,12 @@ export interface ResolvedRoot {
   effectiveRoot: string;
 }
 
-async function realDir(
+/**
+ * Canonical form of a root directory: realpath (macOS `/var` → `/private/var`, Windows 8.3 short
+ * names like `RUNNER~1` expanded) without the `\\?\` prefix. Every containment check compares
+ * against a realpath, so a caller that skips this denies every legitimate write on such hosts.
+ */
+export async function realDir(
   p: string,
   code: "ERR_ROOT_NOT_DIR" | "ERR_ROOT_NOT_ALLOWED",
 ): Promise<string> {
