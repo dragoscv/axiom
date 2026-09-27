@@ -1,5 +1,12 @@
 # @codai/axiom-checks
 
+## 2.3.1
+
+### Patch Changes
+
+- @codai/axiom-canon@2.3.1
+  - @codai/axiom-schema@2.3.1
+
 ## 2.3.0
 
 ### Minor Changes
