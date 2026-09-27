@@ -14,14 +14,14 @@ catalog:
   "@modelcontextprotocol/server": 2.0.0
   "@modelcontextprotocol/client": 2.0.0
   "@modelcontextprotocol/conformance": 0.1.16
-  fast-check: 4.10.1
+  fast-check: 4.10.2
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0
   picomatch: 4.0.7
   "@types/picomatch": 4.0.3
   diff: 9.0.0
   "@types/node": 26.6.1
-  tsx: 4.23.13
+  tsx: 4.23.15
   chevrotain: 13.2.0
   "@marcbachmann/cel-js": 8.0.0
   "@cedar-policy/cedar-wasm": 4.13.0
