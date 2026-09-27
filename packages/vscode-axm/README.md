@@ -41,6 +41,9 @@ the call and restores the file afterwards. The .vsix is not committed; install a
 *Marketplace → Manage* for publisher `codai`) it also runs `vsce publish --packagePath`, so
 `ext install codai.axiom-axm` works. Without the secret the job emits a notice and the release
 page still carries the .vsix — creating the publisher and the PAT is the owner step that unblocks
-S-412. The .vsix `version` is stamped from `@codai/axiom-mcp`'s version at package time (the
+S-412. The same job publishes the .vsix to **Open VSX** (Cursor, VSCodium, Windsurf, Gitpod)
+with `ovsx publish` when the repo secret **`OVSX_PAT`** exists (open-vsx.org access token; the
+namespace `codai` is created once with `npx ovsx create-namespace codai -p <token>`) — S-601.
+The .vsix `version` is stamped from `@codai/axiom-mcp`'s version at package time (the
 extension is `private` and outside the changesets group), so it always matches the release tag
 and never collides with an already-published Marketplace version.

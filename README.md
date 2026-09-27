@@ -62,6 +62,7 @@ flowchart LR
 | Global bin (`axiom`) — required for hooks | `npm i -g @codai/axiom-mcp` | anywhere with Node ≥ 22.14 |
 | Standalone binary, no Node (from 2.2.1) | `curl -fsSL https://dragoscv.github.io/axiom/install.sh \| sh` | linux-x64 · linux-arm64 · darwin-arm64 · darwin-x64 |
 | Standalone binary, no Node (from 2.2.1) | `irm https://dragoscv.github.io/axiom/install.ps1 \| iex` | win-x64 |
+| Homebrew (same binary) | `brew install dragoscv/tap/axiom` | macOS · Linux |
 | VS Code `.axm` extension | `axiom-axm-<version>.vsix` on the [GitHub release](https://github.com/dragoscv/axiom/releases) | VS Code ≥ 1.138 |
 | GitHub Action | `uses: dragoscv/axiom/action@v2` | ubuntu · macos · windows runners |
 | MCP Registry | `io.github.dragoscv/axiom` | any registry-aware MCP client |

@@ -1,4 +1,5 @@
 // @ts-check
+import { readFileSync } from "node:fs";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import mermaid from "astro-mermaid";
@@ -8,6 +9,18 @@ import starlightLinksValidator from "starlight-links-validator";
 const site = "https://dragoscv.github.io";
 const base = "/axiom";
 const repo = "https://github.com/dragoscv/axiom";
+
+// `.axm` fences reuse the VS Code extension's TextMate grammar (single source). Shiki keys a
+// language by `name`, so the display name "AXIOM plan" is replaced by the fence id. No
+// `embeddedLangs: ["json"]`: Expressive Code loads bundled langs lazily and rejects the
+// dependency ("Missing languages `json`"); an unresolved `source.json` include renders as text.
+const axmGrammar = {
+  ...JSON.parse(
+    readFileSync(new URL("../../packages/vscode-axm/syntaxes/axm.tmLanguage.json", import.meta.url), "utf8"),
+  ),
+  name: "axm",
+  displayName: "AXIOM plan",
+};
 
 export default defineConfig({
   site,
@@ -40,7 +53,11 @@ export default defineConfig({
         { tag: "meta", attrs: { name: "twitter:image", content: `${site}${base}/og.png` } },
         { tag: "meta", attrs: { name: "theme-color", content: "#fbf7ef" } },
       ],
-      expressiveCode: { themes: ["github-light", "github-dark-default"], useStarlightDarkModeSwitch: true },
+      expressiveCode: {
+        themes: ["github-light", "github-dark-default"],
+        useStarlightDarkModeSwitch: true,
+        shiki: { langs: [axmGrammar] },
+      },
       sidebar: [
         {
           label: "Start here",

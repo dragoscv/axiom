@@ -11,8 +11,11 @@ name: Release
 #   binaries         Node 26 single executables, one native runner per target
 #   release-assets   SHA256SUMS + Sigstore build provenance, attached to the GitHub release
 #   vscode-extension .vsix attached to the release (+ Marketplace when VSCE_PAT is set)
+#                    (+ Open VSX when OVSX_PAT is set — Cursor, VSCodium, Windsurf, Gitpod)
 #   mcp-registry     server.json → registry.modelcontextprotocol.io via GitHub OIDC
 #   action-tag       moves the `v2` tag of dragoscv/axiom/action to this release
+#   homebrew-tap     renders Formula/axiom.rb from SHA256SUMS → dragoscv/homebrew-tap
+#                    (when HOMEBREW_TAP_DEPLOY_KEY is set)
 
 on:
   push:
@@ -301,6 +304,53 @@ jobs:
           git push origin v2 --force
           git ls-remote --tags origin v2
 
+  homebrew-tap:
+    # S-602: `brew install dragoscv/tap/axiom` installs the SEA binaries of this release. The
+    # formula is rendered from the release's own SHA256SUMS (the attested checksums), so it can
+    # only run after release-assets. Auth = HOMEBREW_TAP_DEPLOY_KEY, the private half of a
+    # write deploy key on dragoscv/homebrew-tap (scoped to that one repo, no user PAT); without
+    # it the job emits a notice.
+    name: Homebrew tap formula
+    needs: release-assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+    steps:
+      - name: Checkout
+        if: env.HOMEBREW_TAP_DEPLOY_KEY != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render + push Formula/axiom.rb
+        if: env.HOMEBREW_TAP_DEPLOY_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p SHA256SUMS -D "$RUNNER_TEMP"
+          key="$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$key"; chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:dragoscv/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          node scripts/render-homebrew-formula.mjs "$v" "$RUNNER_TEMP/SHA256SUMS" > "$RUNNER_TEMP/tap/Formula/axiom.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/axiom.rb
+          if git diff --cached --quiet; then echo "formula already at $v"; exit 0; fi
+          git commit -m "feat: axiom $v"
+          git push origin HEAD
+          rm -f "$key"
+          grep -m1 -E '^\s*url ' Formula/axiom.rb
+
+      - name: Homebrew tap skipped
+        if: env.HOMEBREW_TAP_DEPLOY_KEY == ''
+        run: |
+          echo "::notice title=S-602::HOMEBREW_TAP_DEPLOY_KEY is not set - dragoscv/homebrew-tap not updated. Add a write deploy key to dragoscv/homebrew-tap and store its private key as repo secret HOMEBREW_TAP_DEPLOY_KEY."
+
   vscode-extension:
     # S-412: the .vsix is always built and attached to the GitHub release; Marketplace publish
     # runs only when the owner has created publisher `codai` and stored its PAT as `VSCE_PAT`
@@ -367,3 +417,28 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           echo "::notice title=S-412::VSCE_PAT is not set - .vsix attached to the release only. Owner: create Marketplace publisher codai and add the PAT as repo secret VSCE_PAT."
+
+      - name: Publish to Open VSX
+        # S-601: the same .vsix for Cursor, VSCodium, Windsurf and Gitpod. Needs namespace `codai`
+        # on open-vsx.org (created once with `ovsx create-namespace codai`) and its access token as
+        # OVSX_PAT. Open VSX rejects an existing version, so a re-run of the same tag is tolerated.
+        if: startsWith(github.ref, 'refs/tags/v') && env.OVSX_PAT != ''
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set -euo pipefail
+          vsix=$(ls .copilot-tmp/axiom-axm-*.vsix)
+          set +e
+          out=$(npx -y ovsx@1.2.0 publish "$vsix" -p "$OVSX_PAT" 2>&1); rc=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$rc" -eq 0 ]; then exit 0; fi
+          if printf '%s' "$out" | grep -qi 'already published'; then echo "already on Open VSX"; exit 0; fi
+          exit "$rc"
+
+      - name: Open VSX publish skipped
+        if: startsWith(github.ref, 'refs/tags/v') && env.OVSX_PAT == ''
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          echo "::notice title=S-601::OVSX_PAT is not set - Open VSX not published. Owner: sign in at open-vsx.org (Eclipse account + publisher agreement), create an access token, run 'npx ovsx create-namespace codai -p <token>' once, add the token as repo secret OVSX_PAT."

@@ -52,7 +52,9 @@ code --install-extension axiom-axm-<version>.vsix
 
 or *Extensions view → ⋯ → Install from VSIX…*. Reload, open a `.axm` file, and the status bar
 shows the language as *AXIOM plan*. Once the Marketplace publisher `codai` is live (S-412),
-`ext install codai.axiom-axm` works without the download.
+`ext install codai.axiom-axm` works without the download; Cursor, VSCodium, Windsurf and Gitpod
+get the same `.vsix` from [Open VSX](https://open-vsx.org/extension/codai/axiom-axm) (S-601)
+once its token is configured.
 
 Other editors: the language server is a plain LSP 3.18 binary —
 `npx @codai/axiom-axm-lsp --stdio` for neovim, helix, zed, emacs

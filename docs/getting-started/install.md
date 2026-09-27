@@ -13,6 +13,7 @@ standalone binaries.
 | Try it, or run a long-lived MCP server from an editor | `npx` | `npx -y @codai/axiom-mcp mcp --root .` |
 | Run the CLI or a **PreToolUse hook** | global bin | `npm i -g @codai/axiom-mcp` → `axiom --version` |
 | Run without Node installed (CI images, locked-down hosts) | standalone binary (from 2.2.1) | `curl -fsSL https://dragoscv.github.io/axiom/install.sh \| sh` · `irm https://dragoscv.github.io/axiom/install.ps1 \| iex` |
+| The same binary through a package manager (macOS, Linux) | Homebrew | `brew install dragoscv/tap/axiom` |
 | Edit `.axm` files with diagnostics and completion | VS Code extension | `axiom-axm-<version>.vsix` from the [GitHub release](https://github.com/dragoscv/axiom/releases) |
 | Fail a PR whose tree does not match a manifest | GitHub Action | `uses: dragoscv/axiom/action@v2` |
 | Let a registry-aware MCP client discover it | MCP Registry | `io.github.dragoscv/axiom` |
@@ -78,6 +79,17 @@ The scripts download the asset for your OS/arch from the latest GitHub release, 
 printing the `PATH` line to add if needed. To pin a version, download the asset from the release
 page by hand.
 
+On macOS and Linux the same binaries come through Homebrew:
+
+```sh
+brew install dragoscv/tap/axiom
+axiom --version
+```
+
+The formula in [`dragoscv/homebrew-tap`](https://github.com/dragoscv/homebrew-tap) is rendered by
+`release.yml` from the release's own `SHA256SUMS` on every tag, so `brew` installs the exact
+attested bytes (`gh attestation verify "$(brew --prefix)/bin/axiom" --owner dragoscv`).
+
 > [!NOTE]
 > The binary is the *no-Node-installed* convenience path. The PreToolUse latency budget is
 > measured on `node cli.js`; the `expr.cedar` predicate is not embedded (a missing module inside
@@ -93,8 +105,9 @@ code --install-extension axiom-axm-<version>.vsix
 ```
 
 or *Extensions → ⋯ → Install from VSIX…*. The extension bundles the language server; nothing else
-to install. Once the Marketplace publisher `codai` is live, `ext install codai.axiom-axm` works
-too. Features and the `mcp.json` that pairs with it: [integration/vscode.md](../integration/vscode.md).
+to install. `release.yml` also publishes the same `.vsix` to the VS Code Marketplace (publisher
+`codai`, once its token is configured) and to [Open VSX](https://open-vsx.org/extension/codai/axiom-axm)
+for Cursor, VSCodium, Windsurf and Gitpod; from then on `ext install codai.axiom-axm` works too. Features and the `mcp.json` that pairs with it: [integration/vscode.md](../integration/vscode.md).
 
 ## GitHub Action
 
