@@ -375,6 +375,8 @@ stdio default; `--http` lazily imports `StreamableHTTPServerTransport` **[V]** b
 ### 5.6 Hook mode `axiom gate --stdin`
 Reads one JSON object from stdin; accepts both Claude Code (`{session_id, tool_name, tool_input, cwd}` **[V]**) and Copilot CLI camelCase (`{sessionId, toolName, toolArgs}` **[V]**) — read both casings (the observed fail-open bug **[src guard-tooluse.ps1]**). Behaviour: if `tool_name ∈ {Write, Edit, MultiEdit, create_file, replace_string_in_file, apply_patch, …}` extract target path(s), run the **path predicates only** (`path.deny`, `repo.noOverwriteOf`, `content.noSecrets` on the new content if present) from `<cwd>/.axiom/gate-profile.json` or `~/.axiom/gate-profile.json`. Exit `0` allow; exit `2` + one-line reason on stderr = block **[V both harnesses]**; additionally print `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":…}}` on stdout for the JSON-aware path **[V]**. Budget: < 120 ms (no repo index, no guards); measured by `check-gate-latency.mjs`. Timeouts fail open in both harnesses **[V]**, so the gate must be fast, not thorough.
 
+> **2.4.1 (D-35):** a deny now exits `0` with the JSON document (`--deny-exit 2` for exit-code-only harnesses). The npm `axiom.ps1` shim on Windows rewrote exit 2 → 1, which VS Code treats as a warning, so the exit-code contract above silently stopped blocking. Targets in a sibling worktree of the same repository are judged against that worktree; read-only tools are answered before the gate chunk loads. Current contract: [hooks.md](../getting-started/hooks.md#exit-code-and-output-contract).
+
 ---
 
 ## 6. `.axm` front-end

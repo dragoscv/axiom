@@ -165,7 +165,7 @@ axiom sign    <bundle.json> [--key-file <path>] [-o out.json] [--root-id <id>]  
 axiom sign    <bundle.json> --keyless [--bound --root . | --root-id <id>] [-o out.json]
               (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root . | root-id [<id>|--clear] --root .
-axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level warn]
+axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level warn]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
                                                (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/guides/migrate.md)
 axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>]... [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]
@@ -199,10 +199,16 @@ content when the payload carries it. **Fail-closed** (D-18): a non-answer is a d
 | outcome | exit | stdout | stderr |
 |---|---|---|---|
 | allow / non-write, non-shell tool | `0` | — | — |
-| deny | `2` | one object: `hookSpecificOutput{…}` (Claude) + flat `permissionDecision`/`permissionDecisionReason` (Copilot) + `axiom{verdict, code, path, toolClass, standard:"owasp-acs/0.1"}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
-| write tool with no recognised path key | `2` | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: …` |
-| malformed payload, stdin timeout (2 s), internal error | `2` (**fail closed**) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: … (fail-closed; pass --fail-open to allow)` |
+| deny | `0` (`2` with `--deny-exit 2`) | one object: `hookSpecificOutput{…}` (Claude) + flat `permissionDecision`/`permissionDecisionReason` (Copilot) + `axiom{verdict, code, path, toolClass, standard:"owasp-acs/0.1"}` | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
+| write tool with no recognised path key | as deny | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: …` |
+| malformed payload, stdin timeout (2 s), internal error | as deny (**fail closed**) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: … (fail-closed; pass --fail-open to allow)` |
 | same, with `--fail-open` | `0` | — | `AXIOM GATE WARN: … — failing open (--fail-open)` |
+
+A deny exits `0` since 2.4.1 (D-35): the npm `axiom.ps1` shim on Windows rewrites `2` to `1`, and
+VS Code treats `1` as a warning. Every JSON-aware harness honours the document on exit `0`; use
+`--deny-exit 2` for exit-code-only harnesses (Windsurf). Read-only tools are answered before the
+gate chunk loads. A target in a sibling worktree of the same repository (same git common dir) is
+judged against that worktree's root and gate profile instead of `ERR_CONTAINMENT`.
 
 Root = payload `cwd`, walked up to the nearest `.git` / repository `.axiom/` ancestor (never the
 home dir; `--no-root-discovery` disables), else `--root`, else the process cwd (the hook is the

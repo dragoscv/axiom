@@ -10,10 +10,12 @@ import {
   DEFAULT_GATE_PROFILE,
   extractShellWriteTargets,
   extractTargets,
+  GATE_DENY_EXIT_DEFAULT,
   GATE_EXIT_ALLOW,
   GATE_EXIT_DENY,
   GateProfileSchema,
   gateMain,
+  gitCommonDir,
   isWriteTool,
   loadGateProfile,
   normalizePayload,
@@ -21,6 +23,7 @@ import {
   readStdin,
   runGate,
 } from "./gate.js";
+import { fastAllow } from "./gate-fast.js";
 import { tmpRepo } from "./test-helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -259,13 +262,14 @@ describe("gate: decisions", () => {
     expect(r.stderr).toStrictEqual([]);
   });
 
-  it("Claude Write to .env → deny path.deny with Claude JSON on stdout", async () => {
+  it("Claude Write to .env → deny path.deny, exit 0 + Claude JSON on stdout (D-35)", async () => {
     const r = await runGate(
       claude("Write", { file_path: ".env", content: "X=1" }, repo.root),
       opts(),
     );
     expect(r.decision).toBe("deny");
-    expect(r.exitCode).toBe(GATE_EXIT_DENY);
+    expect(r.exitCode).toBe(GATE_DENY_EXIT_DEFAULT);
+    expect(GATE_DENY_EXIT_DEFAULT).toBe(0);
     expect(r.code).toBe("path.deny");
     expect(r.path).toBe(".env");
     expect(r.stderr[0]).toMatch(/^AXIOM GATE DENY path\.deny: .* \(\.env\)$/);
@@ -274,6 +278,16 @@ describe("gate: decisions", () => {
     };
     expect(json.hookSpecificOutput.hookEventName).toBe("PreToolUse");
     expect(json.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("denyExit: 2 restores the exit-code deny for harnesses without a JSON contract", async () => {
+    const r = await runGate(claude("Write", { file_path: ".env", content: "" }, repo.root), {
+      ...opts(),
+      denyExit: 2,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.exitCode).toBe(GATE_EXIT_DENY);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
   });
 
   it("Copilot create_file with an AWS key in content → deny content.noSecrets.awsKey", async () => {
@@ -371,7 +385,8 @@ describe("gate: decisions", () => {
   it("D-18 fail-closed: malformed JSON → deny ERR_INTERNAL; --fail-open → allow with a warn; legacy --strict is a no-op", async () => {
     const closed = await runGate("{not json", opts());
     expect(closed.decision).toBe("deny");
-    expect(closed.exitCode).toBe(GATE_EXIT_DENY);
+    expect(closed.exitCode).toBe(GATE_DENY_EXIT_DEFAULT);
+    expect(closed.stdout).toContain('"permissionDecision":"deny"');
     expect(closed.code).toBe("ERR_INTERNAL");
     expect(closed.reason).toMatch(/--fail-open/);
     const open = await runGate("{not json", { ...opts(), failOpen: true });
@@ -554,12 +569,25 @@ describe("gate: decisions", () => {
     expect(viaCwd.code).toBe("path.deny");
   });
 
-  it("gateMain: requires --stdin; reads the payload from the given stream", async () => {
+  it("gateMain: requires --stdin; reads the payload from the given stream or a pre-read payload", async () => {
     const noStdin = await gateMain([]);
     expect(noStdin.exitCode).toBe(GATE_EXIT_DENY);
     const stream = Readable.from([claude("Write", { file_path: ".env", content: "" }, repo.root)]);
     const r = await gateMain(["--stdin"], { stdin: stream, home: home.root });
     expect(r.code).toBe("path.deny");
+    expect(r.exitCode).toBe(0);
+    const text = claude("Write", { file_path: ".env", content: "" }, repo.root);
+    const pre = await gateMain(["--stdin", "--deny-exit", "2"], {
+      read: { text, timedOut: false, tooLarge: false },
+      home: home.root,
+    });
+    expect(pre.code).toBe("path.deny");
+    expect(pre.exitCode).toBe(GATE_EXIT_DENY);
+    const bad = await gateMain(["--stdin", "--deny-exit", "1"], {
+      read: { text, timedOut: false, tooLarge: false },
+    });
+    expect(bad.exitCode).toBe(GATE_EXIT_DENY);
+    expect(bad.reason).toMatch(/--deny-exit/);
   });
 
   it("readStdin: times out and caps size; oversize stdin is a deny (fail-closed) with a warn", async () => {
@@ -585,6 +613,155 @@ describe("gate: decisions", () => {
 });
 
 const GATE_STDIN_MAX_PLUS_ONE = 4 * 1024 * 1024 + 1;
+
+function git(cwd: string, ...args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-c", "core.hooksPath=", ...args], { cwd }, (err) =>
+      err === null ? resolve() : reject(err),
+    );
+  });
+}
+
+/** The exact on-disk layout `git worktree add` produces (gitdir back-link + commondir). */
+async function fakeWorktree(main: string, wt: string, name: string): Promise<void> {
+  const admin = join(main, ".git", "worktrees", name);
+  await mkdir(admin, { recursive: true });
+  await mkdir(wt, { recursive: true });
+  await writeFile(join(wt, ".git"), `gitdir: ${admin}\n`);
+  await writeFile(join(admin, "gitdir"), `${join(wt, ".git")}\n`);
+  await writeFile(join(admin, "commondir"), "../..\n");
+}
+
+describe("gate: sibling worktrees of the same repository (D-35)", () => {
+  let base: Awaited<ReturnType<typeof tmpRepo>>;
+  let home: Awaited<ReturnType<typeof tmpRepo>>;
+  let main: string;
+  let wt: string;
+  let other: string;
+  beforeEach(async () => {
+    base = await tmpRepo("axiom-gate-wt-");
+    home = await tmpRepo("axiom-gate-home-");
+    main = join(base.root, "main");
+    wt = join(base.root, "wt", "task-1");
+    other = join(base.root, "other");
+    await mkdir(join(main, ".git"), { recursive: true });
+    await mkdir(join(other, ".git"), { recursive: true });
+    await fakeWorktree(main, wt, "task-1");
+  });
+  afterEach(async () => {
+    await base.cleanup();
+    await home.cleanup();
+  });
+
+  it("gitCommonDir: main and its worktree share it; another repo does not", async () => {
+    const a = await gitCommonDir(main);
+    const b = await gitCommonDir(wt);
+    const c = await gitCommonDir(other);
+    expect(a).toBeDefined();
+    expect(b?.toLowerCase()).toBe(a?.toLowerCase());
+    expect(c?.toLowerCase()).not.toBe(a?.toLowerCase());
+  });
+
+  it("gitCommonDir agrees with a worktree made by real git", async () => {
+    const real = join(base.root, "real");
+    const realWt = join(base.root, "real-wt");
+    await mkdir(real, { recursive: true });
+    await git(real, "init", "-q");
+    await git(
+      real,
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "i",
+    );
+    await git(real, "worktree", "add", "-q", "--detach", realWt);
+    const a = await gitCommonDir(real);
+    expect(a).toBeDefined();
+    expect((await gitCommonDir(realWt))?.toLowerCase()).toBe(a?.toLowerCase());
+  }, 120_000);
+
+  it("a write in a sibling worktree is allowed; its protected paths still deny", async () => {
+    const ok = await runGate(
+      claude("Write", { file_path: join(wt, "src", "a.ts"), content: "x" }, main),
+      { home: home.root },
+    );
+    expect(ok.decision).toBe("allow");
+    const env = await runGate(
+      claude("Write", { file_path: join(wt, ".env"), content: "x" }, main),
+      { home: home.root },
+    );
+    expect(env.decision).toBe("deny");
+    expect(env.code).toBe("path.deny");
+    expect(env.path).toBe(".env");
+  });
+
+  it("the worktree's own gate profile applies to its targets", async () => {
+    await mkdir(join(wt, ".axiom"), { recursive: true });
+    await writeFile(join(wt, ".axiom", "gate-profile.json"), '{"deny":["src/**"]}');
+    const r = await runGate(
+      claude("Write", { file_path: join(wt, "src", "a.ts"), content: "x" }, main),
+      { home: home.root },
+    );
+    expect(r.code).toBe("path.deny");
+  });
+
+  it("another repository, or a forged .git file naming our worktree, stays ERR_CONTAINMENT", async () => {
+    const r = await runGate(
+      claude("Write", { file_path: join(other, "a.ts"), content: "x" }, main),
+      { home: home.root },
+    );
+    expect(r.code).toBe("ERR_CONTAINMENT");
+    const forged = join(base.root, "forged");
+    await mkdir(forged, { recursive: true });
+    await writeFile(join(forged, ".git"), `gitdir: ${join(main, ".git", "worktrees", "task-1")}\n`);
+    const f = await runGate(
+      claude("Write", { file_path: join(forged, "a.ts"), content: "x" }, main),
+      { home: home.root },
+    );
+    expect(f.code).toBe("ERR_CONTAINMENT");
+  });
+});
+
+describe("gate: fast path exactness", () => {
+  it.each([
+    ["Read", true],
+    ["read_file", true],
+    ["grep_search", true],
+    ["create_directory", true],
+    ["Write", false],
+    ["create_file", false],
+    ["apply_patch", false],
+    ["multi_replace_string_in_file", false],
+    ["Bash", false],
+    ["run_in_terminal", false],
+  ])("fastAllow(%s) = %s", (tool, expected) => {
+    expect(fastAllow(JSON.stringify({ tool_name: tool, tool_input: {} }))).toBe(expected);
+  });
+
+  it("never short-circuits a payload the full gate must judge", () => {
+    expect(fastAllow(undefined)).toBe(false);
+    expect(fastAllow("")).toBe(false);
+    expect(fastAllow("{oops")).toBe(false);
+    expect(fastAllow("[]")).toBe(false);
+    expect(fastAllow('{"tool_input":{}}')).toBe(false);
+  });
+
+  it("agrees with runGate: fastAllow ⇒ runGate allows with toolClass other", async () => {
+    const tools = ["Read", "Glob", "view_image", "list_dir", "fetch_webpage", "Write", "Bash"];
+    for (const tool of tools) {
+      const text = JSON.stringify({ tool_name: tool, tool_input: {}, cwd: "/no/such/dir" });
+      if (!fastAllow(text)) continue;
+      const r = await runGate(text);
+      expect(r.decision).toBe("allow");
+      expect(r.toolClass).toBe("other");
+    }
+  });
+});
 
 describe("gate: latency", () => {
   let repo: Awaited<ReturnType<typeof tmpRepo>>;
@@ -686,20 +863,25 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
     expect(r.stdout).toBe("");
   });
 
-  it("Write to .git/config → exit 2, deny JSON on stdout, reason on stderr", async () => {
+  it("Write to .git/config → exit 0, deny JSON on stdout, reason on stderr (D-35)", async () => {
     const r = await run([], claude("Write", { file_path: ".git/config", content: "" }, repo.root));
-    expect(r.code).toBe(2);
+    expect(r.code).toBe(0);
     const json = JSON.parse(r.stdout) as {
       hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
     };
     expect(json.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(json.hookSpecificOutput.permissionDecisionReason).toContain("path.deny");
     expect(r.stderr).toMatch(/^AXIOM GATE DENY path\.deny/m);
+    const hard = await run(
+      ["--deny-exit", "2"],
+      claude("Write", { file_path: ".git/config", content: "" }, repo.root),
+    );
+    expect(hard.code).toBe(2);
   });
 
-  it("malformed payload → exit 2 (fail-closed) with deny JSON; --fail-open → exit 0 + warn", async () => {
+  it("malformed payload → deny JSON (fail-closed); --fail-open → allow + warn", async () => {
     const closed = await run([], "{oops");
-    expect(closed.code).toBe(2);
+    expect(closed.code).toBe(0);
     expect(closed.stderr).toMatch(/AXIOM GATE DENY ERR_INTERNAL/);
     const json = JSON.parse(closed.stdout) as {
       permissionDecision: string;
@@ -709,13 +891,22 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
     expect(json.axiom.verdict).toBe("deny");
     const open = await run(["--fail-open"], "{oops");
     expect(open.code).toBe(0);
+    expect(open.stdout).toBe("");
     expect(open.stderr).toMatch(/AXIOM GATE WARN/);
   });
 
-  it("Bash echo > .env → exit 2 (shell scan) through the real binary", async () => {
+  it("Bash echo > .env → deny (shell scan) through the real binary", async () => {
     const r = await run([], claude("Bash", { command: "echo x > .env" }, repo.root));
-    expect(r.code).toBe(2);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
     expect(r.stderr).toMatch(/path\.deny/);
+  });
+
+  it("read-only tool → fast path: exit 0, no output", async () => {
+    const r = await run([], claude("Read", { file_path: "x" }, repo.root));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
   });
 
   it("dist/gate-lazy.js does not pull in the MCP SDK", async () => {

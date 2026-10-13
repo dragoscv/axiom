@@ -400,18 +400,22 @@ mismatches; `remove` revokes; `list` prints the store; `root-id` shows, sets or 
 
 ```
 axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan]
-                   [--no-root-discovery] [--log-level L]
+                   [--no-root-discovery] [--deny-exit 0|2] [--log-level L]
 ```
 
-PreToolUse hook. Reads one harness payload from stdin, exits `0` (allow) or `2` (deny, JSON reason
-on stdout, one line on stderr). Fail-closed: malformed input or an undeterminable write target is a
+PreToolUse hook. Reads one harness payload from stdin and exits `0`: allow = no output; deny = one
+JSON document on stdout (`permissionDecision: "deny"`) plus one line on stderr. `--deny-exit 2`
+additionally exits `2` on a deny, for harnesses that read only the exit code (Windsurf); the default
+changed from `2` to `0` in 2.4.1 because the npm `.ps1` shim rewrites `2` to `1`, which VS Code
+treats as a warning (D-35). Read-only tools are answered before the gate chunk loads; targets in a
+sibling worktree of the same repository are judged against that worktree. Fail-closed: malformed input or an undeterminable write target is a
 deny unless `--fail-open`. `--root` is used only when the payload has no `cwd`; `--profile` points
 at a gate-profile file (default search: `<root>/.axiom/gate-profile.json` → `~/.axiom/gate-profile.json`
 → built-in). `--strict` is accepted as a 2.1 no-op. Contract, wiring, profile schema and latency:
 [hooks.md](../getting-started/hooks.md).
 
 ```sh
-echo '{"cwd":"/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin; echo $?   # 2
+echo '{"cwd":"/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin   # {"hookSpecificOutput":{…"permissionDecision":"deny"…}…}
 ```
 
 ## `migrate v1`

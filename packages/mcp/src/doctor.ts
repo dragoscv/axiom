@@ -32,8 +32,14 @@ export const GATE_P95_FAIL_MS = 4000;
 export const GATE_HOOK_TIMEOUT_MS = 5000;
 export const GATE_PROBE_RUNS = 5;
 
-/** Measures one `gate --stdin` round trip; returns wall ms and the exit code. */
-export type GateProbe = (root: string, payload: string) => Promise<{ ms: number; exit: number }>;
+/**
+ * Measures one `gate --stdin` round trip; returns wall ms, the exit code and whether stdout
+ * carried a deny document (since 2.4.1 a deny exits 0 — D-35).
+ */
+export type GateProbe = (
+  root: string,
+  payload: string,
+) => Promise<{ ms: number; exit: number; denied?: boolean }>;
 
 /** Resolves the global `axiom` bin; `undefined` = not on PATH. */
 export type BinLocator = () => Promise<{ path: string; version?: string } | undefined>;
@@ -114,8 +120,13 @@ export function spawnGateProbe(command: readonly string[]): GateProbe {
       const t0 = performance.now();
       const child = spawn(file, [...args, "gate", "--stdin"], {
         cwd: root,
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", "pipe", "ignore"],
         windowsHide: true,
+      });
+      let out = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (c: string) => {
+        if (out.length < 65_536) out += c;
       });
       const timer = setTimeout(() => child.kill(), GATE_HOOK_TIMEOUT_MS * 2);
       child.once("error", (err) => {
@@ -124,7 +135,11 @@ export function spawnGateProbe(command: readonly string[]): GateProbe {
       });
       child.once("close", (code) => {
         clearTimeout(timer);
-        resolve({ ms: performance.now() - t0, exit: code ?? -1 });
+        resolve({
+          ms: performance.now() - t0,
+          exit: code ?? -1,
+          denied: /"permissionDecision"\s*:\s*"deny"/.test(out),
+        });
       });
       child.stdin.end(payload);
     });
@@ -310,11 +325,13 @@ async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
   });
   const samples: number[] = [];
   const exits = new Set<number>();
+  let denied = false;
   try {
     for (let i = 0; i < GATE_PROBE_RUNS; i++) {
       const r = await probe(opts.root, payload);
       samples.push(r.ms);
       exits.add(r.exit);
+      if (r.denied === true) denied = true;
     }
   } catch (err) {
     return check("gate.latency", "fail", `gate probe did not run: ${(err as Error).message}`);
@@ -329,11 +346,11 @@ async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
       "the harness will kill the hook and fail OPEN; check machine load / antivirus on node",
     );
   }
-  if (!exits.has(0)) {
+  if (denied || !exits.has(0)) {
     return check(
       "gate.latency",
       "warn",
-      `${msg}; a benign Write was denied (exit ${[...exits].join(",")})`,
+      `${msg}; a benign Write was denied (exit ${[...exits].join(",")}${denied ? ", deny JSON" : ""})`,
       "check .axiom/gate-profile.json deny/allow globs",
     );
   }

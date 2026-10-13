@@ -138,7 +138,8 @@ Plan fields, sources (`inline`, `cas`, `ref`, `patch`, `template`) and the `.axm
 
 `axiom gate --stdin` reads one harness payload, checks containment, `path.deny/allow`,
 `content.noSecrets` and `content.maxBytes` on the write target, scans shell commands for write
-primitives, and answers allow (exit 0) or deny (exit 2, JSON reason). Fail-closed; ~100 ms end
+primitives, and answers allow (exit 0, no output) or deny (a JSON `permissionDecision: "deny"`
+document on stdout; `--deny-exit 2` also exits 2). Fail-closed; ~100 ms end
 to end. Claude Code:
 
 ```json

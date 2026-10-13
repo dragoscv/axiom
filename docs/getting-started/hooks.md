@@ -4,7 +4,8 @@
 
 `axiom gate` turns AXIOM's path and content rules into a **PreToolUse hook**: the harness calls it
 before every tool call, the gate reads the payload from stdin and either lets the call through
-(exit `0`) or blocks it (exit `2` + reason). It is the cheap, always-on complement to the full
+(exit `0`, no output) or blocks it (exit `0` + a deny JSON document on stdout + reason on stderr;
+`--deny-exit 2` for harnesses that read only the exit code). It is the cheap, always-on complement to the full
 `Plan → check → apply` transaction: no manifest, no repo index, no guards, no git — just
 "is this agent about to write somewhere it must not, or write something it must not".
 
@@ -15,19 +16,19 @@ Spec: [`design/v2-architecture.md`](../design/v2-architecture.md) §5.6. Impleme
 ```mermaid
 flowchart TD
   IN[stdin: one harness payload] --> P{parses · ≤ 4 MiB · within 2 s?}
-  P -- no --> DENYI[exit 2 ERR_INTERNAL<br/>fail-closed · --fail-open → exit 0 + warn]
+  P -- no --> DENYI[deny ERR_INTERNAL<br/>fail-closed · --fail-open → allow + warn]
   P -- yes --> C{tool class}
-  C -- other --> ALLOW0[exit 0 · < 1 ms]
+  C -- other --> ALLOW0[exit 0 · fast path, gate chunk never loaded]
   C -- shell --> SS{--no-shell-scan?}
   SS -- yes --> ALLOW0
   SS -- no --> SCAN[scan command for write primitives → targets]
   C -- write --> T{target path found?}
-  T -- no --> DENYU[exit 2 ERR_UNSUPPORTED_OP]
+  T -- no --> DENYU[deny ERR_UNSUPPORTED_OP]
   T -- yes --> R[root = cwd walked up to .git / repo .axiom]
   SCAN --> R
   R --> PR[profile: --profile → root/.axiom/gate-profile.json → ~/.axiom/gate-profile.json → built-in]
-  PR --> CK[containment · RelPath rules · path.deny · path.allow<br/>content.noSecrets · content.maxBytes]
-  CK -- finding --> DENY[exit 2 + deny JSON on stdout<br/>AXIOM GATE DENY code: reason on stderr]
+  PR --> CK[containment, or a sibling worktree of the same repo · RelPath rules · path.deny · path.allow<br/>content.noSecrets · content.maxBytes]
+  CK -- finding --> DENY[exit 0 + deny JSON on stdout · exit 2 with --deny-exit 2<br/>AXIOM GATE DENY code: reason on stderr]
   CK -- clean --> ALLOW[exit 0]
 ```
 
@@ -38,7 +39,14 @@ For every write target extracted from the tool call:
 1. **Containment** — the target, after resolving against the root, must stay inside the root
    (`..\..\x`, absolute paths elsewhere → `ERR_CONTAINMENT`). Backslashes are treated as separators
    on every OS. Symlinks/junctions in the path are refused (`ERR_SYMLINK_IN_PATH`, via
-   `@codai/axiom-apply`'s `resolveContained`).
+  `@codai/axiom-apply`'s `resolveContained`). **Exception (2.4.1, D-35):** a target inside another
+  *worktree of the same repository* — its nearest `.git` file points at
+  `<common>/worktrees/<name>`, that directory's `gitdir` back-link points at this very file, and
+  its `commondir` equals the root's git dir — is judged against **that worktree's** root and
+  gate profile. Agents commonly work in leased worktrees (`E:\gh\.wt\<repo>\task-N`) while the
+  harness cwd stays the main clone; 127 of 134 production denies in one week were exactly this.
+  A worktree of a *different* repository, a plain directory, or a hand-made `.git` file without
+  the back-link stays `ERR_CONTAINMENT`. No `git` process is spawned.
 2. **`RelPath` rules** from `@codai/axiom-schema` — `CON`/`NUL`/`COM1…`
    (`ERR_PATH_RESERVED_NAME`), NTFS alternate data streams `file.txt:stream` and `<>:"|?*`
    (`ERR_PATH_INVALID_CHAR`), empty / `.` / trailing-dot segments (`ERR_PATH_SEGMENT`), non-NFC.
@@ -63,6 +71,14 @@ are allowed immediately without touching the filesystem.
 | **write** | name contains `write`, `edit`, `create_file`, `create`, `replace_string`, `insert_edit`, `apply_patch`, `notebook` (and is not `read`/`list`/`search`/`grep`/`glob`/`view`/`directory`) | targets extracted from the recognised path keys / V4A headers and checked. **A write tool whose target cannot be determined is denied** (`ERR_UNSUPPORTED_OP`, "no recognised path key") — an unrecognised write is exactly what the gate exists to stop. `--fail-open` allows it with a warning instead. |
 | **shell** | name contains `bash`, `shell`, `terminal`, `run_in_terminal`, `execute_command`, `run_command`, `powershell`, `cmd` | the command string (`command`, `cmd`, `script`, `commandLine`) is scanned for **write primitives**; every path they would write or delete becomes a target. No command string → allow. `--no-shell-scan` allows every shell call. |
 | **other** | everything else | allow, < 1 ms |
+
+**Fast path (2.4.1).** Copilot CLI and VS Code have no matcher, so the hook fires on every tool
+call and most of them are read-only. `cli.ts` reads stdin with a zero-dependency module
+(`gate-fast.ts`, the single home of the hint lists above) and answers an **other**-class tool
+with exit `0` before the gate chunk (zod + checks, ~290 KB) is loaded — exactly the case where the
+full gate would allow without touching the filesystem. Anything else (no payload, invalid JSON, no
+tool name, a write or shell tool) goes to the full gate with the already-read payload. Measured on
+Windows: read-only call p50 207 → 141 ms (node's own start is ~140 ms).
 
 **Shell scan** (a documented heuristic, not a shell parser — the Plan→apply path is the
 guarantee, the gate is the seatbelt): redirections `>`, `>>`, `&>`, `N>` (not `/dev/*`, not
@@ -92,11 +108,19 @@ Relative targets stay relative to `cwd`; the profile is loaded from the discover
 | outcome | exit | stdout | stderr |
 |---|---|---|---|
 | allow / non-write tool / payload without a tool name | `0` | nothing | nothing (`--log-level debug` explains) |
-| deny | `2` | one JSON object, see below | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
-| write tool with no recognised target | `2` | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: … no recognised path key …` |
-| malformed JSON, empty stdin, stdin > 4 MiB, stdin timeout (2 s), profile unreadable, any internal error | `2` — **fail closed** (D-18) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: <why> (fail-closed; pass --fail-open to allow)` |
+| deny | `0` (`2` with `--deny-exit 2`) | one JSON object, see below | `AXIOM GATE DENY <code>: <reason> (<relpath>)` |
+| write tool with no recognised target | as deny | deny JSON | `AXIOM GATE DENY ERR_UNSUPPORTED_OP: … no recognised path key …` |
+| malformed JSON, empty stdin, stdin > 4 MiB, stdin timeout (2 s), profile unreadable, any internal error | as deny — **fail closed** (D-18) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: <why> (fail-closed; pass --fail-open to allow)` |
 | same, with `--fail-open` | `0` | nothing | `AXIOM GATE WARN: <why> — failing open (--fail-open)` |
-| bad arguments / missing `--stdin` | `2` | nothing | `AXIOM GATE ERROR: …` + usage |
+| bad arguments / missing `--stdin` / `--deny-exit` not `0`/`2` | `2` | nothing | `AXIOM GATE ERROR: …` + usage |
+
+**Why a deny exits 0 (2.4.1, D-35).** Until 2.4.0 a deny exited `2`. On Windows the npm
+`axiom.ps1` shim that PowerShell resolves for `axiom` rewrites every non-zero exit to `1`, and
+VS Code treats exit `1` as a *non-blocking warning*: in one week of production logs (codai,
+2026-10-07..14) **129 of 134 denies let the tool run**. Exit `0` with
+`hookSpecificOutput.permissionDecision: "deny"` is honoured by VS Code, Claude Code, Copilot CLI,
+Codex, Gemini CLI and Junie (contracts re-read 2026-10-14) and survives any shim. Windsurf blocks
+only on exit `2` — use `--deny-exit 2` there (and on any harness without a JSON contract).
 
 The deny document is **one** object that every consumer can read:
 
@@ -122,8 +146,8 @@ silent pass. Harness *timeouts* still fail open — that is the harness's decisi
 `npx` is banned in hooks (below). Use `--fail-open` where an editor must never be blocked by the
 gate's own bugs; `--strict` (2.1) is accepted and ignored.
 
-The exit code is what both harnesses act on; the stdout JSON is additionally read by Claude Code
-and Copilot. The stderr line is what the model sees as the reason.
+The stdout JSON is what JSON-aware harnesses act on; with `--deny-exit 2` the exit code carries
+the decision too. The stderr line is what the model sees as the reason.
 
 ### Verified harness facts (2026-09-18)
 
@@ -238,6 +262,7 @@ answers `allow` for non-write tools in < 1 ms, so either is fine.
 | `--fail-open` | internal errors, malformed payloads and undetermined write targets are allowed with a warning (2.1 behaviour) |
 | `--no-shell-scan` | do not scan shell commands for write primitives |
 | `--no-root-discovery` | treat the payload `cwd` as the root (do not walk up to `.git`/`.axiom`) |
+| `--deny-exit 0\|2` | exit code for a deny (default `0`: the JSON decides; `2` for exit-code-only harnesses such as Windsurf) |
 | `--strict` | accepted for 2.1 hook configs; a no-op (fail-closed is the default) |
 | `--log-level error\|warn\|info\|debug` | stderr verbosity (default `warn`; `debug` prints root/profile/class/targets) |
 

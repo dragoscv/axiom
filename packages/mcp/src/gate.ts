@@ -7,11 +7,16 @@
  *
  * Contract (verified against Claude Code + Copilot CLI docs, see docs/getting-started/hooks.md) — Gate v2 (S-404, D-18):
  *   allow → exit 0, nothing on stdout.
- *   deny  → exit 2, one stderr line `AXIOM GATE DENY <code>: <reason> (<relpath>)` and ONE JSON
+ *   deny  → exit 0 (D-35; `--deny-exit 2` for harnesses that only read the exit code), one
+ *           stderr line `AXIOM GATE DENY <code>: <reason> (<relpath>)` and ONE JSON
  *           object on stdout carrying both the Claude `hookSpecificOutput` shape and the flat
  *           Copilot `{permissionDecision, permissionDecisionReason}` shape, plus an OWASP Agent
  *           Control Standard `verdict` (`allow|deny|modify|ask|defer`; the gate only emits
  *           `allow`/`deny`).
+ *           Why exit 0: the npm `axiom.ps1` shim rewrites every non-zero exit to 1, and VS Code
+ *           treats exit 1 as a non-blocking warning — 129 of 134 production denies (codai,
+ *           2026-10-07..14) let the tool run. Every harness that has a JSON contract honours
+ *           the JSON deny on exit 0.
  *   FAIL-CLOSED by default: an internal error, malformed payload, stdin timeout, or a
  *           write-class tool whose target cannot be determined → deny with a reason.
  *           `--fail-open` restores the 2.1 behaviour (exit 0 + stderr warn) for those cases.
@@ -20,6 +25,8 @@
  *           protected path among their operands → deny. Heuristic, documented as such.
  *   Root: payload `cwd` → walk up to the nearest ancestor holding `.axiom/` or `.git/`
  *           (so a sub-directory cwd still sees `.git/**` in the profile) → `--root` → cwd.
+ *           A target outside the root but inside another worktree of the SAME repository
+ *           (same git common dir) is judged against that worktree's root and profile (D-35).
  *
  * This module never writes to stdout/stderr itself: it returns a `GateResult` and the CLI
  * entries (`cli.ts`, `cli-main.ts`) do the writing (`check-no-stdout`).
@@ -39,14 +46,36 @@ import {
 } from "@codai/axiom-checks";
 import { type ErrorCode, isAxiomError, relPathIssues } from "@codai/axiom-schema";
 import { z } from "zod";
+import {
+  classifyTool,
+  GATE_STDIN_MAX_BYTES,
+  GATE_STDIN_TIMEOUT_MS,
+  isShellTool,
+  isWriteTool,
+  readStdin,
+  type StdinRead,
+  type ToolClass,
+} from "./gate-fast.js";
+
+export {
+  classifyTool,
+  GATE_STDIN_MAX_BYTES,
+  GATE_STDIN_TIMEOUT_MS,
+  isShellTool,
+  isWriteTool,
+  readStdin,
+  type StdinRead,
+  type ToolClass,
+};
 
 const realpathNative: (p: string) => Promise<string> = promisify(realpathCb.native);
 const IS_WIN32 = process.platform === "win32";
 
-export const GATE_STDIN_MAX_BYTES = 4 * 1024 * 1024;
-export const GATE_STDIN_TIMEOUT_MS = 2_000;
 export const GATE_EXIT_ALLOW = 0;
+/** Hard-deny exit: usage errors, and every deny under `--deny-exit 2`. */
 export const GATE_EXIT_DENY = 2;
+/** Default exit for a deny (D-35): the JSON document on stdout carries the decision. */
+export const GATE_DENY_EXIT_DEFAULT = 0;
 
 // ---------------------------------------------------------------- profile --
 
@@ -222,52 +251,7 @@ const CONTENT_KEYS = [
 ] as const;
 
 /** Tools that write files, matched case-insensitively by substring. */
-const WRITE_TOOL_HINTS = [
-  "write",
-  "edit",
-  "create_file",
-  "create",
-  "replace_string",
-  "insert_edit",
-  "apply_patch",
-  "notebook",
-] as const;
-/** Substrings that mark a tool as read-only even when a write hint also matches (`create_directory`, …). */
-const NON_WRITE_HINTS = ["read", "list", "search", "grep", "glob", "view", "directory", "dir"];
-
-export function isWriteTool(toolName: string): boolean {
-  const n = toolName.toLowerCase();
-  if (!WRITE_TOOL_HINTS.some((h) => n.includes(h))) return false;
-  if (n.includes("apply_patch") || n.includes("multi_replace")) return true;
-  return !NON_WRITE_HINTS.some((h) => n.includes(h));
-}
-
-/** Tools that execute a shell command; matched case-insensitively by substring. */
-const SHELL_TOOL_HINTS = [
-  "bash",
-  "shell",
-  "run_in_terminal",
-  "terminal",
-  "execute_command",
-  "exec_command",
-  "run_command",
-  "powershell",
-  "cmd",
-] as const;
 const SHELL_COMMAND_KEYS = ["command", "cmd", "script", "commandLine", "command_line"] as const;
-
-export function isShellTool(toolName: string): boolean {
-  const n = toolName.toLowerCase();
-  return SHELL_TOOL_HINTS.some((h) => n.includes(h));
-}
-
-export type ToolClass = "write" | "shell" | "other";
-
-export function classifyTool(toolName: string): ToolClass {
-  if (isWriteTool(toolName)) return "write";
-  if (isShellTool(toolName)) return "shell";
-  return "other";
-}
 
 // ------------------------------------------------------------ shell scan --
 
@@ -737,6 +721,11 @@ export interface GateOptions {
   noShellScan?: boolean;
   /** Do not walk up from `cwd` to the nearest `.axiom/`/`.git/` ancestor. */
   noRootDiscovery?: boolean;
+  /**
+   * Exit code for a deny (D-35). Default 0: the JSON document on stdout carries the decision,
+   * which survives the npm `.ps1` shim. 2 for harnesses that only read the exit code (Windsurf).
+   */
+  denyExit?: 0 | 2;
   logLevel?: GateLogLevel;
   /** Test hook for `~/.axiom/gate-profile.json`. */
   home?: string;
@@ -752,7 +741,7 @@ export interface GateResult {
   decision: "allow" | "deny";
   /** OWASP Agent Control Standard v0.1 Guardian vocabulary; the gate emits `allow` or `deny`. */
   verdict: "allow" | "deny" | "modify" | "ask" | "defer";
-  exitCode: typeof GATE_EXIT_ALLOW | typeof GATE_EXIT_DENY;
+  exitCode: 0 | 2;
   code?: string;
   reason?: string;
   path?: string;
@@ -795,7 +784,7 @@ function denyResult(
   d: GateDeny,
   stderr: string[],
   t0: number,
-  extra: { toolClass?: ToolClass; root?: string } = {},
+  extra: { toolClass?: ToolClass; root?: string; denyExit?: 0 | 2 } = {},
 ): GateResult {
   const where = d.relPath === undefined ? "" : ` (${d.relPath})`;
   const reason = `AXIOM GATE DENY ${d.code}: ${d.message}${where}`;
@@ -803,16 +792,96 @@ function denyResult(
   return {
     decision: "deny",
     verdict: "deny",
-    exitCode: GATE_EXIT_DENY,
+    exitCode: extra.denyExit ?? GATE_DENY_EXIT_DEFAULT,
     code: d.code,
     reason: d.message,
     ...(d.relPath === undefined ? {} : { path: d.relPath }),
-    stdout: JSON.stringify(denyDocument(d, reason, extra)),
+    stdout: JSON.stringify(
+      denyDocument(d, reason, extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
+    ),
     stderr,
     durationMs: performance.now() - t0,
     ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
     ...(extra.root === undefined ? {} : { root: extra.root }),
   };
+}
+
+const samePath = (a: string, b: string): boolean =>
+  IS_WIN32 ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+async function realOrResolved(p: string): Promise<string> {
+  try {
+    let r = await realpathNative(p);
+    if (IS_WIN32 && r.startsWith("\\\\?\\")) r = r.slice(4);
+    return r;
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/**
+ * The git common dir of the checkout rooted at `dir`, read from disk (no `git` spawn — the
+ * hook budget and the no-shell invariant both forbid it). `.git` directory → itself. `.git`
+ * file (`gitdir: <common>/worktrees/<name>`) → `<gitdir>/commondir`, and only when the
+ * back-link `<gitdir>/gitdir` points at this very `.git` file — a hand-made `.git` file that
+ * merely names another repo's worktree does not borrow that repo's identity.
+ */
+export async function gitCommonDir(dir: string): Promise<string | undefined> {
+  const dotGit = path.join(dir, ".git");
+  let st: Awaited<ReturnType<typeof lstat>>;
+  try {
+    st = await lstat(dotGit);
+  } catch {
+    return undefined;
+  }
+  if (st.isDirectory()) return realOrResolved(dotGit);
+  if (!st.isFile()) return undefined;
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotGit, "utf8"));
+    if (m?.[1] === undefined) return undefined;
+    const gitdir = path.resolve(dir, m[1]);
+    const back = (await readFile(path.join(gitdir, "gitdir"), "utf8")).trim();
+    const [backReal, selfReal] = await Promise.all([
+      realOrResolved(path.resolve(gitdir, back)),
+      realOrResolved(dotGit),
+    ]);
+    if (!samePath(backReal, selfReal)) return undefined;
+    const common = (await readFile(path.join(gitdir, "commondir"), "utf8")).trim();
+    return realOrResolved(path.resolve(gitdir, common));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * D-35: agents work in sibling worktrees (`E:\gh\.wt\<repo>\task-N`) while the harness cwd is
+ * the main clone. A target outside `rootReal` whose nearest `.git` ancestor is a worktree of
+ * the SAME repository (equal common dir) is judged against that worktree's root. Anything
+ * else — another repo, no git, a forged `.git` file — returns undefined (stays ERR_CONTAINMENT).
+ */
+export async function sameRepoWorktreeRoot(
+  rootReal: string,
+  rawPath: string,
+  cwdReal: string,
+): Promise<string | undefined> {
+  const rootCommon = await gitCommonDir(rootReal);
+  if (rootCommon === undefined) return undefined;
+  const supplied = rawPath.replace(/\\/g, "/");
+  const abs = await canonicalizeExisting(
+    path.isAbsolute(supplied) ? path.resolve(supplied) : path.resolve(cwdReal, supplied),
+  );
+  let cur = path.dirname(abs);
+  for (let depth = 0; depth < 64; depth++) {
+    if (samePath(cur, rootReal)) return undefined;
+    const common = await gitCommonDir(cur);
+    if (common !== undefined) {
+      return samePath(common, rootCommon) ? cur : undefined;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return undefined;
+    cur = parent;
+  }
+  return undefined;
 }
 
 const AXIOM_REPO_MARKERS = ["journal", "cas", "applied", "profiles", "trust", "lock", "backup"];
@@ -896,6 +965,7 @@ export async function runGate(
     denyResult(d, stderr, t0, {
       ...(toolClass === undefined ? {} : { toolClass }),
       ...(rootUsed === undefined ? {} : { root: rootUsed }),
+      ...(opts.denyExit === undefined ? {} : { denyExit: opts.denyExit }),
     });
   /** Fail-closed (D-18): a non-answer is a deny unless the operator opted out. */
   const internal = (why: string): GateResult => {
@@ -960,20 +1030,40 @@ export async function runGate(
       }
     }
     rootUsed = rootReal;
-    const { profile, source } = await loadGateProfile({
-      root: rootReal,
-      ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
-      ...(opts.home === undefined ? {} : { home: opts.home }),
-    });
-    log(
-      "debug",
-      `root=${rootReal} profile=${source} class=${extracted.cls} targets=${targets.length}`,
-    );
-    const resolved: ResolvedGateTarget[] = [];
+    const profiles = new Map<string, GateProfile>();
+    const profileFor = async (root: string): Promise<GateProfile> => {
+      const hit = profiles.get(root);
+      if (hit !== undefined) return hit;
+      const { profile: p, source } = await loadGateProfile({
+        root,
+        ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
+        ...(opts.home === undefined ? {} : { home: opts.home }),
+      });
+      log("debug", `root=${root} profile=${source}`);
+      profiles.set(root, p);
+      return p;
+    };
+    const profile = await profileFor(rootReal);
+    log("debug", `class=${extracted.cls} targets=${targets.length}`);
+    /** Targets grouped by the root they are judged against (the main root, or a sibling worktree). */
+    const groups = new Map<string, ResolvedGateTarget[]>();
+    const add = (root: string, r: ResolvedGateTarget) => {
+      const g = groups.get(root);
+      if (g === undefined) groups.set(root, [r]);
+      else g.push(r);
+    };
     for (const t of targets) {
       try {
-        resolved.push(await resolveGateTarget(rootReal, t, cwdReal));
+        add(rootReal, await resolveGateTarget(rootReal, t, cwdReal));
       } catch (err) {
+        if (err instanceof GateDeny && err.code === "ERR_CONTAINMENT") {
+          const wt = await sameRepoWorktreeRoot(rootReal, t.rawPath, cwdReal);
+          if (wt !== undefined) {
+            log("debug", `target ${JSON.stringify(t.rawPath)} judged in worktree ${wt}`);
+            add(wt, await resolveGateTarget(wt, t, cwdReal));
+            continue;
+          }
+        }
         // Shell operands are heuristic: a token that is not a path (a URL, a glob, `.`)
         // must not deny the whole command. Real write tools keep the strict behaviour.
         if (
@@ -995,72 +1085,36 @@ export async function runGate(
         throw err;
       }
     }
-    const verdict = await runGatePredicates(resolved, profile);
-    if (verdict !== undefined) return deny(verdict);
-    return allow(`${resolved.length} target(s) passed (${extracted.cls})`);
+    let n = 0;
+    for (const [root, resolved] of groups) {
+      const verdict = await runGatePredicates(resolved, await profileFor(root));
+      if (verdict !== undefined) return deny(verdict);
+      n += resolved.length;
+    }
+    return allow(`${n} target(s) passed (${extracted.cls})`);
   } catch (err) {
     if (err instanceof GateDeny) return deny(err);
     return internal(err instanceof Error ? err.message : String(err));
   }
 }
 
-// ----------------------------------------------------------------- stdin --
-
-export interface StdinRead {
-  text: string | undefined;
-  timedOut: boolean;
-  tooLarge: boolean;
-}
-
-/** Read all of `stream` (≤ maxBytes) or give up after `timeoutMs` — a hook must never hang. */
-export function readStdin(
-  stream: NodeJS.ReadableStream,
-  { timeoutMs = GATE_STDIN_TIMEOUT_MS, maxBytes = GATE_STDIN_MAX_BYTES } = {},
-): Promise<StdinRead> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let done = false;
-    const finish = (r: StdinRead) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      stream.removeAllListeners("data");
-      stream.removeAllListeners("end");
-      stream.removeAllListeners("error");
-      resolve(r);
-    };
-    const timer = setTimeout(
-      () => finish({ text: undefined, timedOut: true, tooLarge: false }),
-      timeoutMs,
-    );
-    timer.unref?.();
-    stream.on("data", (chunk: Buffer | string) => {
-      const b = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
-      size += b.length;
-      if (size > maxBytes) {
-        finish({ text: undefined, timedOut: false, tooLarge: true });
-        return;
-      }
-      chunks.push(b);
-    });
-    stream.on("end", () =>
-      finish({ text: Buffer.concat(chunks).toString("utf8"), timedOut: false, tooLarge: false }),
-    );
-    stream.on("error", () => finish({ text: undefined, timedOut: false, tooLarge: false }));
-    stream.resume();
-  });
-}
-
 // ------------------------------------------------------------------- cli --
 
 export const GATE_USAGE =
-  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level error|warn|info|debug]";
+  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level error|warn|info|debug]";
 
-/** `axiom gate <argv>` → result. Reads stdin only when `--stdin` is given. Never throws. */
+/**
+ * `axiom gate <argv>` → result. Reads stdin only when `--stdin` is given — unless `io.read`
+ * carries a payload the caller already read (the `cli.ts` fast path). Never throws.
+ */
 export async function gateMain(
   argv: readonly string[],
-  io: { stdin?: NodeJS.ReadableStream; cwdFallback?: () => string; home?: string } = {},
+  io: {
+    stdin?: NodeJS.ReadableStream;
+    read?: StdinRead;
+    cwdFallback?: () => string;
+    home?: string;
+  } = {},
 ): Promise<GateResult> {
   const t0 = performance.now();
   let values: {
@@ -1071,6 +1125,7 @@ export async function gateMain(
     "fail-open"?: boolean;
     "no-shell-scan"?: boolean;
     "no-root-discovery"?: boolean;
+    "deny-exit"?: string;
     "log-level"?: string;
   };
   try {
@@ -1085,6 +1140,7 @@ export async function gateMain(
         "fail-open": { type: "boolean" },
         "no-shell-scan": { type: "boolean" },
         "no-root-discovery": { type: "boolean" },
+        "deny-exit": { type: "string" },
         "log-level": { type: "string" },
       },
       strict: true,
@@ -1100,13 +1156,15 @@ export async function gateMain(
       durationMs: performance.now() - t0,
     };
   }
-  if (values.stdin !== true) {
+  const denyExitRaw = values["deny-exit"];
+  if (values.stdin !== true || (denyExitRaw !== undefined && !["0", "2"].includes(denyExitRaw))) {
+    const why = values.stdin !== true ? "--stdin is required" : "--deny-exit must be 0 or 2";
     return {
       decision: "deny",
       verdict: "deny",
       exitCode: GATE_EXIT_DENY,
-      reason: "--stdin is required",
-      stderr: ["AXIOM GATE ERROR: --stdin is required", GATE_USAGE],
+      reason: why,
+      stderr: [`AXIOM GATE ERROR: ${why}`, GATE_USAGE],
       durationMs: performance.now() - t0,
     };
   }
@@ -1114,8 +1172,9 @@ export async function gateMain(
   const logLevel: GateLogLevel = (GATE_LOG_LEVELS as readonly string[]).includes(levelRaw)
     ? (levelRaw as GateLogLevel)
     : "warn";
-  const read = await readStdin(io.stdin ?? process.stdin);
+  const read = io.read ?? (await readStdin(io.stdin ?? process.stdin));
   const opts: GateOptions = { logLevel };
+  if (denyExitRaw !== undefined) opts.denyExit = denyExitRaw === "2" ? 2 : 0;
   if (values.root !== undefined) opts.root = values.root;
   if (values.profile !== undefined) opts.profilePath = values.profile;
   if (values.strict === true) opts.strict = true;

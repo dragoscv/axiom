@@ -83,6 +83,11 @@ describe("axiom doctor (S-702)", () => {
     const denied = await runDoctor(base({ probe: async () => ({ ms: 5, exit: 2 }) }));
     expect(byId(denied, "gate.latency")?.status).toBe("warn");
     expect(denied.ok).toBe(true);
+    const deniedJson = await runDoctor(
+      base({ probe: async () => ({ ms: 5, exit: 0, denied: true }) }),
+    );
+    expect(byId(deniedJson, "gate.latency")?.status).toBe("warn");
+    expect(byId(deniedJson, "gate.latency")?.message).toMatch(/deny JSON/);
     const broken = await runDoctor(
       base({
         probe: async () => {

@@ -63,14 +63,17 @@ Exit `2` means a check failed.
 | Hook file | `.claude/settings.json` (project) / `~/.claude/settings.json` | `.github/hooks/*.json` (repo) / `~/.copilot/hooks/*.json` | `.github/hooks/*.json` **and** `.claude/settings.json` (both loaded) | none — no hook API |
 | Hook event | `PreToolUse` with regex `matcher` | `preToolUse`, **no matcher** (fires on every tool; the gate filters in < 1 ms) | `PreToolUse`, `{ type: "command", command, timeoutSec }` | — |
 | Payload | `{ session_id, cwd, hook_event_name, tool_name, tool_input, tool_use_id }` | `{ timestamp, cwd, toolName, toolArgs }` — **`toolArgs` is a JSON string** | `tool_name` / `tool_input` (snake_case, unlike the CLI) | — |
-| Deny signal read | exit `2` + stdout `hookSpecificOutput.permissionDecision` | exit `2` (any non-zero / crash = deny) + flat `permissionDecision` | same as CLI | — |
+| Deny signal read | stdout `hookSpecificOutput.permissionDecision` (exit `0`), or exit `2` | stdout `permissionDecision` (exit `0`); any non-zero / crash = deny | stdout JSON deny on exit `0`, or exit `2`; **exit `1` is only a warning** | — |
 | Hook timeout → | proceeds through normal permission flow (**fail open**) | **fail open** | **fail open** | — |
 | Per-tool auto-approve | `permissions.allow: ["mcp__axiom__axiom_apply"]` | `--allow-tool 'axiom(axiom_apply)'` | `chat.tools.global.autoApprove` / UI | `[mcp_servers.axiom.tools.axiom_apply] approval_mode` |
 | Tool that forces a prompt | `_meta["anthropic/requiresUserInteraction"]` honoured; `destructiveHint` | `destructiveHint` | `destructiveHint` → confirm dialog | approval policy |
 
 The gate emits **one** deny document that every column reads
 (`hookSpecificOutput{…}` + flat `permissionDecision` + `axiom{ verdict, code, path, toolClass }`),
-and reads both payload casings, so a single hook config serves whichever harness loads it.
+and reads both payload casings, so a single hook config serves whichever harness loads it. Since
+2.4.1 a deny exits `0` with that document (D-35): on Windows the npm `axiom.ps1` shim turns exit
+`2` into `1`, and VS Code lets the tool run on `1`. Harnesses that read only the exit code
+(Windsurf) need `axiom gate --stdin --deny-exit 2`.
 
 ## Claude Code
 
@@ -229,8 +232,8 @@ in this repository do that with a short instruction file the harness loads:
 ## Checking that it is live
 
 ```sh
-# the hook: a denied write should exit 2
-echo '{"cwd":"/abs/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin; echo $?
+# the hook: a denied write prints {"hookSpecificOutput":{…"permissionDecision":"deny"…}} (exit 0; 2 with --deny-exit 2)
+echo '{"cwd":"/abs/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin
 # the server: list roots over MCP (any client), or from the CLI
 axiom mcp --root /abs/repo --log-level info   # logs "mcp stdio ready" with the roots
 ```
