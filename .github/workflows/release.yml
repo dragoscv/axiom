@@ -22,10 +22,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Least privilege (OpenSSF Scorecard TokenPermissions): read-only by default, each job asks for
+# exactly what it writes.
 permissions:
-  contents: write # changeset publish creates git tags
-  id-token: write # npm trusted publishing (OIDC)
-  attestations: write # actions/attest-build-provenance
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,6 +40,9 @@ jobs:
     name: build → guards → changeset publish
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: write # changeset publish creates git tags
+      id-token: write # npm trusted publishing (OIDC)
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,10 +59,12 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
-      - name: npm ≥ 11.5 (trusted publishing)
+      - name: npm ≥ 11.5.1 (trusted publishing)
+        # Node 24 bundles npm 11.19+, so no `npm i -g npm@latest` (an unpinned install, Scorecard
+        # PinnedDependencies) — assert the floor instead and fail loudly if a runner regresses.
         run: |
-          npm i -g npm@latest
           npm --version
+          node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); if (a<11||(a===11&&(b<5||(b===5&&c<1)))) { console.error("npm "+process.argv[1]+" < 11.5.1: trusted publishing needs it"); process.exit(1); }' "$(npm --version)"
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -128,6 +133,8 @@ jobs:
           - { os: windows-2025, target: win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -184,6 +191,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: write # gh release create/upload/edit
+      id-token: write # Sigstore signing
+      attestations: write # actions/attest-build-provenance
     steps:
       - name: Download every binary
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -231,14 +242,22 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # mcp-publisher login github-oidc
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install mcp-publisher v1.8.1
+      - name: Install mcp-publisher v1.8.1 (sha256-pinned)
+        env:
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
           set -euo pipefail
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          curl -fsSL -o mcp-publisher.tgz "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tgz" | sha256sum -c -
+          tar xzf mcp-publisher.tgz mcp-publisher
+          rm mcp-publisher.tgz
           ./mcp-publisher --version || true
 
       - name: server.json version = released version
@@ -289,6 +308,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v2.')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write # force-push the v2 tag
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -315,6 +336,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read # gh release download; the tap push uses its own deploy key
     env:
       HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
     steps:
@@ -360,6 +383,8 @@ jobs:
     needs: publish
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: write # gh release create/upload
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
