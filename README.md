@@ -284,7 +284,10 @@ the `action@v2` tag. **2.4.0 (Phase 7, D-34)** adds `axiom init` / `axiom doctor
 roots (early `ERR_CONFLICT`, FIFO lock queue, `--lock-timeout`), PR mode in an isolated worktree,
 Sigstore keyless signing with an issuer/subject policy, `axiom status` / `axiom log` /
 `verify --journal` over a hash-chained journal, `--keep-backups`, YAML Plans — and the 18th MCP tool,
-`axiom_status`. codai's SWE harness routes every write through the gate by default
+`axiom_status`. **2.4.1 (D-35)** makes the gate's deny actually block in VS Code on Windows (exit 0 +
+JSON; `--deny-exit 2` for exit-code-only harnesses), judges writes in sibling worktrees of the same
+repository against that worktree, and answers read-only tools before the gate chunk loads.
+codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).
 
