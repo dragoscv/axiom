@@ -9,6 +9,15 @@
         "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
         "timeoutSec": 15
       }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --post --format auto",
+        "bash": "axiom gate --stdin --post --format auto",
+        "powershell": "axiom.cmd gate --stdin --post --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
+      }
     ]
   }
 }

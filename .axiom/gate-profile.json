@@ -17,5 +17,7 @@
   "pii": false,
   "maxBytes": 262144,
   "steer": "hint",
-  "record": true
+  "record": true,
+  "shadow": true,
+  "commands": { "pack": "house" }
 }
