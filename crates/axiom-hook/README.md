@@ -21,11 +21,14 @@ prints usage on stderr and exits 2.
 1. Read stdin: at most 4 MiB, give up after 2 s (`x-axiom-stdin: ok|timeout|toolarge`).
 2. Read `~/.axiom/daemon.json` (`USERPROFILE` on Windows, `HOME` elsewhere). Absent, malformed,
    wrong protocol, or a non-loopback `host` → skip to step 4.
-3. `POST /v1/gate?a=<arg>&a=<arg>…` to `host:port` (300 ms connect, 1.5 s total I/O), with
+3. `POST /v1/gate?a=<arg>&a=<arg>…` to `host:port` (300 ms connect, 1.5 s total I/O —
+   `AXIOM_HOOK_IO_TIMEOUT_MS` overrides it, 100..30000), with
    `x-axiom-protocol: 1`, `x-axiom-cwd`, `x-axiom-stdin`, and `authorization: Bearer <token>`
    when the state file has a token. No `x-axiom-version`: this client is version-agnostic.
    `200` with a valid `x-axiom-exit` → stdout = body, stderr = decoded `x-axiom-stderr`,
-   exit = `x-axiom-exit`. Anything else is "no verdict".
+   exit = `x-axiom-exit`. Anything else is "no verdict". A connection reset *after* a response
+   that is complete by its own framing (Content-Length met, or chunked terminator) still counts
+   — Windows resets a closed socket that had unread bytes instead of sending EOF.
 4. Fallback: run the installed `axiom gate <same args>` with the bytes already read. Found
    without a shell: `AXIOM_HOOK_FALLBACK` (an `axiom` executable or a `cli.js`, run with node),
    else `axiom.exe` / `axiom` on `PATH`, else (Windows) an npm/pnpm `axiom.cmd` shim, whose

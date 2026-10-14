@@ -9,6 +9,16 @@ use std::time::{Duration, Instant};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 /// DAEMON_CLIENT_TIMEOUT_MS in daemon-proto.ts.
 pub const IO_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// Override for slow or loaded machines (and the integration tests): 100..=30000 ms, else ignored.
+pub const ENV_IO_TIMEOUT: &str = "AXIOM_HOOK_IO_TIMEOUT_MS";
+
+fn io_timeout() -> Duration {
+    std::env::var(ENV_IO_TIMEOUT)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|ms| (100..=30_000).contains(ms))
+        .map_or(IO_TIMEOUT, Duration::from_millis)
+}
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// What the daemon decided: stdout bytes, stderr text, exit code.
@@ -153,7 +163,7 @@ pub fn round_trip(
         SocketAddr::V6(v6) => format!("[{}]:{}", v6.ip(), v6.port()),
     };
     let _ = stream.set_nodelay(true);
-    let deadline = Instant::now() + IO_TIMEOUT;
+    let deadline = Instant::now() + io_timeout();
     let remaining = || {
         deadline
             .checked_duration_since(Instant::now())
@@ -183,15 +193,50 @@ pub fn round_trip(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return None,
+            // Windows answers a peer's close with RST when unread bytes remain in either buffer,
+            // so a fully received response can end in ConnectionReset/Aborted instead of EOF.
+            // Keep it when it is complete (parse_response requires the full Content-Length or
+            // chunked body); anything partial still means "no verdict".
+            Err(_) => return complete_response(&raw),
         }
     }
     parse_response(&raw)
 }
 
+/// A response that is whole by its own framing (Content-Length met or chunked terminator seen).
+fn complete_response(raw: &[u8]) -> Option<Verdict> {
+    let split = find(raw, b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&raw[..split])
+        .ok()?
+        .to_ascii_lowercase();
+    let framed =
+        head.contains("\r\ncontent-length:") || head.contains("transfer-encoding: chunked");
+    if !framed {
+        return None; // body delimited by close only: a reset may have cut it short
+    }
+    parse_response(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_after_a_framed_response_keeps_the_verdict() {
+        let whole = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 3\r\n\r\nabc";
+        assert_eq!(
+            complete_response(whole).map(|v| (v.exit, v.stdout)),
+            Some((2, b"abc".to_vec()))
+        );
+        let cut = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 9\r\n\r\nabc";
+        assert!(complete_response(cut).is_none(), "short body is no verdict");
+        let unframed = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\n\r\nabc";
+        assert!(
+            complete_response(unframed).is_none(),
+            "close-delimited body may be truncated"
+        );
+        assert!(complete_response(b"HTTP/1.1 200 OK\r\nx-axi").is_none());
+    }
 
     fn state(token: Option<&str>) -> DaemonState {
         DaemonState {

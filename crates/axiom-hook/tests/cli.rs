@@ -35,6 +35,9 @@ fn run(home: &Path, args: &[&str], stdin: &[u8], fallback: &Path) -> Output {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("AXIOM_HOOK_FALLBACK", fallback)
+        // The mock daemon thread shares the test process with parallel spawns; under load it can
+        // answer after the 1.5 s production deadline and the client (correctly) falls back.
+        .env("AXIOM_HOOK_IO_TIMEOUT_MS", "15000")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -150,7 +153,13 @@ fn daemon_verdict_is_relayed_exactly() {
     assert!(seen.header("x-axiom-cwd").is_some_and(|c| !c.is_empty()));
     assert_eq!(seen.body, payload);
 
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(out.stdout, b"{\"decision\":\"x\"}\n");
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
@@ -168,7 +177,8 @@ fn allow_verdict_has_empty_stdout() {
     let seen = rx.recv().unwrap();
     assert!(seen.header("authorization").is_none());
     assert_eq!(out.status.code(), Some(0));
-    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
 
 #[test]

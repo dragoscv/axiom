@@ -292,6 +292,9 @@ repository against that worktree, and answers read-only tools before the gate ch
 nine harnesses (Claude, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline),
 the 19th MCP tool `axiom_write` (preview → apply with `confirmDigest`) with gate-side steering, and
 a decision journal attested as in-toto agent-decision statements (`axiom attest decisions`).
+**2.5.1** is a hardening patch from the first CodeQL scan (linear-time parsers, open-then-verify
+reads, loopback-only daemon probe in `doctor`), `axiom <verb> --help`, and transitive dependency
+advisories cleared (`pnpm audit` clean).
 codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).

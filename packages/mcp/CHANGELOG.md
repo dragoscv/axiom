@@ -1,5 +1,25 @@
 # @codai/axiom-mcp
 
+## 2.5.1
+
+### Patch Changes
+
+- 4009b59: `axiom <verb> --help` (or `-h`) now prints the usage text with exit 0. Before, every verb's strict argument parser rejected it with "Unknown option '--help'" (and `axiom gate --help` reported `AXIOM GATE ERROR`). Dependencies refreshed to the latest stable: zod 4.6.7, vitest 5.0.4.
+- 424297a: Hardening from the first CodeQL (security-extended) scan:
+  
+  - Linear-time parsing where a regex was polynomial on adversarial input: base64 padding in `blobByteLength` (schema), trailing separators in root containment (mcp), git remote path trimming (apply), and legacy `FAIL name: reason` guard output (checks).
+  - No check-then-read window: `repo.read` facts and pre-image hashing read through one file handle, and pre-image / worktree `.git` reads confirm the handle is the same inode `lstat` saw (a swap to a symlink reads as drift, never hashed).
+  - `axiom doctor` refuses to probe a daemon whose `~/.axiom/daemon.json` names a non-loopback host, so a tampered state file cannot send the bearer token off the machine (same rule as the hook client).
+- `axiom-hook` (native gate client, release assets): a daemon verdict that arrived complete is no longer discarded when Windows ends the connection with a reset instead of EOF (it fell back, or failed closed, on a verdict it already had). New `AXIOM_HOOK_IO_TIMEOUT_MS` (100–30000) overrides the 1.5 s daemon I/O deadline. Transitive dependency advisories cleared with pnpm `overrides` (`pnpm audit` clean).
+- Updated dependencies [424297a]
+  - @codai/axiom-schema@2.5.1
+  - @codai/axiom-checks@2.5.1
+  - @codai/axiom-apply@2.5.1
+  - @codai/axiom-axm@2.5.1
+  - @codai/axiom-emitters-web@2.5.1
+  - @codai/axiom-plan@2.5.1
+  - @codai/axiom-canon@2.5.1
+
 ## 2.5.0
 
 ### Minor Changes

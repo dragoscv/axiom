@@ -1,5 +1,12 @@
 # @codai/axiom-axm
 
+## 2.5.1
+
+### Patch Changes
+
+- Updated dependencies [424297a]
+  - @codai/axiom-schema@2.5.1
+
 ## 2.5.0
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @codai/axiom-plan
 
+## 2.5.1
+
+### Patch Changes
+
+- Updated dependencies [424297a]
+  - @codai/axiom-schema@2.5.1
+  - @codai/axiom-canon@2.5.1
+
 ## 2.5.0
 
 ### Patch Changes
