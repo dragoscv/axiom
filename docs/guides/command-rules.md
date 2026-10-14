@@ -103,7 +103,11 @@ Replace a guard only after it has run beside AXIOM without disagreement (decisio
    node scripts/guard-parity.mjs --replay .axiom/decisions.jsonl --guard guard.ps1
    ```
 
-   It prints `{total, diffs:[{command, axiom, guard}]}` and exits 1 on any diff.
+  It prints `{total, from, to, days, stateful, unjudged, diffs:[{command, axiom, guard}]}` and
+  exits 1 on any diff. Only the stateless command half is diffed (records with no rule or a
+  `house.*` rule): the guard runs from a temp copy with empty state, so stateful verdicts
+  (`blind.staleScript`, coordination, git state) are only counted (`stateful`), and denies by a
+  path predicate, which keeps enforcing in shadow mode, are listed under `unjudged`.
 3. Cut over (remove `shadow`, unregister the old hook) only after one week of zero diffs.
 
 `node scripts/guard-parity.mjs --check --guard guard.ps1` re-runs the fixture corpus against the

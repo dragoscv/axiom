@@ -271,6 +271,14 @@ async function check(guardPath, corpusPath) {
 async function replay(jsonlPath, guardPath) {
   const text = await readFile(jsonlPath, "utf8");
   const records = [];
+  // Only the stateless command half (house.* / no rule) is comparable: the guard runs from a temp
+  // copy with empty state, so stateful verdicts (blind.staleScript, coordination, git state) and
+  // path predicates (which keep enforcing in shadow mode and the guard does not have) are counted,
+  // not diffed.
+  const stateful = [];
+  const unjudged = [];
+  let from;
+  let to;
   for (const line of text.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     let r;
@@ -279,7 +287,17 @@ async function replay(jsonlPath, guardPath) {
     } catch {
       continue;
     }
-    if (r && r.shadow === true && typeof r.command === "string") {
+    if (!(r && r.shadow === true && typeof r.command === "string")) continue;
+    if (typeof r.decided_at === "string") {
+      if (from === undefined || r.decided_at < from) from = r.decided_at;
+      if (to === undefined || r.decided_at > to) to = r.decided_at;
+    }
+    const rule = typeof r.rule === "string" ? r.rule : undefined;
+    if (rule !== undefined && !rule.startsWith("house.")) {
+      stateful.push({ command: r.command, rule });
+    } else if (rule === undefined && r.decision !== "allow") {
+      unjudged.push({ command: r.command, code: r.code });
+    } else {
       records.push({ command: r.command, axiom: r.decision === "allow" ? "allow" : "deny" });
     }
   }
@@ -289,7 +307,23 @@ async function replay(jsonlPath, guardPath) {
   const diffs = records
     .map((r, i) => ({ command: r.command, axiom: r.axiom, guard: answers[i] }))
     .filter((d) => d.axiom !== d.guard);
-  console.log(JSON.stringify({ total: records.length, diffs }, null, 2));
+  const days =
+    from === undefined ? 0 : Math.round(((Date.parse(to) - Date.parse(from)) / 864e5) * 100) / 100;
+  console.log(
+    JSON.stringify(
+      {
+        total: records.length,
+        from,
+        to,
+        days,
+        stateful: stateful.length,
+        unjudged,
+        diffs,
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(diffs.length > 0 ? 1 : 0);
 }
 
