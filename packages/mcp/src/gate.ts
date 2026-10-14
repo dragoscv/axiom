@@ -32,11 +32,12 @@
  * entries (`cli.ts`, `cli-main.ts`) do the writing (`check-no-stdout`).
  */
 import { realpath as realpathCb } from "node:fs";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { resolveContained } from "@codai/axiom-apply";
+import { sha256Hex } from "@codai/axiom-canon";
 import {
   contentMaxBytes,
   contentNoSecrets,
@@ -46,21 +47,32 @@ import {
 } from "@codai/axiom-checks";
 import { type ErrorCode, isAxiomError, relPathIssues } from "@codai/axiom-schema";
 import { z } from "zod";
+import { appendDecision, hashArgs, principalSubject } from "./decisions.js";
 import {
+  allowStdout,
   classifyTool,
+  formatFromArgv,
+  GATE_FORMATS,
   GATE_STDIN_MAX_BYTES,
   GATE_STDIN_TIMEOUT_MS,
+  type GateFormat,
+  isGateFormat,
   isShellTool,
   isWriteTool,
   readStdin,
   type StdinRead,
+  TOOL_NAME_KEYS,
   type ToolClass,
 } from "./gate-fast.js";
 
 export {
+  allowStdout,
   classifyTool,
+  formatFromArgv,
+  GATE_FORMATS,
   GATE_STDIN_MAX_BYTES,
   GATE_STDIN_TIMEOUT_MS,
+  type GateFormat,
   isShellTool,
   isWriteTool,
   readStdin,
@@ -91,6 +103,15 @@ export const GateProfileSchema = z
     pii: z.boolean().default(false),
     /** Run `content.maxBytes` on the new content when the payload carries it. */
     maxBytes: z.int().positive().optional(),
+    /**
+     * Steer agents towards `axiom_write` (Phase 8): `hint` adds a once-per-session context hint
+     * to allowed writes; `require` also denies direct writes matching `steerGlobs`.
+     */
+    steer: z.enum(["off", "hint", "require"]).default("off"),
+    /** picomatch globs (dot: true) a direct write must not touch under `steer: "require"`. */
+    steerGlobs: z.array(z.string().min(1)).default([]),
+    /** Append every judged write/shell decision to `.axiom/decisions.jsonl`. */
+    record: z.boolean().default(false),
   })
   .strict();
 
@@ -109,6 +130,10 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
   ],
   noSecrets: true,
   pii: false,
+  // Phase 8 decision: the builtin profile hints; an explicit profile file defaults to "off".
+  steer: "hint",
+  steerGlobs: [],
+  record: false,
 };
 
 /** `--profile`, then `<root>/.axiom/gate-profile.json`, then `~/.axiom/gate-profile.json`, then default. */
@@ -162,6 +187,10 @@ export interface NormalizedPayload {
   toolName: string;
   cwd: string | undefined;
   input: Record<string, unknown>;
+  /** Agent session id when the harness sends one (hint once-per-session, decision journal). */
+  sessionId?: string;
+  /** Harness recognised from the payload shape alone (`cursor`, `windsurf`, `cline`). */
+  harness?: string;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | undefined {
@@ -178,16 +207,117 @@ function firstString(obj: Record<string, unknown>, keys: readonly string[]): str
   return undefined;
 }
 
+const SESSION_KEYS = [
+  "session_id",
+  "sessionId",
+  "conversation_id",
+  "trajectory_id",
+  "taskId",
+  "generation_id",
+] as const;
+const CWD_KEYS = ["cwd", "workingDirectory", "working_directory"] as const;
+
+/** An object, or a JSON string that parses to one. */
+function parseRecord(v: unknown): Record<string, unknown> | undefined {
+  if (typeof v !== "string") return asRecord(v);
+  try {
+    return asRecord(JSON.parse(v));
+  } catch {
+    return undefined;
+  }
+}
+
+function firstArrayString(v: unknown): string | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const f: unknown = v[0];
+  return typeof f === "string" && f.length > 0 ? f : undefined;
+}
+
+function withMeta(
+  p: NormalizedPayload,
+  obj: Record<string, unknown>,
+  harness: string | undefined,
+): NormalizedPayload {
+  const sessionId = firstString(obj, SESSION_KEYS);
+  return {
+    ...p,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(harness === undefined ? {} : { harness }),
+  };
+}
+
+/** Cline: every parameter value may arrive JSON-stringified; keep the raw string otherwise. */
+function clineParams(params: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof v !== "string") {
+      out[k] = v;
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      out[k] = v;
+      continue;
+    }
+    out[k] =
+      typeof parsed === "string" || (typeof parsed === "object" && parsed !== null) ? parsed : v;
+  }
+  return out;
+}
+
 /**
- * Accept Claude Code (`{session_id, tool_name, tool_input, cwd}`), Copilot CLI camelCase
- * (`{sessionId, toolName, toolArgs, cwd}` — `toolArgs` arrives as a JSON *string*) and the
- * VS Code shape (`tool_input` object). Returns undefined when no tool name is present.
+ * Payload shapes without a top-level tool name: Windsurf/Devin Cascade
+ * (`{agent_action_name, tool_info}`), Cline (`{hookName, preToolUse:{toolName, parameters}}`)
+ * and Cursor `beforeShellExecution` (`{command, cwd}`).
+ */
+function normalizeNamelessPayload(obj: Record<string, unknown>): NormalizedPayload | undefined {
+  const action = obj.agent_action_name;
+  if (typeof action === "string" && action.length > 0) {
+    const info = asRecord(obj.tool_info) ?? {};
+    const cwd = firstString(info, CWD_KEYS);
+    let toolName = action;
+    let input: Record<string, unknown> = info;
+    if (action === "pre_write_code") toolName = "write_code";
+    else if (action === "pre_read_code") toolName = "read_code";
+    else if (action === "pre_run_command") {
+      toolName = "run_command";
+      const command = firstString(info, ["command_line", "commandLine", "command"]);
+      input = command === undefined ? {} : { command };
+    } else if (action === "pre_mcp_tool_use") {
+      toolName = firstString(info, ["mcp_tool_name"]) ?? action;
+      input = parseRecord(info.mcp_tool_arguments) ?? {};
+    }
+    return withMeta({ toolName, cwd, input }, obj, "windsurf");
+  }
+  const cline = asRecord(obj.preToolUse);
+  if (cline !== undefined) {
+    const toolName = firstString(cline, ["toolName", "tool_name", "tool"]);
+    if (toolName === undefined) return undefined;
+    const input = clineParams(asRecord(cline.parameters) ?? {});
+    const cwd = firstArrayString(obj.workspaceRoots) ?? firstString(obj, CWD_KEYS);
+    return withMeta({ toolName, cwd, input }, obj, "cline");
+  }
+  if (obj.hook_event_name === "beforeShellExecution" && typeof obj.command === "string") {
+    const cwd = firstString(obj, CWD_KEYS) ?? firstArrayString(obj.workspace_roots);
+    return withMeta({ toolName: "Shell", cwd, input: { command: obj.command } }, obj, "cursor");
+  }
+  return undefined;
+}
+
+/**
+ * Accept Claude Code / Codex / Junie / Gemini CLI (`{session_id, tool_name, tool_input, cwd}`),
+ * Copilot CLI camelCase (`{sessionId, toolName, toolArgs, cwd}` — `toolArgs` arrives as a JSON
+ * *string*), the VS Code shape (`tool_input` object), Cursor (`workspace_roots` cwd fallback),
+ * Windsurf, Cline and Cursor shell payloads. Returns undefined when no tool name is present.
  */
 export function normalizePayload(raw: unknown): NormalizedPayload | undefined {
   const obj = asRecord(raw);
   if (obj === undefined) return undefined;
-  const toolName = firstString(obj, ["tool_name", "toolName", "tool", "name"]);
-  if (toolName === undefined) return undefined;
+  // The top-level tool name wins (same keys as the fast path, so `fastAllow` stays exact).
+  const toolName = firstString(obj, TOOL_NAME_KEYS);
+  if (toolName === undefined) return normalizeNamelessPayload(obj);
   let input: Record<string, unknown> = {};
   for (const k of ["tool_input", "toolInput", "toolArgs", "tool_args", "args", "input"]) {
     const v = obj[k];
@@ -210,8 +340,9 @@ export function normalizePayload(raw: unknown): NormalizedPayload | undefined {
       break;
     }
   }
-  const cwd = firstString(obj, ["cwd", "workingDirectory", "working_directory"]);
-  return { toolName, cwd, input };
+  const cwd = firstString(obj, CWD_KEYS) ?? firstArrayString(obj.workspace_roots);
+  const cursor = obj.hook_event_name === "preToolUse" || Array.isArray(obj.workspace_roots);
+  return withMeta({ toolName, cwd, input }, obj, cursor ? "cursor" : undefined);
 }
 
 // ---------------------------------------------------------------- targets --
@@ -248,10 +379,26 @@ const CONTENT_KEYS = [
   "file_text",
   "fileText",
   "text",
+  // Cline replace_in_file: SEARCH/REPLACE blocks — scanned as content.
+  "diff",
 ] as const;
 
 /** Tools that write files, matched case-insensitively by substring. */
 const SHELL_COMMAND_KEYS = ["command", "cmd", "script", "commandLine", "command_line"] as const;
+
+/** Shell command as a string; Codex sends `command` as an argv array (joined with spaces). */
+function commandString(input: Record<string, unknown>): string | undefined {
+  const s = firstString(input, SHELL_COMMAND_KEYS);
+  if (s !== undefined) return s;
+  for (const k of SHELL_COMMAND_KEYS) {
+    const v = input[k];
+    if (Array.isArray(v) && v.length > 0 && v.every((w) => typeof w === "string")) {
+      const joined = v.join(" ");
+      if (joined.trim().length > 0) return joined;
+    }
+  }
+  return undefined;
+}
 
 // ------------------------------------------------------------ shell scan --
 
@@ -493,7 +640,7 @@ export function extractTargets(p: NormalizedPayload): Extracted {
   const cls = classifyTool(p.toolName);
   if (cls === "other") return { cls, targets: [], undetermined: false };
   if (cls === "shell") {
-    const command = firstString(p.input, SHELL_COMMAND_KEYS);
+    const command = commandString(p.input);
     // A shell tool without a recognisable command string carries nothing we can judge; it is
     // not a write tool, so it is allowed (the scan is a heuristic seatbelt, not the gate).
     if (command === undefined) return { cls, targets: [], undetermined: false };
@@ -508,7 +655,12 @@ function extractWriteTargets(p: NormalizedPayload): GateTarget[] {
   const input = p.input;
 
   if (n.includes("apply_patch")) {
-    const patch = firstString(input, ["input", "patch", "diff"]);
+    // Codex: `tool_input.command` is the raw V4A patch, or an argv array whose last element is.
+    let patch = firstString(input, ["input", "patch", "diff", "command"]);
+    if (patch === undefined && Array.isArray(input.command)) {
+      const last: unknown = input.command[input.command.length - 1];
+      if (typeof last === "string") patch = last;
+    }
     return patch === undefined ? [] : parseApplyPatch(patch);
   }
 
@@ -532,6 +684,7 @@ function extractWriteTargets(p: NormalizedPayload): GateTarget[] {
 
   const rawPath = firstString(input, PATH_KEYS);
   if (rawPath === undefined) return [];
+  if (n.includes("delete")) return [{ rawPath, op: "delete", content: undefined }];
   let content = firstString(input, CONTENT_KEYS);
   if (Array.isArray(input.edits)) {
     // Claude MultiEdit: `{ file_path, edits: [{ old_string, new_string }] }`.
@@ -699,6 +852,119 @@ export async function runGatePredicates(
   return new GateDeny(f.id, f.message, f.path);
 }
 
+/** Deny id of `steer: "require"` (predicate-style, like `path.deny`). */
+export const STEER_REQUIRE_CODE = "steer.requireApply";
+
+/**
+ * `steer: "require"`: a direct write touching `steerGlobs` is denied — the agent must go through
+ * `axiom_write`. Same glob semantics as `path.deny` (it IS `path.deny` over the steer globs).
+ */
+export async function runSteerRequire(
+  targets: readonly ResolvedGateTarget[],
+  profile: GateProfile,
+): Promise<GateDeny | undefined> {
+  if (profile.steer !== "require" || profile.steerGlobs.length === 0) return undefined;
+  const findings = await pathDeny.run(buildGateContext(targets), { globs: profile.steerGlobs });
+  const f = findings[0];
+  if (f === undefined) return undefined;
+  return new GateDeny(
+    STEER_REQUIRE_CODE,
+    "this path must be changed through the axiom_write MCP tool (preview, then apply with confirmDigest), not a direct write",
+    f.path,
+  );
+}
+
+/** Once-per-session context hint for allowed writes (`steer: "hint" | "require"`). */
+export const GATE_STEER_HINT =
+  "This repository is guarded by AXIOM. For multi-file or sensitive changes prefer the axiom_write MCP tool (preview → apply with confirmDigest): atomic, checked, journaled, one-step rollback.";
+
+/**
+ * True exactly once per (root, session): creates `<root>/.axiom/hints/<sha256(session)[:16]>`
+ * exclusively. Any fs error → false (a hint is never worth a failure).
+ */
+export async function claimSessionHint(root: string, sessionId: string): Promise<boolean> {
+  const dir = path.join(root, ".axiom", "hints");
+  try {
+    await mkdir(dir, { recursive: true });
+    const fh = await open(path.join(dir, sha256Hex(sessionId).slice(0, 16)), "wx");
+    await fh.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------- formats --
+
+/** Formats that can carry a hint on an allow. */
+const HINT_FORMATS: ReadonlySet<GateFormat> = new Set<GateFormat>([
+  "auto",
+  "claude",
+  "copilot",
+  "vscode",
+  "codex",
+  "junie",
+  "cursor",
+  "cline",
+]);
+
+/** stdout for an ALLOW in `format`, carrying `hint` when given. */
+export function allowDocument(format: GateFormat, hint?: string): string | undefined {
+  if (hint === undefined || !HINT_FORMATS.has(format)) return allowStdout(format);
+  if (format === "cursor") return JSON.stringify({ permission: "allow", agent_message: hint });
+  if (format === "cline") return JSON.stringify({ cancel: false, contextModification: hint });
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: hint },
+  });
+}
+
+/** stdout (undefined = none) and exit code of a DENY in `format`. */
+export function renderDeny(
+  format: GateFormat,
+  d: GateDeny,
+  reason: string,
+  extra: { toolClass?: ToolClass; denyExit?: 0 | 2 },
+): { stdout: string | undefined; exitCode: 0 | 2 } {
+  const exit = (dflt: 0 | 2): 0 | 2 => extra.denyExit ?? dflt;
+  switch (format) {
+    case "codex":
+      return {
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: reason,
+          },
+        }),
+        exitCode: exit(0),
+      };
+    case "cursor":
+      return {
+        stdout: JSON.stringify({ permission: "deny", user_message: reason, agent_message: reason }),
+        exitCode: exit(0),
+      };
+    case "windsurf":
+      // Cascade hooks block only on exit 2; stdout is not read.
+      return { stdout: undefined, exitCode: exit(GATE_EXIT_DENY) };
+    case "gemini":
+    case "junie":
+      return { stdout: JSON.stringify({ decision: "deny", reason }), exitCode: exit(0) };
+    case "cline":
+      return { stdout: JSON.stringify({ cancel: true, errorMessage: reason }), exitCode: exit(0) };
+    default:
+      return {
+        stdout: JSON.stringify(
+          denyDocument(
+            d,
+            reason,
+            extra.toolClass === undefined ? {} : { toolClass: extra.toolClass },
+          ),
+        ),
+        exitCode: exit(GATE_DENY_EXIT_DEFAULT),
+      };
+  }
+}
+
 // ------------------------------------------------------------------- run --
 
 export const GATE_LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
@@ -726,6 +992,8 @@ export interface GateOptions {
    * which survives the npm `.ps1` shim. 2 for harnesses that only read the exit code (Windsurf).
    */
   denyExit?: 0 | 2;
+  /** Harness output contract (`--format`); default `auto` = combined Claude + Copilot document. */
+  format?: GateFormat;
   logLevel?: GateLogLevel;
   /** Test hook for `~/.axiom/gate-profile.json`. */
   home?: string;
@@ -745,8 +1013,14 @@ export interface GateResult {
   code?: string;
   reason?: string;
   path?: string;
-  /** One JSON object (Claude `hookSpecificOutput` + Copilot flat shape + `axiom` block), deny only. */
+  /**
+   * The stdout document for the chosen format: on deny the format's deny shape (`auto` = Claude
+   * `hookSpecificOutput` + Copilot flat shape + `axiom` block); on allow a hint or Cursor's
+   * explicit allow, otherwise absent.
+   */
   stdout?: string;
+  /** Steering hint attached to an allowed write (once per session). */
+  hint?: string;
   stderr: string[];
   durationMs: number;
   /** Which class of tool was judged. */
@@ -784,21 +1058,23 @@ function denyResult(
   d: GateDeny,
   stderr: string[],
   t0: number,
-  extra: { toolClass?: ToolClass; root?: string; denyExit?: 0 | 2 } = {},
+  extra: { toolClass?: ToolClass; root?: string; denyExit?: 0 | 2; format?: GateFormat } = {},
 ): GateResult {
   const where = d.relPath === undefined ? "" : ` (${d.relPath})`;
   const reason = `AXIOM GATE DENY ${d.code}: ${d.message}${where}`;
   stderr.push(reason);
+  const out = renderDeny(extra.format ?? "auto", d, reason, {
+    ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
+    ...(extra.denyExit === undefined ? {} : { denyExit: extra.denyExit }),
+  });
   return {
     decision: "deny",
     verdict: "deny",
-    exitCode: extra.denyExit ?? GATE_DENY_EXIT_DEFAULT,
+    exitCode: out.exitCode,
     code: d.code,
     reason: d.message,
     ...(d.relPath === undefined ? {} : { path: d.relPath }),
-    stdout: JSON.stringify(
-      denyDocument(d, reason, extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
-    ),
+    ...(out.stdout === undefined ? {} : { stdout: out.stdout }),
     stderr,
     durationMs: performance.now() - t0,
     ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
@@ -943,18 +1219,22 @@ export async function runGate(
 ): Promise<GateResult> {
   const t0 = performance.now();
   const level: GateLogLevel = opts.logLevel ?? "warn";
+  const format: GateFormat = opts.format ?? "auto";
   const stderr: string[] = [];
   let toolClass: ToolClass | undefined;
   let rootUsed: string | undefined;
   const log = (lvl: GateLogLevel, msg: string) => {
     if (RANK[lvl] <= RANK[level]) stderr.push(`AXIOM GATE ${lvl.toUpperCase()}: ${msg}`);
   };
-  const allow = (why: string): GateResult => {
+  const allow = (why: string, hint?: string): GateResult => {
     log("debug", `allow: ${why}`);
+    const stdout = allowDocument(format, hint);
     return {
       decision: "allow",
       verdict: "allow",
       exitCode: GATE_EXIT_ALLOW,
+      ...(stdout === undefined ? {} : { stdout }),
+      ...(hint === undefined ? {} : { hint }),
       stderr,
       durationMs: performance.now() - t0,
       ...(toolClass === undefined ? {} : { toolClass }),
@@ -966,6 +1246,7 @@ export async function runGate(
       ...(toolClass === undefined ? {} : { toolClass }),
       ...(rootUsed === undefined ? {} : { root: rootUsed }),
       ...(opts.denyExit === undefined ? {} : { denyExit: opts.denyExit }),
+      format,
     });
   /** Fail-closed (D-18): a non-answer is a deny unless the operator opted out. */
   const internal = (why: string): GateResult => {
@@ -1015,6 +1296,32 @@ export async function runGate(
   const targets = extracted.targets;
   if (targets.length === 0) return allow(`tool ${payload.toolName} writes nothing recognisable`);
 
+  /** Set once the main root and its profile are known: what the decision journal needs. */
+  let rec: { root: string; profile: GateProfile; source: string } | undefined;
+  const judgedPaths: string[] = [];
+  const recorded = async (r: GateResult): Promise<GateResult> => {
+    if (rec === undefined || !rec.profile.record) return r;
+    try {
+      const harness = payload.harness ?? (format === "auto" ? "unknown" : format);
+      await appendDecision(rec.root, {
+        v: 1,
+        decided_at: new Date().toISOString(),
+        agent_id: `${harness}:${payload.sessionId ?? "unknown"}`,
+        principal: { subject: principalSubject() },
+        tool: payload.toolName,
+        ...hashArgs(payload.input),
+        decision: r.decision,
+        ...(r.code === undefined ? {} : { code: r.code }),
+        ...(r.reason === undefined ? {} : { reason: r.reason }),
+        paths: [...new Set(judgedPaths)],
+        profile: rec.source,
+      });
+    } catch (err) {
+      log("debug", `decision journal: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return r;
+  };
+
   try {
     const rootArg = payload.cwd ?? opts.root ?? (opts.cwdFallback ?? (() => process.cwd()))();
     let rootReal = await realpathNative(path.resolve(rootArg));
@@ -1030,24 +1337,28 @@ export async function runGate(
       }
     }
     rootUsed = rootReal;
-    const profiles = new Map<string, GateProfile>();
-    const profileFor = async (root: string): Promise<GateProfile> => {
+    const profiles = new Map<string, { profile: GateProfile; source: string }>();
+    const loadFor = async (root: string): Promise<{ profile: GateProfile; source: string }> => {
       const hit = profiles.get(root);
       if (hit !== undefined) return hit;
-      const { profile: p, source } = await loadGateProfile({
+      const loaded = await loadGateProfile({
         root,
         ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
         ...(opts.home === undefined ? {} : { home: opts.home }),
       });
-      log("debug", `root=${root} profile=${source}`);
-      profiles.set(root, p);
-      return p;
+      log("debug", `root=${root} profile=${loaded.source}`);
+      profiles.set(root, loaded);
+      return loaded;
     };
-    const profile = await profileFor(rootReal);
+    const profileFor = async (root: string): Promise<GateProfile> => (await loadFor(root)).profile;
+    const main = await loadFor(rootReal);
+    const profile = main.profile;
+    rec = { root: rootReal, profile, source: main.source };
     log("debug", `class=${extracted.cls} targets=${targets.length}`);
     /** Targets grouped by the root they are judged against (the main root, or a sibling worktree). */
     const groups = new Map<string, ResolvedGateTarget[]>();
     const add = (root: string, r: ResolvedGateTarget) => {
+      judgedPaths.push(r.relPath);
       const g = groups.get(root);
       if (g === undefined) groups.set(root, [r]);
       else g.push(r);
@@ -1087,21 +1398,48 @@ export async function runGate(
     }
     let n = 0;
     for (const [root, resolved] of groups) {
-      const verdict = await runGatePredicates(resolved, await profileFor(root));
-      if (verdict !== undefined) return deny(verdict);
+      const p = await profileFor(root);
+      const verdict =
+        (await runGatePredicates(resolved, p)) ?? (await runSteerRequire(resolved, p));
+      if (verdict !== undefined) return recorded(deny(verdict));
       n += resolved.length;
     }
-    return allow(`${n} target(s) passed (${extracted.cls})`);
+    let hint: string | undefined;
+    if (
+      extracted.cls === "write" &&
+      profile.steer !== "off" &&
+      payload.sessionId !== undefined &&
+      HINT_FORMATS.has(format) &&
+      (await claimSessionHint(rootReal, payload.sessionId))
+    ) {
+      hint = GATE_STEER_HINT;
+    }
+    return recorded(allow(`${n} target(s) passed (${extracted.cls})`, hint));
   } catch (err) {
-    if (err instanceof GateDeny) return deny(err);
-    return internal(err instanceof Error ? err.message : String(err));
+    if (err instanceof GateDeny) return recorded(deny(err));
+    return recorded(internal(err instanceof Error ? err.message : String(err)));
   }
 }
 
 // ------------------------------------------------------------------- cli --
 
 export const GATE_USAGE =
-  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level error|warn|info|debug]";
+  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--log-level error|warn|info|debug]";
+
+function usageError(why: string, t0: number, format: GateFormat): GateResult {
+  return {
+    decision: "deny",
+    verdict: "deny",
+    exitCode: GATE_EXIT_DENY,
+    reason: why,
+    // Cline ignores exit codes: only a cancel document stops the tool.
+    ...(format === "cline"
+      ? { stdout: JSON.stringify({ cancel: true, errorMessage: `AXIOM GATE ERROR: ${why}` }) }
+      : {}),
+    stderr: [`AXIOM GATE ERROR: ${why}`, GATE_USAGE],
+    durationMs: performance.now() - t0,
+  };
+}
 
 /**
  * `axiom gate <argv>` → result. Reads stdin only when `--stdin` is given — unless `io.read`
@@ -1117,6 +1455,8 @@ export async function gateMain(
   } = {},
 ): Promise<GateResult> {
   const t0 = performance.now();
+  // Scanned before parseArgs so even an argv error answers in the harness's own format.
+  const argvFormat = formatFromArgv(argv);
   let values: {
     stdin?: boolean;
     root?: string;
@@ -1126,6 +1466,7 @@ export async function gateMain(
     "no-shell-scan"?: boolean;
     "no-root-discovery"?: boolean;
     "deny-exit"?: string;
+    format?: string;
     "log-level"?: string;
   };
   try {
@@ -1141,39 +1482,29 @@ export async function gateMain(
         "no-shell-scan": { type: "boolean" },
         "no-root-discovery": { type: "boolean" },
         "deny-exit": { type: "string" },
+        format: { type: "string" },
         "log-level": { type: "string" },
       },
       strict: true,
       allowPositionals: false,
     }).values;
   } catch (err) {
-    return {
-      decision: "deny",
-      verdict: "deny",
-      exitCode: GATE_EXIT_DENY,
-      reason: err instanceof Error ? err.message : String(err),
-      stderr: [`AXIOM GATE ERROR: ${err instanceof Error ? err.message : String(err)}`, GATE_USAGE],
-      durationMs: performance.now() - t0,
-    };
+    return usageError(err instanceof Error ? err.message : String(err), t0, argvFormat);
   }
   const denyExitRaw = values["deny-exit"];
-  if (values.stdin !== true || (denyExitRaw !== undefined && !["0", "2"].includes(denyExitRaw))) {
-    const why = values.stdin !== true ? "--stdin is required" : "--deny-exit must be 0 or 2";
-    return {
-      decision: "deny",
-      verdict: "deny",
-      exitCode: GATE_EXIT_DENY,
-      reason: why,
-      stderr: [`AXIOM GATE ERROR: ${why}`, GATE_USAGE],
-      durationMs: performance.now() - t0,
-    };
-  }
+  const formatRaw = values.format;
+  if (formatRaw !== undefined && !isGateFormat(formatRaw))
+    return usageError(`--format must be one of ${GATE_FORMATS.join("|")}`, t0, argvFormat);
+  const format: GateFormat = formatRaw ?? "auto";
+  if (values.stdin !== true) return usageError("--stdin is required", t0, format);
+  if (denyExitRaw !== undefined && !["0", "2"].includes(denyExitRaw))
+    return usageError("--deny-exit must be 0 or 2", t0, format);
   const levelRaw = values["log-level"] ?? "warn";
   const logLevel: GateLogLevel = (GATE_LOG_LEVELS as readonly string[]).includes(levelRaw)
     ? (levelRaw as GateLogLevel)
     : "warn";
   const read = io.read ?? (await readStdin(io.stdin ?? process.stdin));
-  const opts: GateOptions = { logLevel };
+  const opts: GateOptions = { logLevel, format };
   if (denyExitRaw !== undefined) opts.denyExit = denyExitRaw === "2" ? 2 : 0;
   if (values.root !== undefined) opts.root = values.root;
   if (values.profile !== undefined) opts.profilePath = values.profile;

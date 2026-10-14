@@ -9,6 +9,7 @@ name: Release
 # Jobs (Phase 5, D-27/D-29/D-31):
 #   publish          build → guards → changeset publish → registry verification
 #   binaries         Node 26 single executables, one native runner per target
+#                    + the native `axiom-hook` gate client (Rust, std only) on the same runner
 #   release-assets   SHA256SUMS + Sigstore build provenance, attached to the GitHub release
 #   vscode-extension .vsix attached to the release (+ Marketplace when VSCE_PAT is set)
 #                    (+ Open VSX when OVSX_PAT is set — Cursor, VSCodium, Windsurf, Gitpod)
@@ -177,16 +178,43 @@ jobs:
           node -e 'process.stdout.write(JSON.stringify({session_id:"s",hook_event_name:"PreToolUse",cwd:process.argv[1],tool_name:"Write",tool_input:{file_path:"src/ok.ts",content:"x"}}))' "$root" | "$bin" gate --stdin
           echo "smoke OK: $("$bin" --version)"
 
+      - name: Build axiom-hook (native gate client, rustup preinstalled on the runner)
+        # Built on the same native runner as the SEA binary — no cross linkers, no extra action.
+        # Asset name mirrors the SEA scheme: axiom-hook-<os>-<arch>[.exe].
+        shell: bash
+        working-directory: crates/axiom-hook
+        run: |
+          set -euo pipefail
+          rustup --version
+          rustup toolchain install stable --profile minimal --no-self-update
+          cargo +stable build --release --locked
+          npm_v=$(node -p 'require("../../packages/mcp/package.json").version')
+          hook_v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$npm_v" != "$hook_v" ]; then echo "::warning::axiom-hook $hook_v != @codai/axiom-mcp $npm_v"; fi
+          ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
+          out="${{ runner.temp }}/axiom-bin/axiom-hook-${{ matrix.target }}${ext}"
+          cp "target/release/axiom-hook${ext}" "$out"
+          if [ "$RUNNER_OS" = "macOS" ]; then codesign --sign - --force "$out"; fi
+          "$out" --version
+          # Fail-closed smoke: no daemon state, no CLI → deny document, exit 0 (cline format).
+          home="${{ runner.temp }}/hook-home"; mkdir -p "$home"
+          deny=$(printf '{}' | HOME="$home" USERPROFILE="$home" AXIOM_HOOK_FALLBACK="$home/none" "$out" gate --stdin --format cline 2>/dev/null)
+          echo "$deny"
+          case "$deny" in *'"cancel":true'*) ;; *) echo "::error::axiom-hook fail-closed smoke failed"; exit 1;; esac
+          ls -la "${{ runner.temp }}/axiom-bin"
+
       - name: Upload binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: axiom-${{ matrix.target }}
+          # Matches axiom-<target>[.exe] AND axiom-hook-<target>[.exe].
           path: ${{ runner.temp }}/axiom-bin/axiom-*
           if-no-files-found: error
 
   release-assets:
     name: SHA256SUMS + provenance → GitHub release
-    # Covers the five binaries AND the .vsix (same checksum file, same Sigstore attestation).
+    # Covers the ten binaries (axiom + axiom-hook × 5 targets) AND the .vsix (same checksum
+    # file, same Sigstore attestation).
     needs: [binaries, vscode-extension]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -207,8 +235,14 @@ jobs:
         run: |
           set -euo pipefail
           cd bin
-          chmod +x axiom-linux-* axiom-darwin-*
+          chmod +x axiom-linux-* axiom-darwin-* axiom-hook-linux-* axiom-hook-darwin-*
           ls -la
+          # Every target ships axiom-<target>[.exe] AND axiom-hook-<target>[.exe].
+          for a in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win-x64.exe; do
+            for p in axiom axiom-hook; do
+              test -f "$p-$a" || { echo "::error::missing release asset $p-$a"; exit 1; }
+            done
+          done
           sha256sum axiom-* | tee SHA256SUMS
 
       - name: Sigstore build provenance (binaries + .vsix + checksums)

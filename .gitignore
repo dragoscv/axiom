@@ -33,3 +33,5 @@ packages/axiom-tests/manifest.json
 # MCP conformance harness output (packages/conformance)
 packages/conformance/results/
 
+# Rust build output (crates/axiom-hook)
+/crates/*/target/

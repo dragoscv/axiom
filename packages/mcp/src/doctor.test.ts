@@ -1,23 +1,28 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { newJournal, writeJournal } from "@codai/axiom-apply";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  compareVersions,
   type DoctorOptions,
   GATE_P95_FAIL_MS,
   GATE_PROBE_RUNS,
   runDoctor,
   stripJsonc,
 } from "./doctor.js";
-import { runInit } from "./init.js";
+import { cursorHooks, runInit } from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
+let home: Awaited<ReturnType<typeof tmpRepo>>;
 beforeEach(async () => {
   repo = await tmpRepo("axiom-doctor-");
+  home = await tmpRepo("axiom-doctor-home-");
 });
 afterEach(async () => {
-  await repo.cleanup();
+  await Promise.all([repo.cleanup(), home.cleanup()]);
 });
 
 const fastProbe: NonNullable<DoctorOptions["probe"]> = async () => ({ ms: 50, exit: 0 });
@@ -30,6 +35,8 @@ const base = (over: Partial<DoctorOptions> = {}): DoctorOptions => ({
   version: "9.9.9",
   probe: fastProbe,
   locateBin: bin,
+  home: home.root,
+  hookLogs: [],
   ...over,
 });
 const byId = (r: Awaited<ReturnType<typeof runDoctor>>, id: string) =>
@@ -172,5 +179,241 @@ describe("axiom doctor (S-702)", () => {
     const r = await runDoctor(base({ root: join(repo.root, "missing") }));
     expect(r.ok).toBe(false);
     expect(r.checks).toEqual([expect.objectContaining({ id: "root", status: "fail" })]);
+  });
+});
+
+const put = async (rel: string, v: unknown) => {
+  const abs = join(repo.root, rel);
+  await mkdir(join(abs, ".."), { recursive: true });
+  await writeFile(abs, typeof v === "string" ? v : JSON.stringify(v));
+};
+const statusOf = async (id: string, over: Partial<DoctorOptions> = {}) =>
+  byId(await runDoctor(base(over)), id)?.status;
+
+describe("axiom doctor — every harness", () => {
+  it("init for each harness yields an ok hook check (and --daemon too)", async () => {
+    const cases = [
+      ["cursor", "hook.cursor"],
+      ["windsurf", "hook.windsurf"],
+      ["codex", "hook.codex"],
+      ["gemini", "hook.gemini"],
+      ["cline", "hook.cline"],
+      ["claude", "hook.claude"],
+    ] as const;
+    for (const daemon of [false, true]) {
+      for (const [harness, id] of cases) {
+        await runInit({ root: repo.root, harness, profileName: "demo", daemon, force: true });
+        const r = await runDoctor(base());
+        const hits = r.checks.filter((c) => c.id === id);
+        expect(hits.length, `${harness} daemon=${daemon}`).toBeGreaterThan(0);
+        expect(
+          hits.every((c) => c.status === "ok"),
+          `${harness} daemon=${daemon}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("npx or foreign entries never count; cursor without failClosed warns", async () => {
+    await put(".cursor/hooks.json", {
+      version: 1,
+      hooks: { preToolUse: [{ command: "npx -y @codai/axiom-mcp gate --stdin" }] },
+    });
+    expect(await statusOf("hook.cursor")).toBe("warn");
+    const noFc = cursorHooks() as { hooks: { preToolUse: Record<string, unknown>[] } };
+    noFc.hooks.preToolUse = noFc.hooks.preToolUse.map(({ failClosed: _f, ...rest }) => rest);
+    await put(".cursor/hooks.json", noFc);
+    const r = await runDoctor(base());
+    const cursor = r.checks.filter((c) => c.id === "hook.cursor").map((c) => c.status);
+    expect(cursor).toEqual(["ok", "warn"]);
+
+    await put(".gemini/settings.json", { hooks: { BeforeTool: [{ hooks: [{ command: "x" }] }] } });
+    expect(await statusOf("hook.gemini")).toBe("warn");
+    await put(".codex/hooks.json", "{broken");
+    expect(await statusOf("hook.codex")).toBe("fail");
+    await put(".windsurf/hooks.json", { hooks: { pre_write_code: [{ command: "lint.sh" }] } });
+    expect(await statusOf("hook.windsurf")).toBe("warn");
+  });
+
+  it("windsurf: .devin/hooks.json wins over the legacy file unless it is empty", async () => {
+    await put(".windsurf/hooks.json", {
+      hooks: { pre_write_code: [{ command: "axiom gate --stdin --format windsurf" }] },
+    });
+    await put(".devin/hooks.json", {});
+    expect(byId(await runDoctor(base()), "hook.windsurf")?.message).toContain(".windsurf/");
+    await put(".devin/hooks.json", { hooks: { pre_run_command: [{ command: "lint.sh" }] } });
+    const r = await runDoctor(base());
+    expect(byId(r, "hook.windsurf")?.status).toBe("warn");
+    expect(byId(r, "hook.windsurf")?.message).toContain(".devin/");
+  });
+
+  it("cline: a hook without the cancel fallback or not calling axiom warns", async () => {
+    await put(".clinerules/hooks/PreToolUse.ps1", "axiom gate --stdin --format cline\n");
+    expect(await statusOf("hook.cline")).toBe("warn");
+    await put(".clinerules/hooks/PreToolUse.ps1", 'npx axiom gate --stdin {"cancel":true}\n');
+    expect(await statusOf("hook.cline")).toBe("warn");
+  });
+
+  it("junie: reads ~/.junie/config.json read-only; absent → no check", async () => {
+    expect(await statusOf("hook.junie")).toBeUndefined();
+    await mkdir(join(home.root, ".junie"));
+    await writeFile(
+      join(home.root, ".junie", "config.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: "Write", hooks: [{ command: "axiom-hook gate --stdin --format junie" }] },
+          ],
+        },
+      }),
+    );
+    expect(await statusOf("hook.junie")).toBe("ok");
+    await writeFile(join(home.root, ".junie", "config.json"), JSON.stringify({ hooks: {} }));
+    expect(await statusOf("hook.junie")).toBeUndefined();
+    await mkdir(join(repo.root, ".junie"));
+    expect(await statusOf("hook.junie")).toBe("warn");
+  });
+});
+
+describe("axiom doctor — gate profile vs global bin", () => {
+  it("steer keys with a global bin < 2.5.0 fail; ≥ 2.5.0 ok; no steer keys → no check", async () => {
+    await put(".axiom/gate-profile.json", { deny: [], steer: "hint" });
+    const old = await runDoctor(
+      base({ locateBin: async () => ({ path: "/a", version: "2.4.1" }) }),
+    );
+    expect(byId(old, "bin.profile")?.status).toBe("fail");
+    expect(byId(old, "bin.profile")?.hint).toContain("@codai/axiom-mcp@latest");
+    expect(old.ok).toBe(false);
+    expect(
+      await statusOf("bin.profile", { locateBin: async () => ({ path: "/a", version: "2.5.0" }) }),
+    ).toBe("ok");
+    await put(".axiom/gate-profile.json", { deny: [] });
+    expect(await statusOf("bin.profile")).toBeUndefined();
+  });
+
+  it("compareVersions orders semver triples", () => {
+    expect(compareVersions("2.4.9", "2.5.0")).toBeLessThan(0);
+    expect(compareVersions("2.10.0", "2.5.0")).toBeGreaterThan(0);
+    expect(compareVersions("v2.5.0", "2.5.0")).toBe(0);
+  });
+});
+
+describe("axiom doctor — resident daemon", () => {
+  let server: Server | undefined;
+  afterEach(async () => {
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    server = undefined;
+  });
+
+  const writeState = async (port: number, roots: string[], token?: string) => {
+    await mkdir(join(home.root, ".axiom"), { recursive: true });
+    await writeFile(
+      join(home.root, ".axiom", "daemon.json"),
+      JSON.stringify({
+        protocol: 1,
+        pid: 4242,
+        host: "127.0.0.1",
+        port,
+        version: "9.9.9",
+        roots,
+        startedAt: "2026-10-14T00:00:00Z",
+        ...(token === undefined ? {} : { token }),
+      }),
+    );
+  };
+
+  const listen = async (roots: string[], seen: Record<string, string | undefined>[]) => {
+    server = createServer((req, res) => {
+      seen.push({
+        url: req.url,
+        protocol: req.headers["x-axiom-protocol"] as string | undefined,
+        auth: req.headers.authorization,
+      });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ protocol: 1, version: "9.9.9", pid: 4242, roots }));
+    });
+    await new Promise<void>((r) => server?.listen(0, "127.0.0.1", () => r()));
+    return (server.address() as AddressInfo).port;
+  };
+
+  it("no daemon.json → ok (in-process)", async () => {
+    expect(await statusOf("daemon")).toBe("ok");
+  });
+
+  it("a live daemon serving the parent dir → ok; protocol header + bearer token sent", async () => {
+    const seen: Record<string, string | undefined>[] = [];
+    const parent = join(repo.root, "..");
+    const port = await listen([parent], seen);
+    await writeState(port, [parent], "tok");
+    const d = byId(await runDoctor(base()), "daemon");
+    expect(d?.status).toBe("ok");
+    expect(d?.message).toContain("4242");
+    expect(seen).toEqual([{ url: "/v1/health", protocol: "1", auth: "Bearer tok" }]);
+  });
+
+  it("a daemon that does not serve this root warns", async () => {
+    const port = await listen([join(home.root, "elsewhere")], []);
+    await writeState(port, [join(home.root, "elsewhere")]);
+    expect(await statusOf("daemon")).toBe("warn");
+  });
+
+  it("an unreachable daemon → warn stale daemon.json", async () => {
+    const port = await listen([], []);
+    await new Promise<void>((r) => server?.close(() => r()));
+    server = undefined;
+    await writeState(port, [repo.root]);
+    const d = byId(await runDoctor(base()), "daemon");
+    expect(d?.status).toBe("warn");
+    expect(d?.message).toMatch(/^stale daemon\.json/);
+  });
+});
+
+describe("axiom doctor — VS Code hook log", () => {
+  const line = (id: number, kind: string, rest: string) =>
+    `2026-10-14 01:43:28.080 [info] [#${id}] [PreToolUse] ${kind}: ${rest}`;
+  const run = (id: number, ms: number, outcome = "Success") => [
+    line(id, "Running", '{"command":"& ./.github/hooks/axiom-gate.ps1","timeout":10}'),
+    `2026-10-14 01:43:29.156 [info] [#${id}] [PreToolUse] Completed (${outcome}) in ${ms}ms`,
+  ];
+  const writeLog = async (lines: string[]) => {
+    const f = join(home.root, "hooks.log");
+    await writeFile(f, `${lines.join("\n")}\n`);
+    return [f];
+  };
+
+  it("no log files or no axiom runs → no check", async () => {
+    expect(await statusOf("hook.log.vscode")).toBeUndefined();
+    const hookLogs = await writeLog([line(1, "Running", '{"command":"guard.ps1"}')]);
+    expect(await statusOf("hook.log.vscode", { hookLogs })).toBeUndefined();
+  });
+
+  it("fast clean runs → ok; NonBlockingError → warn; slow p95 → warn", async () => {
+    expect(await statusOf("hook.log.vscode", { hookLogs: await writeLog(run(1, 90)) })).toBe("ok");
+    const nbe = byId(
+      await runDoctor(
+        base({ hookLogs: await writeLog([...run(1, 90), ...run(2, 12692, "NonBlockingError")]) }),
+      ),
+      "hook.log.vscode",
+    );
+    expect(nbe?.status).toBe("warn");
+    expect(nbe?.message).toMatch(/^1 axiom gate runs ended NonBlockingError/);
+    expect(await statusOf("hook.log.vscode", { hookLogs: await writeLog([...run(1, 4500)]) })).toBe(
+      "warn",
+    );
+  });
+
+  it("finds the newest session's log via home/appData/platform", async () => {
+    const logs = join(home.root, "AppData", "Roaming", "Code - Insiders", "logs");
+    for (const [session, ms] of [
+      ["20261013T090000", 9000],
+      ["20261014T010000", 80],
+    ] as const) {
+      const dir = join(logs, session, "window1", "exthost", "GitHub.copilot-chat");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "GitHub Copilot Chat Hooks.log"), run(1, ms).join("\n"));
+    }
+    const r = await runDoctor(base({ hookLogs: undefined, platform: "win32" }));
+    expect(byId(r, "hook.log.vscode")?.status).toBe("ok");
+    expect(byId(r, "hook.log.vscode")?.message).toContain("p95 80 ms");
   });
 });

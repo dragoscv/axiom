@@ -124,6 +124,39 @@ digest ([verify-tree.md](../guides/verify-tree.md)). This is a different proof f
 signature: signing says *who produced the manifest*; attestation says *a tree was checked against
 it, here, then*.
 
+**Agent decisions (2.5.0).** With `record: true` in the gate profile, every write/shell call the
+gate judged is appended to `.axiom/decisions.jsonl` — the arguments only as `sha256:` of their
+JCS (RFC 8785) form, so the journal can be shared without the content. `axiom attest decisions
+[--sign]` emits one in-toto Statement per record with predicateType
+`https://auxidus.dev/attestation/agent-decision/v0.1`, the schema proposed in
+[in-toto/attestation#554](https://github.com/in-toto/attestation/issues/554) (`agent_id`,
+`principal`, `policy_evaluations`, `tool_calls[].args_hash`, `decided_at`; the RFC leaves the
+argument canonicalization open, AXIOM pins JCS and records `args_state` as the thread proposes).
+The subject is the content-addressed invocation (`{name: tool, digest: {sha256: <args hash>}}`).
+The URI lives in one constant (`AGENT_DECISION_V0_1` in `@codai/axiom-canon`) because #554 intends
+an `in-toto.io` alias once the working group agrees.
+
+### OWASP Agent Control Standard
+
+The [OWASP Agent Control Standard](https://genai.owasp.org/resource/agent-control-standard-acs/)
+v0.1 (2026-09-01) defines conformance *profiles* and spec sections, not numbered controls. Where
+AXIOM sits against it:
+
+| AXIOM | ACS anchor | Note |
+|---|---|---|
+| `axiom gate` on PreToolUse (every harness) | Instrument pillar, `steps/toolCallRequest`; dispositions `allow`/`deny` (§6) | the deny document carries `axiom.verdict` in the ACS vocabulary and `standard: "owasp-acs/0.1"` |
+| path deny/allow, secret scan, shell scan, `steer` | the deterministic policy behind `toolCallRequest` | ACS does not define policy content |
+| fail-closed gate (default), Cursor `failClosed`, Claude `onFailure: block`, `axiom-hook` deny when no gate runs | §6.4 `on_decision_failure: deny` | stricter than the ACS default (`proceed`, audited) |
+| journal hash chain (`chain.jsonl`, `verify --journal`), decision journal | ACS-Core §8 `chain_hash`; `acs-audit` `request_hash` | AXIOM hashes request arguments with JCS + SHA-256 like `acs-audit` |
+| content-addressed manifest, `confirmDigest`, pre-image TOCTOU check, atomic apply + rollback | — (closest: `acs-audit` `request_hash`) | transactional apply has no ACS counterpart |
+| DSSE (Ed25519), keyless Sigstore, in-toto attestations | — | ACS-Core uses HMAC envelopes and `acs-crypto` ML-DSA; DSSE/Sigstore are outside ACS |
+
+AXIOM does not claim ACS conformance (it implements no `handshake/hello` JSON-RPC session); the
+table is a map for reviewers who assess an agent stack against ACS. Against the OWASP Top 10 for
+Agentic Applications 2026 the gate and apply path address ASI02 (tool misuse), ASI04 (supply
+chain — signed manifests), ASI08 (cascading failures — atomic rollback) and ASI10 (rogue agents —
+fail-closed gate, append-only journals).
+
 ## What the model does not cover
 
 Be explicit about the edges, because a trust model that overstates itself is worse than none:

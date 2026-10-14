@@ -6,6 +6,8 @@
  * await: the output is CommonJS.
  */
 import { main } from "./cli-main.js";
+import { callDaemon } from "./daemon-client.js";
+import { readStdin } from "./gate-fast.js";
 import { gateMain } from "./gate-lazy.js";
 import { PACKAGE_VERSION as version } from "./version.js";
 
@@ -16,9 +18,21 @@ async function run(argv: readonly string[]): Promise<number> {
     return 0;
   }
   if (verb === "gate") {
-    const r = await gateMain(argv.slice(1));
+    // Same order as cli.ts: resident daemon first (D-36), in-process gate when it has no verdict.
+    const read = argv.includes("--stdin") ? await readStdin(process.stdin) : undefined;
+    const viaDaemon =
+      read === undefined
+        ? undefined
+        : await callDaemon({
+            argv: argv.slice(1),
+            text: read.text,
+            stdin: read.tooLarge ? "toolarge" : read.timedOut ? "timeout" : "ok",
+            cwd: process.cwd(),
+            version,
+          });
+    const r = viaDaemon ?? (await gateMain(argv.slice(1), read === undefined ? {} : { read }));
     for (const line of r.stderr) process.stderr.write(`${line}\n`);
-    if (r.stdout !== undefined) process.stdout.write(`${r.stdout}\n`);
+    if (r.stdout !== undefined && r.stdout !== "") process.stdout.write(`${r.stdout}\n`);
     return r.exitCode;
   }
   return main(argv, version);

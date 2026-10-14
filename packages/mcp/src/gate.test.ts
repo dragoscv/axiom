@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readDecisions } from "./decisions.js";
 import {
+  allowDocument,
   classifyTool,
   DEFAULT_GATE_PROFILE,
   extractShellWriteTargets,
@@ -13,6 +15,7 @@ import {
   GATE_DENY_EXIT_DEFAULT,
   GATE_EXIT_ALLOW,
   GATE_EXIT_DENY,
+  GATE_STEER_HINT,
   GateProfileSchema,
   gateMain,
   gitCommonDir,
@@ -22,8 +25,15 @@ import {
   parseApplyPatch,
   readStdin,
   runGate,
+  STEER_REQUIRE_CODE,
 } from "./gate.js";
-import { fastAllow } from "./gate-fast.js";
+import {
+  allowStdout,
+  fastAllow,
+  formatFromArgv,
+  GATE_FORMATS,
+  type GateFormat,
+} from "./gate-fast.js";
 import { tmpRepo } from "./test-helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -189,10 +199,18 @@ describe("gate: profile", () => {
     await home.cleanup();
   });
 
-  it("schema: strict object, defaults deny=[] noSecrets=true pii=false", () => {
-    expect(GateProfileSchema.parse({})).toStrictEqual({ deny: [], noSecrets: true, pii: false });
+  it("schema: strict object, defaults deny=[] noSecrets=true pii=false steer=off record=false", () => {
+    expect(GateProfileSchema.parse({})).toStrictEqual({
+      deny: [],
+      noSecrets: true,
+      pii: false,
+      steer: "off",
+      steerGlobs: [],
+      record: false,
+    });
     expect(GateProfileSchema.safeParse({ deny: [], extra: 1 }).success).toBe(false);
     expect(GateProfileSchema.safeParse({ maxBytes: 0 }).success).toBe(false);
+    expect(GateProfileSchema.safeParse({ steer: "always" }).success).toBe(false);
     expect(GateProfileSchema.safeParse(DEFAULT_GATE_PROFILE).success).toBe(true);
   });
 
@@ -216,7 +234,14 @@ describe("gate: profile", () => {
     const explicit = join(repo.root, "custom.json");
     await writeFile(explicit, '{"deny":["custom/**"],"noSecrets":false}');
     const r = await loadGateProfile({ root: repo.root, home: home.root, profilePath: explicit });
-    expect(r.profile).toStrictEqual({ deny: ["custom/**"], noSecrets: false, pii: false });
+    expect(r.profile).toStrictEqual({
+      deny: ["custom/**"],
+      noSecrets: false,
+      pii: false,
+      steer: "off",
+      steerGlobs: [],
+      record: false,
+    });
     expect(r.source).toBe(explicit);
   });
 
@@ -251,15 +276,25 @@ describe("gate: decisions", () => {
 
   const opts = () => ({ home: home.root });
 
-  it("Claude Write to an ordinary path → allow, exit 0, no stdout", async () => {
+  it("Claude Write to an ordinary path → allow, exit 0; builtin steer=hint hints once per session", async () => {
     const r = await runGate(
       claude("Write", { file_path: join(repo.root, "src", "a.ts"), content: "ok" }, repo.root),
       opts(),
     );
     expect(r.decision).toBe("allow");
     expect(r.exitCode).toBe(GATE_EXIT_ALLOW);
-    expect(r.stdout).toBeUndefined();
+    expect(r.hint).toBe(GATE_STEER_HINT);
+    expect(JSON.parse(r.stdout ?? "{}")).toStrictEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: GATE_STEER_HINT },
+    });
     expect(r.stderr).toStrictEqual([]);
+    const again = await runGate(
+      claude("Write", { file_path: join(repo.root, "src", "b.ts"), content: "ok" }, repo.root),
+      opts(),
+    );
+    expect(again.decision).toBe("allow");
+    expect(again.stdout).toBeUndefined();
+    expect(again.hint).toBeUndefined();
   });
 
   it("Claude Write to .env → deny path.deny, exit 0 + Claude JSON on stdout (D-35)", async () => {
@@ -739,6 +774,14 @@ describe("gate: fast path exactness", () => {
     ["multi_replace_string_in_file", false],
     ["Bash", false],
     ["run_in_terminal", false],
+    ["Delete", false],
+    ["delete_file", false],
+    ["replace", false],
+    ["write_file", false],
+    ["run_shell_command", false],
+    ["write_to_file", false],
+    ["replace_in_file", false],
+    ["search_replace", false],
   ])("fastAllow(%s) = %s", (tool, expected) => {
     expect(fastAllow(JSON.stringify({ tool_name: tool, tool_input: {} }))).toBe(expected);
   });
@@ -857,10 +900,10 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
     });
   }
 
-  it("allowed Write → exit 0, empty stdout", async () => {
+  it("allowed Write → exit 0, no deny on stdout (a steer hint may be printed)", async () => {
     const r = await run([], claude("Write", { file_path: "src/a.ts", content: "ok" }, repo.root));
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe("");
+    expect(r.stdout).not.toContain("deny");
   });
 
   it("Write to .git/config → exit 0, deny JSON on stdout, reason on stderr (D-35)", async () => {
@@ -913,5 +956,414 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
     const { readFile } = await import("node:fs/promises");
     const src = await readFile(join(here, "..", "dist", "gate-lazy.js"), "utf8");
     expect(src).not.toMatch(/modelcontextprotocol|StdioServerTransport|McpServer/);
+  });
+});
+
+describe("gate: harness payload shapes (Phase 8)", () => {
+  let repo: Awaited<ReturnType<typeof tmpRepo>>;
+  let home: Awaited<ReturnType<typeof tmpRepo>>;
+  beforeEach(async () => {
+    repo = await tmpRepo("axiom-gate-shapes-");
+    home = await tmpRepo("axiom-gate-home-");
+    await mkdir(join(repo.root, "src"), { recursive: true });
+  });
+  afterEach(async () => {
+    await repo.cleanup();
+    await home.cleanup();
+  });
+  const judge = (payload: unknown) => runGate(JSON.stringify(payload), { home: home.root });
+
+  it("Windsurf pre_write_code: file_path + edits → write target with joined new_string; cwd from tool_info", async () => {
+    const payload = {
+      agent_action_name: "pre_write_code",
+      trajectory_id: "t1",
+      tool_info: {
+        file_path: join(repo.root, "src", "a.ts"),
+        cwd: repo.root,
+        edits: [
+          { old_string: "a", new_string: "b" },
+          { old_string: "c", new_string: "d" },
+        ],
+      },
+    };
+    const n = normalizePayload(payload);
+    expect(n?.cwd).toBe(repo.root);
+    expect(n?.sessionId).toBe("t1");
+    expect(n?.harness).toBe("windsurf");
+    const ex = n === undefined ? undefined : extractTargets(n);
+    expect(ex?.cls).toBe("write");
+    expect(ex?.targets[0]?.content).toBe("b\nd");
+    const env = await judge({
+      ...payload,
+      tool_info: {
+        file_path: ".env",
+        cwd: repo.root,
+        edits: [{ old_string: "", new_string: "X" }],
+      },
+    });
+    expect(env.code).toBe("path.deny");
+    const secret = await judge({
+      ...payload,
+      tool_info: { file_path: "src/k.ts", cwd: repo.root, edits: [{ new_string: AWS_KEY }] },
+    });
+    expect(secret.code).toBe("content.noSecrets.awsKey");
+  });
+
+  it("Windsurf pre_run_command / pre_mcp_tool_use / pre_read_code", async () => {
+    const run = await judge({
+      agent_action_name: "pre_run_command",
+      trajectory_id: "t1",
+      tool_info: { command_line: "rm -rf .git", cwd: repo.root },
+    });
+    expect(run.toolClass).toBe("shell");
+    expect(run.code).toBe("path.deny");
+    const mcp = normalizePayload({
+      agent_action_name: "pre_mcp_tool_use",
+      tool_info: { mcp_tool_name: "create_file", mcp_tool_arguments: { path: "src/a.ts" } },
+    });
+    expect(mcp).toMatchObject({ toolName: "create_file", input: { path: "src/a.ts" } });
+    const read = await judge({
+      agent_action_name: "pre_read_code",
+      tool_info: { file_path: ".env", cwd: repo.root },
+    });
+    expect(read.decision).toBe("allow");
+    expect(read.toolClass).toBe("other");
+  });
+
+  it("Cursor preToolUse: Write/Delete/Shell; cwd falls back to workspace_roots[0]", async () => {
+    const base = {
+      hook_event_name: "preToolUse",
+      conversation_id: "c1",
+      workspace_roots: [repo.root],
+    };
+    const n = normalizePayload({ ...base, tool_name: "Write", tool_input: { file_path: "a" } });
+    expect(n?.cwd).toBe(repo.root);
+    expect(n?.sessionId).toBe("c1");
+    expect(n?.harness).toBe("cursor");
+    const w = await judge({
+      ...base,
+      tool_name: "Write",
+      tool_input: { file_path: ".env", content: "" },
+    });
+    expect(w.code).toBe("path.deny");
+    const del = await judge({
+      ...base,
+      tool_name: "Delete",
+      tool_input: { file_path: "pnpm-lock.yaml" },
+    });
+    expect(del.toolClass).toBe("write");
+    expect(del.code).toBe("path.deny");
+    const delTargets = extractTargets({ toolName: "Delete", cwd: undefined, input: { path: "x" } });
+    expect(delTargets.targets).toStrictEqual([{ rawPath: "x", op: "delete", content: undefined }]);
+    const noPath = await judge({ ...base, tool_name: "Delete", tool_input: {} });
+    expect(noPath.code).toBe("ERR_UNSUPPORTED_OP");
+    const sh = await judge({
+      ...base,
+      tool_name: "Shell",
+      tool_input: { command: "echo x > .env" },
+    });
+    expect(sh.code).toBe("path.deny");
+  });
+
+  it("Cursor beforeShellExecution {command, cwd} → shell tool 'Shell'", async () => {
+    const p = { hook_event_name: "beforeShellExecution", command: "tee .env", cwd: repo.root };
+    expect(normalizePayload(p)).toMatchObject({
+      toolName: "Shell",
+      input: { command: "tee .env" },
+    });
+    const r = await judge(p);
+    expect(r.toolClass).toBe("shell");
+    expect(r.code).toBe("path.deny");
+  });
+
+  it("Codex apply_patch: command = raw V4A string or array whose last element is the patch; Bash argv arrays", async () => {
+    const patch = "*** Begin Patch\n*** Add File: .env\n+X=1\n*** End Patch";
+    const asString = await judge({
+      session_id: "s",
+      cwd: repo.root,
+      tool_name: "apply_patch",
+      tool_input: { command: patch },
+    });
+    expect(asString.code).toBe("path.deny");
+    const asArray = await judge({
+      session_id: "s",
+      cwd: repo.root,
+      tool_name: "apply_patch",
+      tool_input: { command: ["apply_patch", patch] },
+    });
+    expect(asArray.code).toBe("path.deny");
+    const bash = await judge({
+      session_id: "s",
+      cwd: repo.root,
+      tool_name: "Bash",
+      tool_input: { command: ["rm", "-rf", ".git"] },
+    });
+    expect(bash.code).toBe("path.deny");
+  });
+
+  it("Gemini CLI: write_file, replace (now write-class) and run_shell_command", async () => {
+    const g = (tool: string, input: Record<string, unknown>) =>
+      judge({
+        session_id: "g",
+        cwd: repo.root,
+        hook_event_name: "BeforeTool",
+        tool_name: tool,
+        tool_input: input,
+      });
+    expect((await g("write_file", { file_path: ".env", content: "" })).code).toBe("path.deny");
+    const rep = await g("replace", { file_path: "src/a.ts", old_string: "a", new_string: AWS_KEY });
+    expect(rep.toolClass).toBe("write");
+    expect(rep.code).toBe("content.noSecrets.awsKey");
+    expect((await g("run_shell_command", { command: "echo > .env" })).code).toBe("path.deny");
+  });
+
+  it("Junie: Claude-like Write/Edit/Bash", async () => {
+    const j = (tool: string, input: Record<string, unknown>) =>
+      judge({ session_id: "j", cwd: repo.root, tool_name: tool, tool_input: input });
+    expect((await j("Write", { file_path: ".env", content: "" })).code).toBe("path.deny");
+    expect((await j("Edit", { file_path: "src/a.ts", new_string: "ok" })).decision).toBe("allow");
+    expect((await j("Bash", { command: "rm .env" })).code).toBe("path.deny");
+  });
+
+  it("Cline: preToolUse {toolName, parameters} with JSON-stringified values; cwd = workspaceRoots[0]; session = taskId", async () => {
+    const cline = (toolName: string, parameters: Record<string, unknown>) => ({
+      clineVersion: "3.40.0",
+      hookName: "PreToolUse",
+      taskId: "task-9",
+      workspaceRoots: [repo.root],
+      preToolUse: { toolName, parameters },
+    });
+    const n = normalizePayload(cline("write_to_file", { path: '"src/a.ts"', content: "123" }));
+    expect(n).toMatchObject({
+      toolName: "write_to_file",
+      cwd: repo.root,
+      sessionId: "task-9",
+      harness: "cline",
+      input: { path: "src/a.ts", content: "123" },
+    });
+    expect((await judge(cline("write_to_file", { path: ".env", content: "x" }))).code).toBe(
+      "path.deny",
+    );
+    const diff = `<<<<<<< SEARCH\na\n=======\n${AWS_KEY}\n>>>>>>> REPLACE`;
+    const rep = await judge(cline("replace_in_file", { path: "src/a.ts", diff }));
+    expect(rep.code).toBe("content.noSecrets.awsKey");
+    expect((await judge(cline("execute_command", { command: "rm -rf .git" }))).code).toBe(
+      "path.deny",
+    );
+  });
+});
+
+describe("gate: --format output contracts (Phase 8)", () => {
+  let repo: Awaited<ReturnType<typeof tmpRepo>>;
+  let home: Awaited<ReturnType<typeof tmpRepo>>;
+  beforeEach(async () => {
+    repo = await tmpRepo("axiom-gate-fmt-");
+    home = await tmpRepo("axiom-gate-home-");
+    await mkdir(join(repo.root, "src"), { recursive: true });
+  });
+  afterEach(async () => {
+    await repo.cleanup();
+    await home.cleanup();
+  });
+  const envWrite = () => claude("Write", { file_path: ".env", content: "" }, repo.root);
+  const read = (text: string) => ({ text, timedOut: false, tooLarge: false });
+
+  it("formatFromArgv / allowStdout", () => {
+    expect(formatFromArgv(["--stdin", "--format", "cursor"])).toBe("cursor");
+    expect(formatFromArgv(["--format=cline"])).toBe("cline");
+    expect(formatFromArgv(["--format", "nope"])).toBe("auto");
+    expect(formatFromArgv(["--format"])).toBe("auto");
+    expect(formatFromArgv([])).toBe("auto");
+    expect(allowStdout("cursor")).toBe('{"permission":"allow"}');
+    for (const f of GATE_FORMATS) if (f !== "cursor") expect(allowStdout(f)).toBeUndefined();
+  });
+
+  it.each<[GateFormat, number, unknown]>([
+    [
+      "codex",
+      0,
+      { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } },
+    ],
+    ["cursor", 0, { permission: "deny" }],
+    ["gemini", 0, { decision: "deny" }],
+    ["junie", 0, { decision: "deny" }],
+    ["cline", 0, { cancel: true }],
+  ])("deny in %s format → exit %i, its own document only", async (format, exit, shape) => {
+    const r = await runGate(envWrite(), { home: home.root, format });
+    expect(r.code).toBe("path.deny");
+    expect(r.exitCode).toBe(exit);
+    const doc = JSON.parse(r.stdout ?? "{}") as Record<string, unknown>;
+    expect(doc).toMatchObject(shape as Record<string, unknown>);
+    expect(doc.axiom).toBeUndefined();
+    expect(doc.permissionDecision).toBeUndefined();
+    expect(r.stderr[0]).toMatch(/^AXIOM GATE DENY path\.deny/);
+  });
+
+  it("deny reason is the AXIOM GATE DENY line in every JSON format", async () => {
+    const c = JSON.parse(
+      (await runGate(envWrite(), { home: home.root, format: "cursor" })).stdout ?? "{}",
+    ) as Record<string, string>;
+    expect(c.user_message).toMatch(/^AXIOM GATE DENY path\.deny/);
+    expect(c.agent_message).toBe(c.user_message);
+    const l = JSON.parse(
+      (await runGate(envWrite(), { home: home.root, format: "cline" })).stdout ?? "{}",
+    ) as Record<string, string>;
+    expect(l.errorMessage).toMatch(/^AXIOM GATE DENY path\.deny/);
+  });
+
+  it.each<GateFormat>(["auto", "claude", "copilot", "vscode"])(
+    "deny in %s format → combined document with the axiom block",
+    async (format) => {
+      const r = await runGate(envWrite(), { home: home.root, format });
+      expect(r.exitCode).toBe(0);
+      const doc = JSON.parse(r.stdout ?? "{}") as {
+        permissionDecision: string;
+        axiom: { code: string };
+      };
+      expect(doc.permissionDecision).toBe("deny");
+      expect(doc.axiom.code).toBe("path.deny");
+    },
+  );
+
+  it("windsurf deny → no stdout, exit 2; --deny-exit 2 overrides any format's exit (stdout kept)", async () => {
+    const w = await runGate(envWrite(), { home: home.root, format: "windsurf" });
+    expect(w.decision).toBe("deny");
+    expect(w.exitCode).toBe(GATE_EXIT_DENY);
+    expect(w.stdout).toBeUndefined();
+    const g = await runGate(envWrite(), { home: home.root, format: "gemini", denyExit: 2 });
+    expect(g.exitCode).toBe(GATE_EXIT_DENY);
+    expect(g.stdout).toContain('"decision":"deny"');
+  });
+
+  it("cursor allow → explicit {permission: allow}, also for read-only tools", async () => {
+    const r = await runGate(claude("Read", { file_path: "x" }, repo.root), {
+      home: home.root,
+      format: "cursor",
+    });
+    expect(r.decision).toBe("allow");
+    expect(r.stdout).toBe('{"permission":"allow"}');
+  });
+
+  it("hint per format: cursor agent_message, cline contextModification, windsurf/gemini none", () => {
+    expect(JSON.parse(allowDocument("cursor", "h") ?? "{}")).toStrictEqual({
+      permission: "allow",
+      agent_message: "h",
+    });
+    expect(JSON.parse(allowDocument("cline", "h") ?? "{}")).toStrictEqual({
+      cancel: false,
+      contextModification: "h",
+    });
+    expect(JSON.parse(allowDocument("codex", "h") ?? "{}")).toStrictEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "h" },
+    });
+    expect(allowDocument("windsurf", "h")).toBeUndefined();
+    expect(allowDocument("gemini", "h")).toBeUndefined();
+  });
+
+  it("gateMain: --format parsed; invalid value is a usage error; cline usage errors print a cancel document", async () => {
+    const io = { read: read(envWrite()), home: home.root };
+    const ok = await gateMain(["--stdin", "--format", "gemini"], io);
+    expect(JSON.parse(ok.stdout ?? "{}")).toMatchObject({ decision: "deny" });
+    const bad = await gateMain(["--stdin", "--format", "nope"], io);
+    expect(bad.exitCode).toBe(GATE_EXIT_DENY);
+    expect(bad.stdout).toBeUndefined();
+    const noStdin = await gateMain(["--format=cline"], io);
+    expect(noStdin.exitCode).toBe(GATE_EXIT_DENY);
+    expect(JSON.parse(noStdin.stdout ?? "{}")).toMatchObject({ cancel: true });
+    const unknownFlag = await gateMain(["--stdin", "--format", "cline", "--bogus"], io);
+    expect(JSON.parse(unknownFlag.stdout ?? "{}")).toMatchObject({ cancel: true });
+    const badExit = await gateMain(["--stdin", "--format", "cline", "--deny-exit", "7"], io);
+    expect(JSON.parse(badExit.stdout ?? "{}")).toMatchObject({ cancel: true });
+  });
+});
+
+describe("gate: steering and decision journal (Phase 8)", () => {
+  let repo: Awaited<ReturnType<typeof tmpRepo>>;
+  let home: Awaited<ReturnType<typeof tmpRepo>>;
+  beforeEach(async () => {
+    repo = await tmpRepo("axiom-gate-steer-");
+    home = await tmpRepo("axiom-gate-home-");
+    await mkdir(join(repo.root, "src", "core"), { recursive: true });
+  });
+  afterEach(async () => {
+    await repo.cleanup();
+    await home.cleanup();
+  });
+  const profile = async (doc: Record<string, unknown>) => {
+    await mkdir(join(repo.root, ".axiom"), { recursive: true });
+    await writeFile(join(repo.root, ".axiom", "gate-profile.json"), JSON.stringify(doc));
+  };
+  const write = (file: string, session = "s1") =>
+    JSON.stringify({
+      session_id: session,
+      cwd: repo.root,
+      tool_name: "Write",
+      tool_input: { file_path: file, content: "ok" },
+    });
+
+  it("steer require: a write matching steerGlobs → deny steer.requireApply; others allowed with a hint", async () => {
+    await profile({ deny: [".env"], steer: "require", steerGlobs: ["src/core/**"] });
+    const d = await runGate(write("src/core/a.ts"), { home: home.root });
+    expect(d.code).toBe(STEER_REQUIRE_CODE);
+    expect(d.path).toBe("src/core/a.ts");
+    const a = await runGate(write("src/b.ts"), { home: home.root });
+    expect(a.decision).toBe("allow");
+    expect(a.hint).toBe(GATE_STEER_HINT);
+  });
+
+  it("hint: once per session (marker file), none without a session id, none for shell tools", async () => {
+    await profile({ steer: "hint" });
+    expect((await runGate(write("src/a.ts", "A"), { home: home.root })).hint).toBe(GATE_STEER_HINT);
+    expect((await runGate(write("src/a.ts", "A"), { home: home.root })).hint).toBeUndefined();
+    expect((await runGate(write("src/a.ts", "B"), { home: home.root })).hint).toBe(GATE_STEER_HINT);
+    expect(await readdir(join(repo.root, ".axiom", "hints"))).toHaveLength(2);
+    const noSession = JSON.stringify({
+      cwd: repo.root,
+      tool_name: "Write",
+      tool_input: { file_path: "x.ts" },
+    });
+    expect((await runGate(noSession, { home: home.root })).hint).toBeUndefined();
+    const shell = claude("Bash", { command: "echo x > out.txt" }, repo.root).replace('"s1"', '"C"');
+    expect((await runGate(shell, { home: home.root })).hint).toBeUndefined();
+  });
+
+  it("hint: fs error never denies; steer off and windsurf/gemini emit nothing", async () => {
+    await profile({ steer: "hint" });
+    await writeFile(join(repo.root, ".axiom", "hints"), "not a dir");
+    const r = await runGate(write("src/a.ts"), { home: home.root });
+    expect(r.decision).toBe("allow");
+    expect(r.hint).toBeUndefined();
+    await rm(join(repo.root, ".axiom", "hints"));
+    expect(
+      (await runGate(write("src/a.ts"), { home: home.root, format: "gemini" })).stdout,
+    ).toBeUndefined();
+    await profile({ steer: "off" });
+    const off = await runGate(write("src/a.ts", "Z"), { home: home.root });
+    expect(off.hint).toBeUndefined();
+    expect(off.stdout).toBeUndefined();
+  });
+
+  it("record: one line per judged write/shell call (allow and deny), none for other tools", async () => {
+    await profile({ deny: [".env"], record: true });
+    await runGate(write("src/a.ts"), { home: home.root });
+    await runGate(write(".env"), { home: home.root, format: "cursor" });
+    await runGate(claude("Read", { file_path: "x" }, repo.root), { home: home.root });
+    await runGate(claude("Bash", { command: "echo x > out.txt" }, repo.root), { home: home.root });
+    const recs = await readDecisions(repo.root);
+    expect(recs.map((r) => r.decision)).toStrictEqual(["allow", "deny", "allow"]);
+    expect(recs.map((r) => r.tool)).toStrictEqual(["Write", "Write", "Bash"]);
+    expect(recs[0]?.paths).toStrictEqual(["src/a.ts"]);
+    expect(recs[0]?.agent_id).toBe("unknown:s1");
+    expect(recs[1]?.agent_id).toBe("cursor:s1");
+    expect(recs[1]?.code).toBe("path.deny");
+    expect(recs[0]?.args_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(recs[0]?.args_state).toBe("recorded");
+    expect(recs[0]?.profile).toMatch(/gate-profile\.json$/);
+  });
+
+  it("record: false (default) writes no journal", async () => {
+    await profile({ deny: [".env"] });
+    await runGate(write(".env"), { home: home.root });
+    expect(await readDecisions(repo.root)).toStrictEqual([]);
   });
 });

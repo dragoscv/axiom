@@ -76,6 +76,34 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  rust:
+    # crates/axiom-hook — the native gate client (std only, no crates). rustup is preinstalled
+    # on GitHub runners, so no toolchain action (and no new pin) is needed.
+    name: rust / axiom-hook
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: crates/axiom-hook
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default stable
+          cargo --version
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
   golden-cross-os:
     name: golden digests / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

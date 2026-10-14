@@ -35,10 +35,14 @@ export {
 export { CanonicalizeError, canonicalize } from "./jcs.js";
 export { DSSE_IN_TOTO_PAYLOAD_TYPE, pae } from "./pae.js";
 export type {
+  AgentDecisionPolicyEvaluation,
+  AgentDecisionV0_1Predicate,
   AxiomApplyAttestationV1Predicate,
+  BuildAgentDecisionInput,
   BuildApplyAttestationInput,
   BuildMetadata,
   BuildStatementInput,
+  InTotoAgentDecisionV0_1,
   InTotoApplyAttestationV1,
   InTotoStatementV1,
   ResolvedDependency,
@@ -46,9 +50,12 @@ export type {
   SlsaProvenanceV1Predicate,
 } from "./statement.js";
 export {
+  AGENT_DECISION_V0_1,
   AXIOM_APPLY_ATTESTATION_V1,
   AXIOM_BUILD_TYPE,
   AXIOM_BUILDER_ID,
+  argsHash,
+  buildAgentDecisionStatement,
   buildApplyAttestation,
   buildStatement,
   IN_TOTO_STATEMENT_V1,

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Render the Homebrew formula for the standalone `axiom` binary (tap `dragoscv/homebrew-tap`).
+ * Render the Homebrew formula for the standalone `axiom` binary and the native `axiom-hook`
+ * gate client (tap `dragoscv/homebrew-tap`).
  *
  *   node scripts/render-homebrew-formula.mjs <version> <path/to/SHA256SUMS> > Formula/axiom.rb
  *
@@ -25,18 +26,25 @@ for (const line of readFileSync(sumsPath, "utf8").split(/\r?\n/)) {
 
 const targets = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 const sha = {};
-for (const t of targets) {
-  const v = sums.get(`axiom-${t}`);
-  if (!v) {
-    console.error(`render-homebrew-formula: axiom-${t} missing from ${sumsPath}`);
-    process.exit(1);
+for (const asset of ["axiom", "axiom-hook"]) {
+  for (const t of targets) {
+    const v = sums.get(`${asset}-${t}`);
+    if (!v) {
+      console.error(`render-homebrew-formula: ${asset}-${t} missing from ${sumsPath}`);
+      process.exit(1);
+    }
+    sha[`${asset}-${t}`] = v;
   }
-  sha[t] = v;
 }
 
 const base = `https://github.com/dragoscv/axiom/releases/download/v${version}`;
 const block = (t) => `      url "${base}/axiom-${t}"
-      sha256 "${sha[t]}"`;
+      sha256 "${sha[`axiom-${t}`]}"
+
+      resource "axiom-hook" do
+        url "${base}/axiom-hook-${t}"
+        sha256 "${sha[`axiom-hook-${t}`]}"
+      end`;
 
 process.stdout.write(`# typed: false
 # frozen_string_literal: true
@@ -67,10 +75,12 @@ ${block("linux-x64")}
 
   def install
     bin.install Dir["axiom-*"].first => "axiom"
+    resource("axiom-hook").stage { bin.install Dir["axiom-hook-*"].first => "axiom-hook" }
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/axiom --version")
+    assert_match version.to_s, shell_output("#{bin}/axiom-hook --version")
   end
 end
 `);

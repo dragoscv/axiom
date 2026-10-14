@@ -53,6 +53,7 @@ sequenceDiagram
 | `axiom_apply_dry_run` | read | Containment + pre-image check + staging + unified diff, no user files touched | `{ bundle, root, profile? }` | `ApplyResult { mode: "dry-run", diff, files[] }` |
 | `axiom_apply` | destructive | Two-phase commit: stage → journal → rename; requires `confirmDigest === manifestDigest`; registers an intent (overlap with another in-flight digest → `ERR_CONFLICT`), then waits in the FIFO queue for `.axiom/lock` (single writer; timeout → `ERR_LOCKED`). `mode: "pr"` applies in an axiom-owned worktree `.axiom/wt/<hex12>` on a new branch and never touches the shared tree | `{ bundle, root, profile?, confirmDigest, mode?: fs\|pr, branch?, commitMessage?, lockTimeoutMs? (0..600000, default 30000), keepBackups? (0..1000, default 3) }` | `ApplyResult` — see [`axiom_apply` error details](#axiom_apply-error-details) |
 | `axiom_rollback` | destructive | Reverse-replay the journal of an applied manifest, scoped to its recorded paths | `{ root, manifestDigest }` | `{ manifestDigest, status, phase, steps[], root }` |
+| `axiom_write` | destructive | **One-tool write** ([below](#axiom_write)): compile the given files against the current tree (op `overwrite`/`delete`, pre-images bound), dry-run + checks → `preview`; the same call with `confirmDigest` runs exactly what `axiom_apply` does. A target changed since the preview → `ERR_CONFIRM_DIGEST_MISMATCH` | `{ root, files[1..2000]: { path, content?, encoding?: utf8\|base64, op?: write\|delete, mode?: 0644\|0755 }, intent?, profile?, confirmDigest?, lockTimeoutMs?, keepBackups? }` | `ApplyResult` with `status: preview\|applied\|noop\|rolled-back\|failed` + `checks?: { verdict, profile, findings }` + `next?` |
 | `axiom_manifest_diff` | read | Structural diff between two manifests (added/removed/changed artifacts) | `{ a, b }` (bundle or `sha256:` ref) | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | read | Parse `.axm` v2 DSL text into a `Plan`; diagnostics carry 1-based `{line, column}` ranges and `ERR_*` codes; `plan` present only when error-free (parser loaded lazily) | `{ source }` | `{ plan?, diagnostics[] }` |
 | `axiom_roots_list` | read | List the allowlisted roots the server may touch | `{}` | `{ roots[] }` |
@@ -86,6 +87,40 @@ for the code. Branch on `code`, then read `details`:
 
 A broken journal chain never fails an apply: the write has already happened, the chain entry is
 simply not appended, and `axiom_status` (`chain.ok: false`) / `axiom verify --journal` report it.
+
+### `axiom_write`
+
+The four-call flow (`axiom_plan_compile` → `axiom_apply_dry_run` → `axiom_apply`, plus building a
+Plan) is collapsed into **two calls of one tool**, keeping invariant 3 (`confirmDigest ===
+manifestDigest`). Prefer it over plain file writes for multi-file or sensitive changes: atomic,
+checked, journaled, one-step rollback via `axiom_rollback`.
+
+1. **Preview** — `{ root, files, intent?, profile? }` without `confirmDigest`. The server builds
+	the Plan `{ apiVersion: "axiom.dev/v2", kind: "Plan", name: "agent-write", intent, profile,
+	artifacts }` (writes → op `overwrite` with an inline source, so the target may or may not
+	exist; deletes → op `delete`), compiles it **with the root** so `manifest.preImage` binds the
+	current bytes of every target, stores the bundle under `.axiom/manifests/`, runs the dry-run
+	apply with the pre-apply checks and returns `status: "preview"`, `manifestDigest`, `diff`,
+	`files[]`, `checks` and `next` (the instruction for step 2). Nothing outside `.axiom/` is
+	touched. A failing check returns `status: "failed"` with `error.code = ERR_CHECKS_FAILED`.
+2. **Apply** — the **same** `files`, `intent` and `profile` plus `confirmDigest = <manifestDigest>`.
+	The server recompiles; the fresh digest must equal `confirmDigest`, else
+	`ERR_CONFIRM_DIGEST_MISMATCH` with `details { confirmDigest, manifestDigest }`. Because the
+	pre-images are part of the digest this is also the TOCTOU guard: a target edited since the
+	preview changes the digest — preview again. Then exactly `axiom_apply` (`mode: fs`): checks,
+	intent registration, lock queue, two-phase commit, journal, stored manifest, anti-rollback trust
+	advance. Re-sending an already-applied confirmation is `status: "noop"`.
+
+| Input field | Rule |
+|---|---|
+| `files[].path` | relative POSIX path (`RelPathSchema`); duplicates → `ERR_INVALID_PLAN` |
+| `files[].content` | required for `op: write`, forbidden for `op: delete` (→ `ERR_INVALID_PLAN`); ≤ 256 KiB per file, whole call ≤ 4 MiB (`ERR_BUNDLE_TOO_LARGE`) |
+| `files[].encoding` | `utf8` (default) or `base64` (exact bytes) |
+| `files[].op` / `mode` | `write` (default) \| `delete`; `0644` (default) \| `0755` |
+| `intent` | ≤ 2000 chars, recorded in the Plan (part of the digest) |
+| `lockTimeoutMs` / `keepBackups` | as for `axiom_apply` |
+
+Errors in the result follow [`axiom_apply` error details](#axiom_apply-error-details).
 
 ### `axiom_status`
 

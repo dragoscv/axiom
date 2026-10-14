@@ -1,10 +1,12 @@
-import { access, constants, stat } from "node:fs/promises";
+import { access, constants, lstat, stat } from "node:fs/promises";
 import * as path from "node:path";
-import { apply, rollback } from "@codai/axiom-apply";
+import { appliedPath, apply, rollback } from "@codai/axiom-apply";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
 import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
 import {
+  API_VERSION,
   ApplyResultSchema,
+  ArtifactModeSchema,
   AxiomError,
   type CheckReport,
   CheckReportSchema,
@@ -16,6 +18,7 @@ import {
   ManifestBundleSchema,
   PlanArtifactSchema,
   PlanSchema,
+  RelPathSchema,
   RepoSnapshotSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
@@ -383,6 +386,162 @@ export const PlanSessionOutput = z.object({
 
 const SessionIdArg = z.string().min(1).describe("sessionId returned by axiom_plan_begin");
 const TaskIdArg = z.string().min(1).describe("taskId returned by axiom_check_start");
+
+// axiom_write ------------------------------------------------------------------
+
+/** Plan name every `axiom_write` compiles under (part of the manifestDigest). */
+export const WRITE_PLAN_NAME = "agent-write";
+export const WRITE_FILES_MAX = 2000;
+
+const WriteFileArg = z
+  .object({
+    path: RelPathSchema,
+    content: z
+      .string()
+      .optional()
+      .describe("New file content; required for op write, forbidden for op delete"),
+    encoding: z
+      .enum(["utf8", "base64"])
+      .optional()
+      .describe("Encoding of `content` (default utf8)"),
+    op: z.enum(["write", "delete"]).optional().describe("write (default) or delete"),
+    mode: ArtifactModeSchema.optional().describe("File mode (default 0644)"),
+  })
+  .strict();
+type WriteFile = z.output<typeof WriteFileArg>;
+
+/**
+ * `axiom_write` output: an ApplyResult whose `status` may also be `preview` (no confirmDigest:
+ * a dry-run, nothing outside .axiom/ touched), plus the pre-apply check summary and, for a
+ * preview, the instruction for the confirming call.
+ */
+export const WriteOutput = z
+  .object({
+    ...ApplyResultSchema.shape,
+    status: z.enum(["preview", "applied", "noop", "rolled-back", "failed"]),
+    checks: z
+      .object({
+        verdict: z.enum(["pass", "fail", "error"]),
+        profile: z.string(),
+        findings: z.record(z.string(), z.int().nonnegative()),
+      })
+      .strict()
+      .optional(),
+    next: z.string().optional(),
+  })
+  .strict()
+  .superRefine((r, ctx) => {
+    if (r.status === "failed" && r.error === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "error is required when status is failed",
+      });
+    }
+  });
+type WriteOutputT = z.output<typeof WriteOutput>;
+
+/**
+ * `create` when the target is absent now, `overwrite` when it exists: rollback of a `create`
+ * removes the file, while an `overwrite` without a backup would leave it behind. The choice is
+ * bound by `manifest.preImage`, so a target appearing after the preview changes the digest.
+ */
+function writeArtifact(f: WriteFile, exists: boolean): Record<string, unknown> {
+  const mode = f.mode === undefined ? {} : { mode: f.mode };
+  if ((f.op ?? "write") === "delete") {
+    if (f.content !== undefined) {
+      throw new AxiomError("ERR_INVALID_PLAN", "content must be absent when op is delete", {
+        path: f.path,
+      });
+    }
+    return { path: f.path, op: "delete", ...mode };
+  }
+  if (f.content === undefined) {
+    throw new AxiomError("ERR_INVALID_PLAN", "content is required unless op is delete", {
+      path: f.path,
+    });
+  }
+  return {
+    path: f.path,
+    op: exists ? "overwrite" : "create",
+    ...mode,
+    source: { type: "inline", content: f.content, encoding: f.encoding ?? "utf8" },
+  };
+}
+
+/** Deterministic: same files + same tree state → same manifestDigest (pre-images are bound). */
+async function compileWrite(
+  files: readonly WriteFile[],
+  intent: string | undefined,
+  profile: string | undefined,
+  rootReal: string,
+): Promise<ManifestBundle> {
+  const artifacts: Record<string, unknown>[] = [];
+  for (const f of files) {
+    const st = await lstat(path.join(rootReal, ...f.path.split("/"))).catch(() => null);
+    artifacts.push(writeArtifact(f, st !== null));
+  }
+  const plan = {
+    apiVersion: API_VERSION,
+    kind: "Plan",
+    name: WRITE_PLAN_NAME,
+    intent: intent ?? "axiom_write",
+    ...(profile === undefined ? {} : { profile }),
+    artifacts,
+  };
+  const { bundle } = await compilePlan(plan, {
+    store: "inline",
+    emitters: EMITTERS,
+    root: rootReal,
+  });
+  return bundle;
+}
+
+/**
+ * Idempotent re-call: `confirmDigest` was already applied, it carried exactly these artifacts
+ * and the tree still holds them → the stored bundle (whose re-apply is a noop). Anything else
+ * is `undefined` and the caller reports ERR_CONFIRM_DIGEST_MISMATCH.
+ */
+async function priorAppliedBundle(
+  rootReal: string,
+  confirmDigest: string,
+  fresh: ManifestBundle,
+): Promise<ManifestBundle | undefined> {
+  const ref = DigestRefSchema.safeParse(confirmDigest);
+  if (!ref.success || fresh.manifest.preImage === undefined) return undefined;
+  const marker = await lstat(appliedPath(rootReal, ref.data)).catch(() => null);
+  if (marker === null) return undefined;
+  const prior = await loadManifest([rootReal], ref.data);
+  // After the first apply a `create` target exists, so a fresh compile says `overwrite`.
+  const shape = (b: ManifestBundle) =>
+    JSON.stringify(
+      b.manifest.artifacts.map((a) => ({ ...a, op: a.op === "create" ? "overwrite" : a.op })),
+    );
+  if (
+    prior === undefined ||
+    prior.manifest.name !== WRITE_PLAN_NAME ||
+    prior.manifest.profile !== fresh.manifest.profile ||
+    shape(prior) !== shape(fresh)
+  ) {
+    return undefined;
+  }
+  const target = new Map(
+    fresh.manifest.artifacts.map((a) => [
+      a.path,
+      a.op === "delete" ? "absent" : (a.digest?.sha256 ?? ""),
+    ]),
+  );
+  return fresh.manifest.preImage.every((p) => target.get(p.path) === p.sha256) ? prior : undefined;
+}
+
+function checksSummary(r: CheckReport | undefined): WriteOutputT["checks"] {
+  if (r === undefined) return undefined;
+  return {
+    verdict: r.verdict,
+    profile: r.profile,
+    findings: countBy(r.findings, (f) => f.severity),
+  };
+}
 
 // --- tool definitions -----------------------------------------------------------
 
@@ -789,6 +948,125 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       return result;
     },
     summarize: summarizeApply,
+  }),
+
+  defineTool({
+    name: "axiom_write",
+    title: "Write files through the gate (preview, then confirm)",
+    description:
+      "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically: pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
+    inputSchema: {
+      root: RootArg,
+      files: z
+        .array(WriteFileArg)
+        .min(1)
+        .max(WRITE_FILES_MAX)
+        .describe("Files to write (whole new content) or delete; paths are relative POSIX"),
+      intent: z.string().max(2000).optional().describe("Why — recorded in the Plan"),
+      profile: ProfileArg,
+      confirmDigest: z
+        .string()
+        .optional()
+        .describe("Absent → preview; the manifestDigest returned by the preview → apply"),
+      lockTimeoutMs: z
+        .int()
+        .min(0)
+        .max(600_000)
+        .optional()
+        .describe(
+          "How long to wait in the root's lock queue (ms); timeout → ERR_LOCKED with details { holder, waitedMs, queuePosition }",
+        ),
+      keepBackups: z
+        .int()
+        .min(0)
+        .max(1000)
+        .optional()
+        .describe("Pre-image backup sets kept under .axiom/backup after commit (default 3)"),
+    },
+    outputSchema: WriteOutput,
+    annotations: WRITE,
+    async handler(
+      ctx,
+      { root, files, intent, profile, confirmDigest, lockTimeoutMs, keepBackups },
+    ): Promise<WriteOutputT> {
+      guardPayloadSize("files", files);
+      const { rootReal } = await resolveRoot(ctx.policy, root);
+      const fresh = await compileWrite(files, intent, profile, rootReal);
+      let report: CheckReport | undefined;
+      const preChecks = async (b: ManifestBundle) => {
+        report = await checkBundle(ctx, b, profile, rootReal);
+        return report;
+      };
+
+      if (confirmDigest === undefined) {
+        const dry = await apply({
+          bundle: fresh,
+          root: rootReal,
+          mode: "dry-run",
+          ...(lockTimeoutMs === undefined ? {} : { lockTimeoutMs }),
+          preChecks: () => preChecks(fresh),
+        });
+        await saveManifest(rootReal, fresh);
+        ctx.seenRoots.add(rootReal);
+        const checks = checksSummary(report);
+        if (dry.status !== "applied") return { ...dry, ...(checks ? { checks } : {}) };
+        return {
+          ...dry,
+          status: "preview",
+          ...(checks ? { checks } : {}),
+          next: `call axiom_write again with the same files, intent and profile and confirmDigest=${fresh.manifestDigest}`,
+        };
+      }
+
+      const bundle =
+        confirmDigest === fresh.manifestDigest
+          ? fresh
+          : await priorAppliedBundle(rootReal, confirmDigest, fresh);
+      if (bundle === undefined) {
+        throw new AxiomError(
+          "ERR_CONFIRM_DIGEST_MISMATCH",
+          "confirmDigest does not match these files against the current tree; preview again",
+          { details: { confirmDigest, manifestDigest: fresh.manifestDigest } },
+        );
+      }
+      const profileDoc = await profileFor(ctx, bundle, profile, rootReal);
+      const result = await apply({
+        bundle,
+        root: rootReal,
+        mode: "fs",
+        confirmDigest: bundle.manifestDigest,
+        ...(lockTimeoutMs === undefined ? {} : { lockTimeoutMs }),
+        ...(keepBackups === undefined ? {} : { keepBackups }),
+        preChecks: () => preChecks(bundle),
+      });
+      if (result.status === "applied" || result.status === "noop") {
+        await saveManifest(rootReal, bundle);
+        ctx.seenRoots.add(rootReal);
+      }
+      if (
+        result.status === "applied" &&
+        profileWantsAntiRollback([...profileDoc.checks, ...bundle.manifest.checks])
+      ) {
+        await advanceTrustState(rootReal, bundle);
+      }
+      ctx.log.info("write", {
+        manifestDigest: bundle.manifestDigest,
+        status: result.status,
+        root: rootReal,
+        files: files.length,
+      });
+      const checks = checksSummary(report);
+      return { ...result, ...(checks ? { checks } : {}) };
+    },
+    summarize: (o) => ({
+      ...(summarizeApply({ ...o, status: o.status === "preview" ? "applied" : o.status }) as Record<
+        string,
+        unknown
+      >),
+      status: o.status,
+      checks: o.checks,
+      next: o.next,
+    }),
   }),
 
   defineTool({

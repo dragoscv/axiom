@@ -23,10 +23,17 @@ export const WRITE_TOOL_HINTS = [
   "create_file",
   "create",
   "replace_string",
+  "replace",
   "insert_edit",
   "apply_patch",
   "notebook",
+  "delete",
 ] as const;
+/**
+ * Write hints that win over every read-only hint: `search_replace` (Cursor), `delete_directory`,
+ * `multi_replace_string_in_file`. A false "write" costs a gate run; a false "other" is a hole.
+ */
+export const WRITE_OVERRIDE_HINTS = ["apply_patch", "replace", "delete"] as const;
 /** Substrings that mark a tool as read-only even when a write hint also matches (`create_directory`, …). */
 export const NON_WRITE_HINTS = [
   "read",
@@ -57,7 +64,7 @@ export type ToolClass = "write" | "shell" | "other";
 export function isWriteTool(toolName: string): boolean {
   const n = toolName.toLowerCase();
   if (!WRITE_TOOL_HINTS.some((h) => n.includes(h))) return false;
-  if (n.includes("apply_patch") || n.includes("multi_replace")) return true;
+  if (WRITE_OVERRIDE_HINTS.some((h) => n.includes(h))) return true;
   return !NON_WRITE_HINTS.some((h) => n.includes(h));
 }
 
@@ -96,6 +103,48 @@ export function fastAllow(payloadText: string | undefined): boolean {
   }
   if (toolName === undefined) return false;
   return classifyTool(toolName) === "other";
+}
+
+// ---------------------------------------------------------------- formats --
+
+/** `axiom gate --format <f>`: the stdout/exit contract of each harness (Phase 8). */
+export const GATE_FORMATS = [
+  "auto",
+  "claude",
+  "copilot",
+  "vscode",
+  "codex",
+  "cursor",
+  "windsurf",
+  "gemini",
+  "junie",
+  "cline",
+] as const;
+export type GateFormat = (typeof GATE_FORMATS)[number];
+
+export function isGateFormat(v: string): v is GateFormat {
+  return (GATE_FORMATS as readonly string[]).includes(v);
+}
+
+/** `--format X` / `--format=X` from argv; absent or unknown → `auto`. Never throws. */
+export function formatFromArgv(argv: readonly string[]): GateFormat {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? "";
+    let v: string | undefined;
+    if (a === "--format") v = argv[i + 1];
+    else if (a.startsWith("--format=")) v = a.slice("--format=".length);
+    else continue;
+    return v !== undefined && isGateFormat(v) ? v : "auto";
+  }
+  return "auto";
+}
+
+/**
+ * What an ALLOW must print for `format` (undefined = nothing). Cursor's `failClosed` treats an
+ * empty hook output as a failure, so it needs an explicit `{"permission":"allow"}`.
+ */
+export function allowStdout(format: GateFormat): string | undefined {
+  return format === "cursor" ? '{"permission":"allow"}' : undefined;
 }
 
 export interface StdinRead {

@@ -1,4 +1,4 @@
-# Harnesses: Claude Code, Copilot CLI, VS Code, Codex
+# Harnesses: Claude Code, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline
 
 *One matrix for wiring AXIOM into each coding-agent harness — the MCP server config and the PreToolUse hook — with the per-harness facts that decide the shape.*
 
@@ -15,10 +15,16 @@ flowchart LR
     CP[Copilot CLI]
     VS[VS Code Copilot]
     CX[Codex]
+    CU[Cursor]
+    WS[Windsurf / Devin]
+    GM[Gemini CLI]
+    JU[Junie CLI]
+    CL[Cline]
   end
-  CC & CP & VS & CX -->|stdio MCP| SRV[axiom mcp --root repo]
-  CC & CP & VS -->|PreToolUse| GATE[axiom gate --stdin]
-  CX -.->|no hook API| GATE
+  CC & CP & VS & CX & CU & GM & JU & CL -->|stdio MCP| SRV[axiom mcp --root repo]
+  CC & CP & VS & CX & CU & WS & GM & JU & CL -->|"PreToolUse · --format"| GATE[axiom gate --stdin]
+  CC -.->|"type: http"| D[axiom serve --hook]
+  GATE -.->|"daemon first"| D
   SRV --> ENG[compile · check · apply]
   GATE --> ENG
 ```
@@ -35,24 +41,39 @@ flowchart LR
 
 ## `axiom init` does the repo-level wiring
 
-Run `axiom init` in the repository root (`--harness auto|copilot|claude|codex|vscode`, default
-`auto` = one harness per marker directory `.github` / `.claude` / `.codex` / `.vscode`, none →
-copilot + vscode). It writes the **repo-scoped** files of this matrix, never the user-level ones
-(`~/.claude.json`, `~/.copilot/mcp-config.json`, `~/.codex/config.toml`):
+Run `axiom init` in the repository root (`--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline`,
+default `auto` = one harness per marker directory `.github` / `.claude` / `.codex` / `.vscode` /
+`.cursor` / `.windsurf` or `.devin` / `.gemini` / `.junie` / `.clinerules`, none → copilot +
+vscode). It writes the **repo-scoped** files of this matrix, never the user-level ones
+(`~/.claude.json`, `~/.copilot/mcp-config.json`, `~/.codex/config.toml`, `~/.junie/config.json`,
+Devin's `mcp_config.json`):
 
 | Harness | Hook | MCP entry |
 |---|---|---|
 | Claude Code | `.claude/settings.json` — the `PreToolUse` entry from [§ Claude Code](#claude-code) merged in | `.vscode/mcp.json` (add `.mcp.json` by hand for the Claude CLI) |
 | Copilot CLI | `.github/hooks/axiom-gate.json` — exactly the `exec`/`args` file from [§ Copilot CLI](#copilot-cli) | `.vscode/mcp.json` (the CLI reads `~/.copilot/mcp-config.json`; add it there by hand) |
 | VS Code | `.github/hooks/axiom-gate.json` (VS Code loads it) | `.vscode/mcp.json` — `servers.axiom` merged in, `npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` |
-| Codex | **none** — a note only: Codex has no hook API | none — add `[mcp_servers.axiom]` to `~/.codex/config.toml` ([§ Codex](#codex)) |
+| Codex | `.codex/hooks.json` — `PreToolUse` merged in ([§ Codex](#codex)) | `.codex/config.toml` — `[mcp_servers.axiom]` appended only when absent |
+| Cursor | `.cursor/hooks.json` — `preToolUse` + `beforeShellExecution`, `failClosed: true` | `.cursor/mcp.json` |
+| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | user-level only — a note |
+| Gemini CLI | `.gemini/settings.json` — `hooks.BeforeTool` merged in | same file, `mcpServers.axiom` |
+| Junie | none in the project (Junie CLI runs hooks only from `~/.junie/config.json`) — a note with the snippet | `.junie/mcp/mcp.json` (+ an AXIOM section in `.junie/guidelines.md`) |
+| Cline | `.clinerules/hooks/PreToolUse` (sh, 0755) + `PreToolUse.ps1` | none — Cline's MCP settings are user-level (a note) |
 
-Plus, for every harness, `.axiom/profiles/<repo-name>.json`, `.axiom/gate-profile.json` and the
+Plus, for every harness, `.axiom/profiles/<repo-name>.json`, `.axiom/gate-profile.json` (with
+`"steer": "hint"` since 2.5.0 — allowed writes get a once-per-session pointer to `axiom_write`) and the
 `.gitignore` lines. JSON files are merged, never overwritten without `--force`; JSONC is skipped
-with a note. Then `axiom doctor` confirms the hook files run `axiom gate --stdin` (not `npx`),
+with a note; TOML and Markdown are only ever appended to. Then `axiom doctor` confirms the hook
+files run `axiom gate --stdin` / `axiom-hook gate --stdin` (not `npx`),
 that the global bin is on `PATH` at the same version, and that the gate's **p95 latency** over
 5 spawns is under 4000 ms — 80 % of the 5 s timeout after which every harness below fails open.
 Exit `2` means a check failed.
+
+**`axiom init --daemon`** writes the same files for the resident gate daemon
+(`axiom serve --hook --root <parent dir>`, [hooks.md § Resident daemon](../getting-started/hooks.md#resident-daemon--axiom-serve---hook-250-s-901)):
+Claude Code gets a `type: "http"` hook (`onFailure: "block"`) — no process per call — and every
+command hook runs the native `axiom-hook` client, which falls back to the installed `axiom` when
+the daemon is down and denies in the harness's format when neither can run.
 
 ## Matrix
 
@@ -73,7 +94,19 @@ The gate emits **one** deny document that every column reads
 and reads both payload casings, so a single hook config serves whichever harness loads it. Since
 2.4.1 a deny exits `0` with that document (D-35): on Windows the npm `axiom.ps1` shim turns exit
 `2` into `1`, and VS Code lets the tool run on `1`. Harnesses that read only the exit code
-(Windsurf) need `axiom gate --stdin --deny-exit 2`.
+need `--deny-exit 2`; since 2.5.0 the harnesses below get their own `--format`.
+
+### Five more harnesses (2.5.0, verified 2026-10-14)
+
+| | Cursor | Windsurf / Devin Cascade | Gemini CLI | Junie (CLI) | Cline (VS Code) |
+|---|---|---|---|---|---|
+| Hook file | `.cursor/hooks.json` (+ user `~/.cursor/hooks.json`, enterprise) | `.devin/hooks.json` (legacy `.windsurf/hooks.json`), user `~/.codeium/windsurf/hooks.json` | `.gemini/settings.json` (+ user, system) | `~/.junie/config.json` only (project hooks ignored by default; the IDE plugin runs none) | `.clinerules/hooks/PreToolUse` (+ `.ps1` on Windows), global `~/Documents/Cline/Hooks/` |
+| Event | `preToolUse` (matcher `Write\|Delete\|Shell`) + `beforeShellExecution` | `pre_write_code`, `pre_run_command` (no matcher) | `BeforeTool`, regex matcher on tool name | `PreToolUse`, matcher = tool name | executable named after the event |
+| Deny contract read | `{"permission":"deny"}` or exit 2 | **exit 2 only** | `{"decision":"deny"}` or exit 2; non-JSON stdout = allow | `{"decision":"deny"}` or exit 2; invalid JSON = allow | `{"cancel":true}` — **exit code ignored** |
+| Fail-closed option | `failClosed: true` per hook (init sets it) | none — the gate itself exits 2 | none | none for PreToolUse | none — init's scripts print a cancel when `axiom` cannot run |
+| Timeout unit | seconds | not configurable | **milliseconds** | seconds | fixed 30 s |
+| `--format` | `cursor` (allow prints `{"permission":"allow"}`) | `windsurf` | `gemini` | `junie` | `cline` |
+| Note | Cursor also runs Claude hooks from `.claude/settings.json` by default → with both wired the gate runs twice (harmless) | hooks do not load in Restricted Mode | project hooks are fingerprinted; a changed command warns | — | tick **Enable Hooks** in Cline's settings |
 
 ## Claude Code
 
@@ -200,15 +233,23 @@ args = ["-y", "@codai/axiom-mcp", "mcp", "--root", "/abs/path/to/repo"]
 approval_mode = "always"        # keep the human on the destructive tool
 ```
 
-**Hook** — Codex has no PreToolUse hook API, so `axiom init --harness codex` writes no hook and
-no Codex config; it prints a note pointing here. Two ways to still get the seatbelt:
+`axiom init --harness codex` appends this table to the project `.codex/config.toml` (with
+`--root .`) only when it has no `[mcp_servers.axiom]` yet.
 
-- Route writes through the MCP tools and turn the raw `apply_patch` tool off in the profile you
-  run Codex with, so the only path to disk is `axiom_apply`.
-- Feed Codex's V4A `apply_patch` text to AXIOM as a `patch` source
-  (`{ type: "patch", format: "v4a", preImage, body }`): compile checks the pre-image, applies
-  exactly-once matching, and the result goes through checks and the two-phase apply like any
-  other artifact ([plan-format.md § Patch sources](../reference/plan-format.md#patch-sources)).
+**Hook** (Codex hooks, 2026; `.codex/hooks.json` or `[hooks]` in `config.toml`, user or trusted
+project; each new or changed hook must be reviewed once with `/hooks`):
+
+```json
+{ "hooks": { "PreToolUse": [ { "matcher": "^(Bash|apply_patch|Edit|Write)$",
+  "hooks": [ { "type": "command", "command": "axiom gate --stdin --format codex",
+               "commandWindows": "axiom gate --stdin --format codex", "timeout": 10, "statusMessage": "AXIOM gate" } ] } ] } }
+```
+
+File edits arrive as `tool_name: "apply_patch"` with the raw V4A patch in `tool_input.command`;
+the gate parses its `*** Update|Add|Delete File:` headers and `+` lines like Copilot's
+`apply_patch`. Codex honours the `hookSpecificOutput` deny (exit 0) or exit 2; a timeout or
+crash lets the call proceed. The V4A text can also go through the transaction as a `patch`
+source ([plan-format.md § Patch sources](../reference/plan-format.md#patch-sources)).
 
 ## Claude Desktop and other stdio clients
 
@@ -221,7 +262,10 @@ Any client that resolves MCP Registry names can use `io.github.dragoscv/axiom`; 
 ## Teaching the agent to prefer the gate
 
 A hook stops bad writes; it does not make an agent *choose* the transactional path. The consumers
-in this repository do that with a short instruction file the harness loads:
+in this repository do that with a short instruction file the harness loads; since 2.5.0 the gate
+itself adds a once-per-session `additionalContext` pointing at **`axiom_write`** (two calls:
+preview, then the same files + `confirmDigest`) when the gate profile sets `steer: "hint"`
+(`init` default), and `steer: "require"` + `steerGlobs` denies direct writes to chosen paths:
 
 - codai: the SWE harness calls the engines in-process by default ([codai.md](codai.md)).
 - metu: a `.github/skills/axiom-plan-apply/SKILL.md` — "never raw multi-file writes when AXIOM is

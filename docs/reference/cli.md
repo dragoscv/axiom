@@ -2,10 +2,11 @@
 
 *Every `axiom` verb and flag, the exit-code contract, and a worked example per verb. The USAGE string in `packages/mcp/src/cli-main.ts` is authoritative; this page mirrors it.*
 
-The `axiom` bin (`@codai/axiom-mcp`) is one executable with 21 verbs: `mcp`, `init`, `doctor`,
+The `axiom` bin (`@codai/axiom-mcp`) is one executable with 23 verbs: `mcp`, `init`, `doctor`,
 `status`, `log`, `compile`, `verify`, `check`, `apply`, `rollback`, `gc`, `diff`, `schema`,
-`emitters`, `keygen`, `sign`, `trust`, `gate`, `migrate`, `snapshot`, `snapshot-diff`. Every verb
-except `mcp` prints **JSON to stdout** (`check`, `init`, `doctor`, `status` and `log` without
+`emitters`, `keygen`, `sign`, `trust`, `gate`, `serve`, `attest`, `migrate`, `snapshot`,
+`snapshot-diff`. Every verb except `mcp` and `serve` prints **JSON to stdout** (`attest` prints
+JSON Lines; `check`, `init`, `doctor`, `status` and `log` without
 `--json` print a text summary) and returns one of three exit codes; `mcp` speaks JSON-RPC on
 stdout and logs JSON lines on stderr. A `.axm` Plan with errors prints its diagnostics as JSON
 and exits 2.
@@ -38,7 +39,10 @@ flowchart LR
     T1[keygen] --- T2[sign] --- T3[trust]
   end
   subgraph serve [Serve]
-    S1[mcp] --- S2[gate --stdin]
+    S1[mcp] --- S2[gate --stdin] --- S3[serve --hook]
+  end
+  subgraph prove [Prove]
+    P1[attest decisions]
   end
   subgraph observe [Observe]
     O1[snapshot] --- O2[snapshot-diff] --- O3[status] --- O4[log]
@@ -82,12 +86,14 @@ AXIOM_HTTP_TOKEN=$(openssl rand -hex 32) axiom mcp --root /abs/repo --http 0.0.0
 ## `init`
 
 ```
-axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]
+axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
+           [--profile-name <name>] [--force] [--json]
 ```
 
 Wire a repository for AXIOM in one idempotent step. `--root` defaults to the current directory.
 `--harness auto` (default) picks one harness per marker directory present (`.github` → copilot,
-`.claude` → claude, `.codex` → codex, `.vscode` → vscode; none → copilot + vscode). Files written,
+`.claude` → claude, `.codex` → codex, `.vscode` → vscode, `.cursor` → cursor, `.windsurf`/`.devin`
+→ windsurf, `.gemini` → gemini, `.junie` → junie, `.clinerules` → cline; none → copilot + vscode). Files written,
 all under the root, each through the containment check (a symlink/junction segment →
 `ERR_SYMLINK_IN_PATH`) and an atomic write:
 
@@ -96,14 +102,22 @@ all under the root, each through the containment check (a symlink/junction segme
 | `.vscode/mcp.json` | always | merges `servers.axiom` (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}`) |
 | `.github/hooks/axiom-gate.json` | copilot or vscode | `preToolUse` hook `axiom gate --stdin`, `timeoutSec: 5` |
 | `.claude/settings.json` | claude | merges a `hooks.PreToolUse` entry (`Write\|Edit\|MultiEdit\|NotebookEdit` → `axiom gate --stdin`, timeout 5) |
+| `.cursor/hooks.json`, `.cursor/mcp.json` | cursor | `preToolUse` + `beforeShellExecution` → `axiom gate --stdin --format cursor`, `failClosed: true`; `mcpServers.axiom` |
+| `.devin/hooks.json` or `.windsurf/hooks.json` | windsurf | `pre_write_code` + `pre_run_command` → `--format windsurf` (exit 2 on deny) |
+| `.codex/hooks.json`, `.codex/config.toml` | codex | merges a `PreToolUse` entry (`^(Bash\|apply_patch\|Edit\|Write)$` → `--format codex`); appends `[mcp_servers.axiom]` only when absent |
+| `.gemini/settings.json` | gemini | merges `hooks.BeforeTool` (`write_file\|replace\|run_shell_command` → `--format gemini`, 10000 ms) and `mcpServers.axiom` |
+| `.junie/mcp/mcp.json`, `.junie/guidelines.md` | junie | `mcpServers.axiom`; guidelines section appended once (marker `<!-- axiom -->`); the user-level hook snippet is printed as a note |
+| `.clinerules/hooks/PreToolUse` (0755), `PreToolUse.ps1` | cline | scripts that run `--format cline` and print a `cancel` document when the gate cannot run |
 | `.axiom/profiles/<name>.json` | always | repo profile extending `default` (`repo.noOverwriteOf`, `content.noSecrets`, `path.deny`) |
-| `.axiom/gate-profile.json` | always | gate profile (deny list, `noSecrets`, `maxBytes: 262144`) |
+| `.axiom/gate-profile.json` | always | gate profile (deny list, `noSecrets`, `maxBytes: 262144`, `steer: "hint"`) |
 | `.gitignore` | always | appends the missing lines of `.axiom/*`, `!.axiom/profiles/`, `!.axiom/gate-profile.json` |
 
 `--profile-name` overrides the name derived from the directory name (must match
 `^[a-z0-9][a-z0-9._-]{0,63}$` and not be a builtin, else `ERR_INVALID_PROFILE`). An existing file
 is never overwritten without `--force`; a JSON file that is not plain JSON (JSONC, broken) is
-skipped, never rewritten. codex has no PreToolUse hook API, so it only gets a note. Output
+skipped, never rewritten; TOML and Markdown are only appended to. `--daemon` wires the resident
+gate daemon instead: Claude gets a `type: "http"` hook to `http://127.0.0.1:47861/v1/hook/claude`
+(`onFailure: "block"`) and every command hook runs the native `axiom-hook` client. Output
 (`--json`): `{ root, harnesses[], profile, files: [{ path, action: created|merged|updated|skipped, reason? }], notes[] }`.
 Hooks call the global bin — install it with `npm install -g @codai/axiom-mcp`, never `npx` in a hook.
 
@@ -120,9 +134,14 @@ axiom doctor [--root <dir>] [--json]
 
 Is this machine + root wired correctly? Read-only apart from spawning the gate (which never
 writes). Each check is `ok | warn | fail` with a message and, when not `ok`, a `fix:` hint.
-Checks: `root`, `bin` (global `axiom` on `PATH`, version vs this CLI), `hook.copilot` /
-`hook.claude` / `hook` (a PreToolUse entry running `axiom gate --stdin`; `npx` entries do not
-count), `mcp.vscode`, `lock` (free, live holder, or stale), `journal` (interrupted or corrupt
+Checks: `root`, `bin` (global `axiom` on `PATH`, version vs this CLI), `bin.profile` (gate profile
+uses `steer`/`steerGlobs`/`record` but the global bin is < 2.5.0 → fail), `hook.copilot` /
+`hook.claude` / `hook.cursor` / `hook.windsurf` / `hook.codex` / `hook.gemini` / `hook.junie` /
+`hook.cline` / `hook` (an entry running `axiom gate --stdin` or `axiom-hook gate --stdin`, or the
+Claude HTTP hook; `npx` entries do not count; Cursor without `failClosed` → warn), `daemon`
+(`~/.axiom/daemon.json` → health check; this root outside its roots or unreachable → warn),
+`hook.log.vscode` (VS Code's Copilot hook log: gate runs that ended `NonBlockingError` did not
+block → warn), `mcp.vscode`, `lock` (free, live holder, or stale), `journal` (interrupted or corrupt
 journals → fail), `chain` (journal hash chain; broken → fail), `profile.<name>` for every
 `.axiom/profiles/*.json`, `gate.profile`, `gitignore` (`.axiom/` covered), `gate.latency` (p95 of
 5 `gate --stdin` runs; above 4000 ms — 80 % of the 5 s hook timeout — → fail). **Exit `0` when no
@@ -399,7 +418,8 @@ mismatches; `remove` revokes; `list` prints the store; `root-id` shows, sets or 
 ## `gate`
 
 ```
-axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan]
+axiom gate --stdin [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline]
+                   [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan]
                    [--no-root-discovery] [--deny-exit 0|2] [--log-level L]
 ```
 
@@ -407,7 +427,11 @@ PreToolUse hook. Reads one harness payload from stdin and exits `0`: allow = no 
 JSON document on stdout (`permissionDecision: "deny"`) plus one line on stderr. `--deny-exit 2`
 additionally exits `2` on a deny, for harnesses that read only the exit code (Windsurf); the default
 changed from `2` to `0` in 2.4.1 because the npm `.ps1` shim rewrites `2` to `1`, which VS Code
-treats as a warning (D-35). Read-only tools are answered before the gate chunk loads; targets in a
+treats as a warning (D-35). `--format` picks the harness's own deny/allow document and exit code
+(Cursor `permission`, Gemini/Junie `decision`, Cline `cancel`, Windsurf exit 2 —
+[hooks.md § Output formats](../getting-started/hooks.md#output-formats----format-250-s-903)).
+When `axiom serve --hook` runs, the call is answered by the daemon; otherwise in-process (same
+verdict). Read-only tools are answered before the gate chunk loads; targets in a
 sibling worktree of the same repository are judged against that worktree. Fail-closed: malformed input or an undeterminable write target is a
 deny unless `--fail-open`. `--root` is used only when the payload has no `cwd`; `--profile` points
 at a gate-profile file (default search: `<root>/.axiom/gate-profile.json` → `~/.axiom/gate-profile.json`
@@ -416,6 +440,44 @@ at a gate-profile file (default search: `<root>/.axiom/gate-profile.json` → `~
 
 ```sh
 echo '{"cwd":"/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin   # {"hookSpecificOutput":{…"permissionDecision":"deny"…}…}
+```
+
+## `serve`
+
+```
+axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>]
+```
+
+Resident gate daemon for hooks (2.5.0). Keeps the gate engine loaded and answers
+`axiom gate --stdin` / `axiom-hook` / Claude HTTP hooks over loopback HTTP. `--root` is required
+(repeatable; a parent such as `E:\gh` covers every repo under it) — a hook whose cwd is outside
+every root is not answered and decides in-process. A non-loopback `--host` is refused; requests
+with an `Origin` header or a non-loopback `Host` are refused; `--token-env NAME` requires
+`authorization: Bearer <$NAME>`. Writes `~/.axiom/daemon.json` (removed on SIGINT/SIGTERM) and
+logs one JSON line `{msg, url, pid, roots}` to stderr. Endpoints: `POST /v1/gate`,
+`POST /v1/hook/claude`, `GET /v1/health`. Protocol: `packages/mcp/src/daemon-proto.ts`.
+
+```sh
+axiom serve --hook --root E:\gh
+```
+
+## `attest`
+
+```
+axiom attest decisions [--root <dir>] [--since <iso>] [--limit <n>] [--sign [--key-file <path>]]
+```
+
+Turns `.axiom/decisions.jsonl` (written by the gate when the gate profile sets `record: true`)
+into in-toto Statement v1 documents, one JSON line each: predicateType
+`https://auxidus.dev/attestation/agent-decision/v0.1` (in-toto/attestation#554), subject
+`{ name: <tool>, digest: { sha256: <JCS args hash> } }`, predicate `{ agent_id, principal,
+policy_evaluations, tool_calls: [{ name, args_hash }], decided_at, args_state, axiom: { paths, profile } }`.
+`--sign` wraps each in a DSSE envelope (`application/vnd.in-toto+json`) with the Ed25519 key from
+`--key-file` or `$AXIOM_SIGNING_KEY` (`ERR_NOT_FOUND` without one). `--root` defaults to the
+current directory.
+
+```sh
+axiom attest decisions --since 2026-10-14T00:00:00Z --sign > decisions.intoto.jsonl
 ```
 
 ## `migrate v1`
@@ -462,6 +524,8 @@ axiom snapshot-diff <a.json> <b.json>
 | `AXIOM_SIGNING_KEY` | `sign` | private key when `--key-file` is absent |
 | `SIGSTORE_ID_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_URL` + `ACTIONS_ID_TOKEN_REQUEST_TOKEN` | `sign --keyless` | OIDC token source for Sigstore; absent → `ERR_KEYLESS_UNAVAILABLE` (`reason: NO_OIDC`) |
 | `AXIOM_HTTP_TOKEN` (or the name given to `--http-token-env`) | `mcp --http` | bearer token; required for non-loopback binds |
+| the name given to `--token-env` | `serve --hook` | optional bearer token for daemon requests (also written to `~/.axiom/daemon.json`, mode 0600) |
+| `AXIOM_GATE_DAEMON=0` | `gate` | ignore a running daemon; always decide in-process |
 | `GITHUB_REPOSITORY`, `GITHUB_REF`, `GITHUB_SHA`, `GITHUB_RUN_ID` | `verify --tree --attest` | copied into `predicate.source` when present |
 
 Nothing else is read: there is no root, profile or allowlist environment fallback.

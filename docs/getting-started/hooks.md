@@ -1,6 +1,6 @@
 # Hook mode — `axiom gate --stdin`
 
-*The fail-closed PreToolUse hook: what it checks, the exit-code contract, wiring for Claude Code / Copilot CLI / VS Code, the profile file and the latency budget.*
+*The fail-closed PreToolUse hook: what it checks, the per-harness output formats, the resident daemon, wiring for nine harnesses, steering to `axiom_write`, the decision journal, the profile file and the latency budget.*
 
 `axiom gate` turns AXIOM's path and content rules into a **PreToolUse hook**: the harness calls it
 before every tool call, the gate reads the payload from stdin and either lets the call through
@@ -68,7 +68,7 @@ are allowed immediately without touching the filesystem.
 
 | class | how recognised | what happens |
 |---|---|---|
-| **write** | name contains `write`, `edit`, `create_file`, `create`, `replace_string`, `insert_edit`, `apply_patch`, `notebook` (and is not `read`/`list`/`search`/`grep`/`glob`/`view`/`directory`) | targets extracted from the recognised path keys / V4A headers and checked. **A write tool whose target cannot be determined is denied** (`ERR_UNSUPPORTED_OP`, "no recognised path key") — an unrecognised write is exactly what the gate exists to stop. `--fail-open` allows it with a warning instead. |
+| **write** | name contains `write`, `edit`, `create_file`, `create`, `replace_string`, `replace`, `delete`, `insert_edit`, `apply_patch`, `notebook` (and is not `read`/`list`/`search`/`grep`/`glob`/`view`/`directory` — except `apply_patch`, `replace` and `delete`, which always count) | targets extracted from the recognised path keys / V4A headers and checked. **A write tool whose target cannot be determined is denied** (`ERR_UNSUPPORTED_OP`, "no recognised path key") — an unrecognised write is exactly what the gate exists to stop. `--fail-open` allows it with a warning instead. `replace` (Gemini, Cline `replace_in_file`) and `delete` (Cursor `Delete`) were unchecked before 2.5.0. |
 | **shell** | name contains `bash`, `shell`, `terminal`, `run_in_terminal`, `execute_command`, `run_command`, `powershell`, `cmd` | the command string (`command`, `cmd`, `script`, `commandLine`) is scanned for **write primitives**; every path they would write or delete becomes a target. No command string → allow. `--no-shell-scan` allows every shell call. |
 | **other** | everything else | allow, < 1 ms |
 
@@ -113,6 +113,62 @@ Relative targets stay relative to `cwd`; the profile is loaded from the discover
 | malformed JSON, empty stdin, stdin > 4 MiB, stdin timeout (2 s), profile unreadable, any internal error | as deny — **fail closed** (D-18) | deny JSON | `AXIOM GATE DENY ERR_INTERNAL: <why> (fail-closed; pass --fail-open to allow)` |
 | same, with `--fail-open` | `0` | nothing | `AXIOM GATE WARN: <why> — failing open (--fail-open)` |
 | bad arguments / missing `--stdin` / `--deny-exit` not `0`/`2` | `2` | nothing | `AXIOM GATE ERROR: …` + usage |
+
+### Output formats — `--format` (2.5.0, S-903)
+
+The table above is `--format auto` (the default; Claude Code, Copilot CLI and VS Code read the same
+document). Other harnesses read other shapes, so `axiom init` writes the right flag for each:
+
+| `--format` | deny stdout | deny exit | allow stdout | once-per-session hint |
+|---|---|---|---|---|
+| `auto` · `claude` · `copilot` · `vscode` | combined document (below) | `0` | nothing | `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":…}}` |
+| `codex` | `{"hookSpecificOutput":{…"permissionDecision":"deny",…}}` only | `0` | nothing | as `auto` |
+| `cursor` | `{"permission":"deny","user_message":…,"agent_message":…}` | `0` | `{"permission":"allow"}` (Cursor's `failClosed` treats empty output as a failure) | `{"permission":"allow","agent_message":…}` |
+| `windsurf` | nothing (Windsurf/Devin read only the exit code) | `2` | nothing | — |
+| `gemini` · `junie` | `{"decision":"deny","reason":…}` | `0` | nothing | Junie as `auto`; Gemini — |
+| `cline` | `{"cancel":true,"errorMessage":…}` (Cline ignores exit codes; usage errors print it too) | `0` | nothing | `{"cancel":false,"contextModification":…}` |
+
+`--deny-exit 2` forces exit `2` in every format; the stderr line is the same everywhere.
+Payload shapes recognised besides Claude/Copilot/VS Code: Cursor `preToolUse` (`tool_name`,
+`tool_input`, `workspace_roots`) and `beforeShellExecution` (`command`, `cwd`); Windsurf/Devin
+`{agent_action_name, tool_info}` (`pre_write_code` edits, `pre_run_command`, `pre_mcp_tool_use`);
+Codex `apply_patch` (`tool_input.command` = the V4A patch); Gemini `write_file`/`replace`/
+`run_shell_command`; Junie (Claude-like); Cline `{hookName, workspaceRoots, preToolUse:{toolName,
+parameters}}` with JSON-stringified parameter values.
+
+### Resident daemon — `axiom serve --hook` (2.5.0, S-901)
+
+Every hook call used to start node and load the gate chunk. `axiom serve --hook --root <abs>…`
+keeps the gate warm in one loopback process; `axiom gate --stdin` (the node `cli.js` and the SEA
+binary) asks it first and **falls back to the in-process gate** whenever it gives no verdict —
+no daemon, daemon down, another axiom version, a cwd outside its `--root` list, or a 1.5 s
+timeout — so a missing daemon is slower, never a fail-open.
+
+```text
+axiom serve --hook --root E:\gh            # one daemon for every repo under E:\gh; Ctrl+C stops
+```
+
+- **Bind**: `127.0.0.1:47861` by default (`--host`, `--port`; a non-loopback host is refused).
+  It writes `~/.axiom/daemon.json` (pid, port, roots, optional token; mode 0600) and removes it
+  on clean shutdown. `AXIOM_GATE_DAEMON=0` makes clients ignore it.
+- **Requests it refuses**: any `Origin` header or non-loopback `Host` (browser pages, DNS
+  rebinding), a missing/wrong bearer token when started with `--token-env NAME`, a hook cwd /
+  payload `cwd` / `--root` outside its roots (421 → the client decides in-process).
+- **Same verdict**: the daemon runs the very same `gateMain` on the bytes the client read; a test
+  asserts byte-identical stdout and exit codes for every format.
+- **Clients**: the node `cli.js`; the native **`axiom-hook`** binary (Rust, std only, ~320 KB —
+  release assets, brew, install.sh/ps1), which `axiom init --daemon` writes into every command
+  hook (`axiom-hook gate --stdin --format X`; daemon down → it runs the installed `axiom` without a
+  shell; neither → deny in the harness's format); and **Claude Code's `type: "http"` hook**,
+  which needs no process at all:
+
+```json
+{ "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+  "hooks": [{ "type": "http", "url": "http://127.0.0.1:47861/v1/hook/claude", "timeout": 5, "onFailure": "block" }] }
+```
+
+  `onFailure: "block"` makes a stopped daemon block writes (Claude treats connection errors and
+  non-2xx as failures), so start the daemon at login when you use it.
 
 **Why a deny exits 0 (2.4.1, D-35).** Until 2.4.0 a deny exited `2`. On Windows the npm
 `axiom.ps1` shim that PowerShell resolves for `axiom` rewrites every non-zero exit to `1`, and
@@ -190,11 +246,24 @@ in a hook file — and `axiom doctor` checks them afterwards:
 |---|---|---|
 | Copilot CLI · VS Code | `.github/hooks/axiom-gate.json` | whole file, exactly the first JSON block below; an existing different file is `skipped (exists)` unless `--force` |
 | Claude Code | `.claude/settings.json` | merged: the Claude entry below is appended to `hooks.PreToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
-| Codex | — | no hook API; `init` prints a note only ([harnesses.md § Codex](../integration/harnesses.md#codex)) |
+| Cursor | `.cursor/hooks.json` + `.cursor/mcp.json` | `preToolUse` (`Write\|Delete\|Shell`) + `beforeShellExecution`, `--format cursor`, `failClosed: true` |
+| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | `pre_write_code` + `pre_run_command`, `--format windsurf` (exit 2) |
+| Codex | `.codex/hooks.json` + `.codex/config.toml` | `PreToolUse` matcher `^(Bash\|apply_patch\|Edit\|Write)$`, `--format codex`; TOML `[mcp_servers.axiom]` appended only when absent |
+| Gemini CLI | `.gemini/settings.json` | `hooks.BeforeTool` (`write_file\|replace\|run_shell_command`, timeout in ms) + `mcpServers.axiom` |
+| Junie | `.junie/mcp/mcp.json` (+ `.junie/guidelines.md` section) | hooks run only from the user's `~/.junie/config.json` — `init` prints the snippet |
+| Cline | `.clinerules/hooks/PreToolUse` (sh, 0755) + `PreToolUse.ps1` | both print a `cancel` document when `axiom` cannot run (Cline has no fail-closed); tick "Enable Hooks" |
 
-`axiom doctor` reports `hook.copilot` / `hook.claude` as `ok` only when the file has a
-PreToolUse entry that runs `axiom gate --stdin` **without** `npx` — an `npx` entry is a `warn`
-because it will time out. It then spawns this CLI's gate 5 times with a benign `Write` payload
+Details and the exact snippets per harness: [integration/harnesses.md](../integration/harnesses.md).
+`axiom init --daemon` writes the same files with `axiom-hook` (and the Claude HTTP hook) instead of `axiom`.
+
+`axiom doctor` reports `hook.<harness>` as `ok` only when the file has an entry that runs
+`axiom gate --stdin` / `axiom-hook gate --stdin` (or the Claude HTTP hook) **without** `npx` — an
+`npx` entry is a `warn` because it will time out; a Cursor entry without `failClosed: true` is a
+`warn`. It checks the resident daemon (`daemon`: health, and whether this root is one of its
+roots), the global bin against the gate profile (`bin.profile`: a profile using `steer`/`record`
+with a global bin < 2.5.0 is a `fail` — the old strict schema denies every write), and reads VS
+Code's own "GitHub Copilot Chat Hooks.log" (`hook.log.vscode`): gate runs that ended
+`NonBlockingError` mean a deny there did **not** block (the 2026-10-14 audit, automated). It then spawns this CLI's gate 5 times with a benign `Write` payload
 and reports the **p95** against the 5 s hook timeout: above **4000 ms** (80 % of the timeout) is a
 `fail` (exit 2), since the harness would kill the hook and fail open; a benign write being denied
 is a `warn` pointing at `gate-profile.json`.
@@ -263,6 +332,7 @@ answers `allow` for non-write tools in < 1 ms, so either is fine.
 | `--no-shell-scan` | do not scan shell commands for write primitives |
 | `--no-root-discovery` | treat the payload `cwd` as the root (do not walk up to `.git`/`.axiom`) |
 | `--deny-exit 0\|2` | exit code for a deny (default `0`: the JSON decides; `2` for exit-code-only harnesses such as Windsurf) |
+| `--format <f>` | output shape for the harness (table above); default `auto` |
 | `--strict` | accepted for 2.1 hook configs; a no-op (fail-closed is the default) |
 | `--log-level error\|warn\|info\|debug` | stderr verbosity (default `warn`; `debug` prints root/profile/class/targets) |
 
@@ -293,6 +363,29 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 | `noSecrets` | `boolean` | `true` | run `content.noSecrets` on supplied content → `content.noSecrets.<pattern>` |
 | `pii` | `boolean` | `false` | also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) — opt-in since S-414, see [checks.md](../guides/checks.md#contentnosecrets) |
 | `maxBytes` | `number?` | — | run `content.maxBytes` on supplied content → `content.maxBytes` |
+| `steer` | `"off"\|"hint"\|"require"` | `off` (`axiom init` writes `hint`) | `hint`: an allowed write gets a once-per-session `additionalContext` pointing at the `axiom_write` MCP tool (marker under `.axiom/hints/`); `require`: a direct write to `steerGlobs` is denied with `steer.requireApply` |
+| `steerGlobs` | `string[]` | `[]` | globs `steer: "require"` routes through `axiom_write` (e.g. `migrations/**`, `CHANGELOG.md`) |
+| `record` | `boolean` | `false` | append every judged write/shell call to `.axiom/decisions.jsonl` (JCS `args_hash`, decision, code, paths) — see below |
+
+A gate profile that uses `steer`, `steerGlobs` or `record` needs axiom ≥ 2.5.0 on every machine
+that runs the hook: older gates reject unknown keys and deny every write (`axiom doctor` checks).
+
+### Steering writes to the transaction (S-905)
+
+The gate is a seatbelt; the guarantee is `Plan → check → apply`. Agents skipped it because it
+took four calls. 2.5.0 adds the MCP tool **`axiom_write`** (files in → preview with diff and
+digest → the same files + `confirmDigest` → atomic apply, journal, one-step rollback) and the
+profile's `steer` knob tells agents about it at the moment they write directly.
+
+### Decision journal and attestations (S-906)
+
+With `record: true`, each judged write/shell call appends one line to `.axiom/decisions.jsonl`:
+`{v, decided_at, agent_id, principal, tool, args_hash, args_state, decision, code?, reason?, paths, profile}`
+— the arguments are kept only as `sha256:` of their JCS (RFC 8785) form. `axiom attest decisions
+[--since <iso>] [--sign]` turns them into in-toto Statement v1 documents with predicateType
+`https://auxidus.dev/attestation/agent-decision/v0.1` ([in-toto/attestation#554](https://github.com/in-toto/attestation/issues/554);
+DSSE-signed with the repo key under `--sign`). Mapping to the OWASP Agent Control Standard:
+[concepts/trust-model.md](../concepts/trust-model.md#owasp-agent-control-standard).
 
 The object is strict (unknown keys are a schema error → deny `ERR_INTERNAL`, or warn + allow with `--fail-open`).
 Deny codes in the stderr line are either an `ERR_*` from the closed `ERROR_CODES` enum
@@ -321,6 +414,15 @@ the server code would add the SDK + zod + all engines (~950 KB) to every tool ca
 
 To measure it on *your* machine, under your antivirus and load: `axiom doctor` (check
 `gate.latency`, p95 of 5 spawns, fails above 4000 ms).
+
+**2.5.0 — daemon (S-901).** Interleaved A/B on the reference box, allowed `Write` payload, CPU
+at 45–79 % from other agents (`.copilot-tmp/p9/ab-daemon.mjs`): the daemon's own decision as a
+Claude HTTP hook (no process spawn) **p50 4.1–5.1 ms / p90 5.1–6.9 ms**. Every spawned client —
+2.4.1, 2.5.0 in-process, 2.5.0 via the daemon, `axiom-hook` — measured p50 244–394 ms with
+p90 0.6–2.9 s, i.e. the load noise was larger than any difference between them; the process
+start itself (node 60–77 ms, a native exe 30–33 ms, an unsigned exe ~140 ms under Defender) is
+the floor a spawn harness cannot go below. **< 20 ms per call is reached only without a spawn**
+(Claude HTTP hook); on spawn harnesses the daemon removes the gate-chunk load, not the process start.
 
 ## Limitations
 

@@ -1,16 +1,31 @@
-import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadProfile } from "@codai/axiom-checks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GateProfileSchema } from "./gate.js";
 import {
   CLAUDE_HOOK_ENTRY,
+  CLAUDE_HTTP_HOOK_ENTRY,
+  CODEX_MCP_TOML,
   COPILOT_HOOK,
+  COPILOT_HOOK_DAEMON,
+  CURSOR_MCP_ENTRY,
+  clineHookPs1,
+  clineHookSh,
+  codexHookEntry,
+  cursorHooks,
   detectHarnesses,
+  GATE_PROFILE,
   GITIGNORE_LINES,
+  geminiHookEntry,
+  type HarnessName,
+  isAxiomGateEntry,
+  JUNIE_GUIDELINES_MARKER,
   MCP_SERVER_ENTRY,
+  PROJECT_MCP_ENTRY,
   profileNameFor,
   runInit,
+  windsurfHooks,
 } from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -182,5 +197,195 @@ describe("axiom init (S-701)", () => {
     expect(profileNameFor("/x/___")).toBe("repo");
     expect(profileNameFor("/x/default")).toBe("default-repo");
     expect(profileNameFor(`/x/${"a".repeat(100)}`)).toHaveLength(64);
+  });
+});
+
+const pathsOf = (r: Awaited<ReturnType<typeof runInit>>) =>
+  r.files.filter((f) => f.action !== "skipped").map((f) => f.path);
+
+async function initTwice(harness: HarnessName, daemon = false) {
+  const first = await runInit({ root: repo.root, harness, profileName: "demo", daemon });
+  const second = await runInit({ root: repo.root, harness, profileName: "demo", daemon });
+  return { first, second };
+}
+
+describe("axiom init — every harness", () => {
+  it("cursor: hooks.json (failClosed, --format cursor) + mcp.json; idempotent", async () => {
+    const { first, second } = await initTwice("cursor");
+    expect(pathsOf(first)).toEqual(
+      expect.arrayContaining([".cursor/hooks.json", ".cursor/mcp.json"]),
+    );
+    const hooks = await readJson(".cursor/hooks.json");
+    expect(hooks).toEqual(cursorHooks());
+    expect(JSON.stringify(hooks)).toContain("axiom gate --stdin --format cursor");
+    expect((await readJson(".cursor/mcp.json")).mcpServers).toEqual({ axiom: CURSOR_MCP_ENTRY });
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("cursor: merges into an existing hooks.json keeping foreign hooks; claude+cursor notes the double run", async () => {
+    await mkdir(join(repo.root, ".cursor"));
+    await mkdir(join(repo.root, ".claude"));
+    const mine = { command: "./guard.sh" };
+    await writeFile(
+      join(repo.root, ".cursor", "hooks.json"),
+      JSON.stringify({ version: 1, hooks: { preToolUse: [mine] } }),
+    );
+    const r = await runInit({ root: repo.root, profileName: "demo" });
+    expect(r.harnesses).toEqual(["claude", "cursor"]);
+    expect(r.files.find((f) => f.path === ".cursor/hooks.json")?.action).toBe("merged");
+    const doc = (await readJson(".cursor/hooks.json")) as { hooks: Record<string, unknown[]> };
+    const fresh = cursorHooks() as { hooks: Record<string, unknown[]> };
+    expect(doc.hooks.preToolUse).toEqual([mine, fresh.hooks.preToolUse?.[0]]);
+    expect(doc.hooks.beforeShellExecution).toEqual(fresh.hooks.beforeShellExecution);
+    expect(r.notes.some((n) => n.startsWith("cursor:"))).toBe(true);
+  });
+
+  it("windsurf: writes .windsurf/hooks.json, or .devin/hooks.json when .devin exists", async () => {
+    const { first, second } = await initTwice("windsurf");
+    expect(pathsOf(first)).toContain(".windsurf/hooks.json");
+    expect(await readJson(".windsurf/hooks.json")).toEqual(windsurfHooks());
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+    expect(
+      first.notes.some((n) => n.startsWith("windsurf:") && n.includes("Restricted Mode")),
+    ).toBe(true);
+    await mkdir(join(repo.root, ".devin"));
+    const devin = await runInit({ root: repo.root, profileName: "demo" });
+    expect(devin.harnesses).toContain("windsurf");
+    expect(pathsOf(devin)).toContain(".devin/hooks.json");
+  });
+
+  it("codex: .codex/hooks.json PreToolUse + an appended [mcp_servers.axiom] TOML block; idempotent", async () => {
+    await mkdir(join(repo.root, ".codex"));
+    const toml = 'model = "o5"\r\n[mcp_servers.other]\r\ncommand = "x"';
+    await writeFile(join(repo.root, ".codex", "config.toml"), toml);
+    const { first, second } = await initTwice("codex");
+    expect((await readJson(".codex/hooks.json")).hooks).toEqual({ PreToolUse: [codexHookEntry()] });
+    expect(first.files.find((f) => f.path === ".codex/config.toml")?.action).toBe("merged");
+    expect(await readFile(join(repo.root, ".codex", "config.toml"), "utf8")).toBe(
+      `${toml}\r\n\r\n${CODEX_MCP_TOML.join("\r\n")}\r\n`,
+    );
+    expect(first.notes.some((n) => n.startsWith("codex:") && n.includes("/hooks"))).toBe(true);
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("codex: an existing [mcp_servers.axiom] table is never touched", async () => {
+    await mkdir(join(repo.root, ".codex"));
+    const toml = '[mcp_servers.axiom]\ncommand = "axiom"\n';
+    await writeFile(join(repo.root, ".codex", "config.toml"), toml);
+    const r = await runInit({
+      root: repo.root,
+      harness: "codex",
+      profileName: "demo",
+      force: true,
+    });
+    expect(r.files.find((f) => f.path === ".codex/config.toml")?.action).toBe("skipped");
+    expect(await readFile(join(repo.root, ".codex", "config.toml"), "utf8")).toBe(toml);
+  });
+
+  it("gemini: merges hooks.BeforeTool and mcpServers.axiom into .gemini/settings.json", async () => {
+    await mkdir(join(repo.root, ".gemini"));
+    await writeFile(join(repo.root, ".gemini", "settings.json"), JSON.stringify({ theme: "x" }));
+    const { first, second } = await initTwice("gemini");
+    expect(first.files.find((f) => f.path === ".gemini/settings.json")?.action).toBe("merged");
+    const doc = await readJson(".gemini/settings.json");
+    expect(doc.theme).toBe("x");
+    expect(doc.hooks).toEqual({ BeforeTool: [geminiHookEntry()] });
+    expect(doc.mcpServers).toEqual({ axiom: PROJECT_MCP_ENTRY });
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("junie: project MCP file + append-only guidelines + a note with the user-level hook", async () => {
+    await mkdir(join(repo.root, ".junie"));
+    await writeFile(join(repo.root, ".junie", "guidelines.md"), "# Rules\n- be nice\n");
+    const { first, second } = await initTwice("junie");
+    expect((await readJson(".junie/mcp/mcp.json")).mcpServers).toEqual({
+      axiom: PROJECT_MCP_ENTRY,
+    });
+    const md = await readFile(join(repo.root, ".junie", "guidelines.md"), "utf8");
+    expect(md.startsWith("# Rules\n- be nice\n\n")).toBe(true);
+    expect(md.split("\n").filter((l) => l === JUNIE_GUIDELINES_MARKER)).toHaveLength(1);
+    const note = first.notes.find((n) => n.startsWith("junie:"));
+    expect(note).toContain("~/.junie/config.json");
+    expect(note).toContain("axiom gate --stdin --format junie");
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("cline: POSIX (0755, shebang, LF) + PowerShell hooks that print a cancel when the gate cannot run", async () => {
+    const { first, second } = await initTwice("cline");
+    expect(pathsOf(first)).toEqual(
+      expect.arrayContaining([".clinerules/hooks/PreToolUse", ".clinerules/hooks/PreToolUse.ps1"]),
+    );
+    const sh = await readFile(join(repo.root, ".clinerules", "hooks", "PreToolUse"), "utf8");
+    expect(sh).toBe(clineHookSh());
+    expect(sh.startsWith("#!/usr/bin/env sh\n")).toBe(true);
+    expect(sh).not.toContain("\r");
+    expect(sh).toContain("axiom gate --stdin --format cline");
+    expect(sh).toContain('{"cancel":true');
+    const ps1 = await readFile(join(repo.root, ".clinerules", "hooks", "PreToolUse.ps1"), "utf8");
+    expect(ps1).toBe(clineHookPs1());
+    expect(ps1).not.toContain("\r");
+    expect(ps1).toContain("[Console]::In.ReadToEnd()");
+    expect(ps1).toContain('{"cancel":true');
+    if (process.platform !== "win32") {
+      const mode = (await stat(join(repo.root, ".clinerules", "hooks", "PreToolUse"))).mode;
+      expect(mode & 0o777).toBe(0o755);
+    }
+    expect(first.notes.some((n) => n.startsWith("cline:") && n.includes("Enable Hooks"))).toBe(
+      true,
+    );
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("auto-detects every new marker dir (.devin and .windsurf map to one windsurf)", async () => {
+    for (const d of [".cursor", ".windsurf", ".devin", ".gemini", ".junie", ".clinerules"]) {
+      await mkdir(join(repo.root, d));
+    }
+    expect(await detectHarnesses(repo.root)).toEqual([
+      "cursor",
+      "windsurf",
+      "gemini",
+      "junie",
+      "cline",
+    ]);
+  });
+
+  it("--daemon: claude http hook, axiom-hook in every command hook, daemon note", async () => {
+    for (const d of [".github", ".claude", ".cursor", ".codex", ".gemini", ".windsurf"]) {
+      await mkdir(join(repo.root, d));
+    }
+    const r = await runInit({ root: repo.root, profileName: "demo", daemon: true });
+    expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK_DAEMON);
+    const claude = (await readJson(".claude/settings.json")) as {
+      hooks: { PreToolUse: unknown[] };
+    };
+    expect(claude.hooks.PreToolUse).toEqual([CLAUDE_HTTP_HOOK_ENTRY]);
+    expect(CLAUDE_HTTP_HOOK_ENTRY.hooks[0]?.url).toBe("http://127.0.0.1:47861/v1/hook/claude");
+    expect(await readJson(".cursor/hooks.json")).toEqual(cursorHooks("axiom-hook"));
+    expect((await readJson(".codex/hooks.json")).hooks).toEqual({
+      PreToolUse: [codexHookEntry("axiom-hook")],
+    });
+    expect((await readJson(".gemini/settings.json")).hooks).toEqual({
+      BeforeTool: [geminiHookEntry("axiom-hook")],
+    });
+    expect(await readJson(".windsurf/hooks.json")).toEqual(windsurfHooks("axiom-hook"));
+    expect(r.notes.some((n) => n.includes("axiom serve --hook --root"))).toBe(true);
+    // A daemon re-run recognises the http entry as ours; a plain run recognises axiom-hook.
+    const again = await runInit({ root: repo.root, profileName: "demo", daemon: true });
+    expect(again.files.every((f) => f.action === "skipped")).toBe(true);
+    const plain = await runInit({ root: repo.root, profileName: "demo" });
+    expect(plain.files.find((f) => f.path === ".claude/settings.json")?.action).toBe("skipped");
+    expect(plain.files.find((f) => f.path === ".cursor/hooks.json")?.action).toBe("skipped");
+  });
+
+  it("isAxiomGateEntry accepts axiom, axiom-hook and the daemon http hook, nothing else", () => {
+    expect(isAxiomGateEntry(CLAUDE_HOOK_ENTRY)).toBe(true);
+    expect(isAxiomGateEntry(CLAUDE_HTTP_HOOK_ENTRY)).toBe(true);
+    expect(isAxiomGateEntry(codexHookEntry("axiom-hook"))).toBe(true);
+    expect(isAxiomGateEntry({ hooks: [{ type: "command", command: "guard.ps1" }] })).toBe(false);
+    expect(isAxiomGateEntry({ hooks: [{ type: "http", url: "http://x/other" }] })).toBe(false);
+  });
+
+  it("the gate profile opts into steering hints", () => {
+    expect(GATE_PROFILE.steer).toBe("hint");
   });
 });

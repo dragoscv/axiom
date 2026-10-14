@@ -1,4 +1,4 @@
-import type { Sha256Digest } from "./digest.js";
+import { canonicalHash, type Sha256Digest } from "./digest.js";
 
 /** in-toto Statement v1 `_type`. */
 export const IN_TOTO_STATEMENT_V1: "https://in-toto.io/Statement/v1" =
@@ -15,6 +15,13 @@ export const AXIOM_BUILDER_ID: "https://axiom.dev/builder/mcp@v2" =
 /** AXIOM apply attestation `predicateType` (D-21, S-403). */
 export const AXIOM_APPLY_ATTESTATION_V1: "https://axiom.dev/attestation/apply/v1" =
   "https://axiom.dev/attestation/apply/v1";
+/**
+ * Agent decision attestation `predicateType` (Phase 8, D-36): the URI proposed in
+ * in-toto/attestation#554. That proposal intends an `in-toto.io` alias once accepted; this is
+ * the SINGLE place to change it — every builder and verifier reads this constant.
+ */
+export const AGENT_DECISION_V0_1: "https://auxidus.dev/attestation/agent-decision/v0.1" =
+  "https://auxidus.dev/attestation/agent-decision/v0.1";
 
 export interface ResourceDescriptor {
   name: string;
@@ -184,6 +191,83 @@ export function buildStatement(input: BuildStatementInput): InTotoStatementV1 {
         resolvedDependencies: [],
       },
       runDetails,
+    },
+  };
+}
+
+// ------------------------------------------------------- agent decision --
+
+/** `sha256:<hex>` of the JCS (RFC 8785) form of `value`. Throws when `value` is not canonicalizable. */
+export function argsHash(value: unknown): `sha256:${string}` {
+  return `sha256:${canonicalHash(value)}`;
+}
+
+export interface AgentDecisionPolicyEvaluation {
+  policy: string;
+  decision: "allow" | "deny";
+  reason: string;
+  policy_ids?: string[];
+}
+
+export interface AgentDecisionV0_1Predicate {
+  agent_id: string;
+  principal: { subject: string };
+  policy_evaluations: AgentDecisionPolicyEvaluation[];
+  tool_calls: Array<{ name: string; args_hash: `sha256:${string}` }>;
+  decided_at: string;
+  args_state: "recorded" | "unavailable";
+  /** AXIOM extension: root-relative paths judged and the gate profile source. */
+  axiom: { paths: string[]; profile: string };
+}
+
+export interface InTotoAgentDecisionV0_1 {
+  _type: typeof IN_TOTO_STATEMENT_V1;
+  subject: ResourceDescriptor[];
+  predicateType: typeof AGENT_DECISION_V0_1;
+  predicate: AgentDecisionV0_1Predicate;
+}
+
+export interface BuildAgentDecisionInput {
+  agent_id: string;
+  principal: { subject: string };
+  tool: string;
+  args_hash: `sha256:${string}`;
+  args_state: "recorded" | "unavailable";
+  decision: "allow" | "deny";
+  code?: string;
+  reason?: string;
+  paths: string[];
+  profile: string;
+  /** ISO timestamp, supplied by the caller (the builder reads no clock). */
+  decided_at: string;
+}
+
+/**
+ * in-toto Statement v1 for one agent tool-call decision. The subject is content-addressed by
+ * the invocation: `{name: tool, digest: {sha256: <args hash hex>}}`. Deterministic.
+ */
+export function buildAgentDecisionStatement(
+  input: BuildAgentDecisionInput,
+): InTotoAgentDecisionV0_1 {
+  const hex = input.args_hash.slice("sha256:".length);
+  const evaluation: AgentDecisionPolicyEvaluation = {
+    policy: "axiom.gate",
+    decision: input.decision,
+    reason: input.reason ?? "",
+  };
+  if (input.code !== undefined) evaluation.policy_ids = [input.code];
+  return {
+    _type: IN_TOTO_STATEMENT_V1,
+    subject: [{ name: input.tool, digest: { sha256: hex } }],
+    predicateType: AGENT_DECISION_V0_1,
+    predicate: {
+      agent_id: input.agent_id,
+      principal: { subject: input.principal.subject },
+      policy_evaluations: [evaluation],
+      tool_calls: [{ name: input.tool, args_hash: input.args_hash }],
+      decided_at: input.decided_at,
+      args_state: input.args_state,
+      axiom: { paths: [...input.paths].sort(), profile: input.profile },
     },
   };
 }

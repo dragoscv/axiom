@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import { canonicalHash, sha256Hex } from "./digest.js";
 import { canonicalize } from "./jcs.js";
 import {
+  AGENT_DECISION_V0_1,
   AXIOM_APPLY_ATTESTATION_V1,
   AXIOM_BUILD_TYPE,
   AXIOM_BUILDER_ID,
+  argsHash,
+  type BuildAgentDecisionInput,
   type BuildApplyAttestationInput,
   type BuildStatementInput,
+  buildAgentDecisionStatement,
   buildApplyAttestation,
   buildStatement,
   IN_TOTO_STATEMENT_V1,
@@ -115,5 +119,72 @@ describe("buildStatement", () => {
   it("defaults byproducts to []", () => {
     const { byproducts: _drop, ...rest } = base;
     expect(buildStatement(rest).predicate.runDetails.byproducts).toEqual([]);
+  });
+});
+
+describe("argsHash (JCS, RFC 8785)", () => {
+  it("hashes the canonical form: key order and whitespace do not matter", () => {
+    expect(argsHash({ b: 1, a: "x" })).toBe(`sha256:${sha256Hex('{"a":"x","b":1}')}`);
+    expect(argsHash({ a: "x", b: 1 })).toBe(argsHash({ b: 1, a: "x" }));
+  });
+
+  it("uses ECMAScript number serialisation (1e21 → 1e+21)", () => {
+    expect(canonicalize(1e21)).toBe("1e+21");
+    expect(argsHash({ n: 1e21 })).toBe(`sha256:${sha256Hex('{"n":1e+21}')}`);
+  });
+
+  it("throws on a non-canonicalizable value", () => {
+    expect(() => argsHash({ n: Number.NaN })).toThrow();
+  });
+});
+
+describe("buildAgentDecisionStatement (Phase 8)", () => {
+  const input: BuildAgentDecisionInput = {
+    agent_id: "claude:s1",
+    principal: { subject: "dev" },
+    tool: "Write",
+    args_hash: argsHash({ file_path: ".env", content: "X=1" }),
+    args_state: "recorded",
+    decision: "deny",
+    code: "path.deny",
+    reason: "path matches a denied glob",
+    paths: ["src/b.ts", ".env"],
+    profile: "builtin",
+    decided_at: "2026-10-14T00:00:00.000Z",
+  };
+
+  it("emits an in-toto Statement v1 whose subject is the content-addressed invocation", () => {
+    const s = buildAgentDecisionStatement(input);
+    expect(s._type).toBe(IN_TOTO_STATEMENT_V1);
+    expect(s.predicateType).toBe(AGENT_DECISION_V0_1);
+    expect(AGENT_DECISION_V0_1).toBe("https://auxidus.dev/attestation/agent-decision/v0.1");
+    expect(s.subject).toEqual([
+      { name: "Write", digest: { sha256: input.args_hash.slice("sha256:".length) } },
+    ]);
+    expect(s.predicate.policy_evaluations).toEqual([
+      {
+        policy: "axiom.gate",
+        decision: "deny",
+        reason: "path matches a denied glob",
+        policy_ids: ["path.deny"],
+      },
+    ]);
+    expect(s.predicate.tool_calls).toEqual([{ name: "Write", args_hash: input.args_hash }]);
+    expect(s.predicate.axiom).toEqual({ paths: [".env", "src/b.ts"], profile: "builtin" });
+    expect(s.predicate.args_state).toBe("recorded");
+    expect("evaluation_results" in s.predicate).toBe(false);
+  });
+
+  it("omits policy_ids without a code, reason defaults to empty; deterministic", () => {
+    const { code: _c, reason: _r, ...allow } = input;
+    const s = buildAgentDecisionStatement({ ...allow, decision: "allow" });
+    expect(s.predicate.policy_evaluations[0]).toEqual({
+      policy: "axiom.gate",
+      decision: "allow",
+      reason: "",
+    });
+    expect(canonicalHash(buildAgentDecisionStatement(input))).toBe(
+      canonicalHash(buildAgentDecisionStatement({ ...input, paths: [...input.paths].reverse() })),
+    );
   });
 });

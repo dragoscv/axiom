@@ -35,11 +35,11 @@ interface Run {
   stderr: string;
 }
 
-async function run(args: string[]): Promise<Run> {
+async function run(args: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<Run> {
   try {
     const { stdout, stderr } = await execFileP(process.execPath, [CLI, ...args], {
       maxBuffer: 16 * 1024 * 1024,
-      env: cleanEnv(),
+      env: { ...cleanEnv(), ...extraEnv },
     });
     return { code: 0, stdout, stderr };
   } catch (e) {
@@ -90,7 +90,10 @@ describe.skipIf(!hasDist)("cli ops verbs (dist/cli.js)", () => {
 
   it("doctor --json on an init'ed root has no fail (exit 0); an interrupted journal → exit 2", async () => {
     await run(["init", "--root", repo.root, "--profile-name", "demo"]);
-    const ok = await run(["doctor", "--root", repo.root, "--json"]);
+    // Hermetic: whatever global `axiom` this machine has (an older one fails `bin.profile` on the
+    // 2.5.0 gate profile, by design) must not decide this test — PATH holds only node's directory.
+    const noGlobalBin = { PATH: dirname(process.execPath), Path: dirname(process.execPath) };
+    const ok = await run(["doctor", "--root", repo.root, "--json"], noGlobalBin);
     expect(ok.code, ok.stdout).toBe(0);
     const checks = json<{ checks: { id: string; status: string }[] }>(ok).checks;
     expect(checks.filter((c) => c.status === "fail")).toEqual([]);
@@ -100,7 +103,7 @@ describe.skipIf(!hasDist)("cli ops verbs (dist/cli.js)", () => {
       ...newJournal(digest, [{ path: "a.txt", op: "create", done: false }]),
       phase: "committing",
     });
-    const bad = await run(["doctor", "--root", repo.root, "--json"]);
+    const bad = await run(["doctor", "--root", repo.root, "--json"], noGlobalBin);
     expect(bad.code).toBe(2);
     const j = json<{ ok: boolean; checks: { id: string; status: string }[] }>(bad);
     expect(j.ok).toBe(false);

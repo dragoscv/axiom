@@ -5,11 +5,27 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { request } from "node:http";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { journalStatus, lockStatus, verifyChain } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
+import {
+  DAEMON_PROTOCOL,
+  type DaemonState,
+  H_PROTOCOL,
+  HEALTH_PATH,
+  readDaemonState,
+} from "./daemon-proto.js";
 import { GateProfileSchema } from "./gate.js";
-import { CLAUDE_HOOK_ENTRY, GITIGNORE_LINES, INIT_FILES } from "./init.js";
+import { findHookLogs, type HookLogStats, readHookLogStats } from "./hooklog.js";
+import {
+  CLAUDE_HOOK_ENTRY,
+  GATE_COMMAND_RE,
+  GITIGNORE_LINES,
+  INIT_FILES,
+  isAxiomGateHook,
+} from "./init.js";
 import { realDir } from "./roots.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -44,6 +60,14 @@ export type GateProbe = (
 /** Resolves the global `axiom` bin; `undefined` = not on PATH. */
 export type BinLocator = () => Promise<{ path: string; version?: string } | undefined>;
 
+/** `GET /v1/health` of a resident daemon; rejects when unreachable. */
+export type HealthFetcher = (state: DaemonState) => Promise<{ status: number; body: unknown }>;
+
+/** First version whose strict gate profile schema knows `steer` / `steerGlobs` / `record`. */
+export const STEER_MIN_VERSION = "2.5.0";
+export const DAEMON_HEALTH_TIMEOUT_MS = 1000;
+export const HOOK_LOG_P95_WARN_MS = 4000;
+
 export interface DoctorOptions {
   root: string;
   /** This CLI's version (compared against the global bin). */
@@ -53,6 +77,14 @@ export interface DoctorOptions {
   /** Test seams. */
   probe?: GateProbe;
   locateBin?: BinLocator;
+  /** Home dir: daemon state (`<home>/.axiom/daemon.json`), `~/.junie/config.json`, VS Code logs. */
+  home?: string;
+  /** `%APPDATA%` for the VS Code log locator on win32. */
+  appData?: string;
+  platform?: NodeJS.Platform;
+  healthFetch?: HealthFetcher;
+  /** Explicit VS Code hook log files (skips the locator). */
+  hookLogs?: readonly string[];
 }
 
 function check(id: string, status: CheckStatus, message: string, hint?: string): DoctorCheck {
@@ -208,6 +240,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+const NPX_RE = /\bnpx\b/;
+
 function copilotHookWired(doc: unknown): boolean {
   if (!isRecord(doc) || !isRecord(doc.hooks) || !Array.isArray(doc.hooks.preToolUse)) return false;
   return doc.hooks.preToolUse.some((h) => {
@@ -215,28 +249,59 @@ function copilotHookWired(doc: unknown): boolean {
     const cmd = [h.exec, ...(Array.isArray(h.args) ? h.args : []), h.bash, h.powershell, h.command]
       .filter((x): x is string => typeof x === "string")
       .join(" ");
-    return /\baxiom\b/.test(cmd) && /\bgate\b/.test(cmd) && !/\bnpx\b/.test(cmd);
+    return /\baxiom\b/.test(cmd) && /\bgate\b/.test(cmd) && !NPX_RE.test(cmd);
   });
 }
 
-function claudeHookWired(doc: unknown): boolean {
-  if (!isRecord(doc) || !isRecord(doc.hooks) || !Array.isArray(doc.hooks.PreToolUse)) return false;
-  return doc.hooks.PreToolUse.some(
-    (e) =>
-      isRecord(e) &&
-      Array.isArray(e.hooks) &&
-      e.hooks.some(
-        (h) =>
-          isRecord(h) &&
-          typeof h.command === "string" &&
-          /\baxiom\b.*\bgate\b/.test(h.command) &&
-          !/\bnpx\b/.test(h.command),
-      ),
+function hookList(doc: unknown, event: string): unknown[] {
+  if (!isRecord(doc) || !isRecord(doc.hooks)) return [];
+  const list = doc.hooks[event];
+  return Array.isArray(list) ? list : [];
+}
+
+function gateHookNoNpx(h: unknown): boolean {
+  return (
+    isAxiomGateHook(h) && !(isRecord(h) && typeof h.command === "string" && NPX_RE.test(h.command))
   );
 }
 
-async function checkBin(opts: DoctorOptions): Promise<DoctorCheck> {
-  const bin = await (opts.locateBin ?? defaultBinLocator())();
+/** Claude / Codex / Gemini / Junie shape: `hooks[event][].hooks[]`. */
+function nestedWired(event: string): (doc: unknown) => boolean {
+  return (doc) =>
+    hookList(doc, event).some(
+      (e) => isRecord(e) && Array.isArray(e.hooks) && e.hooks.some(gateHookNoNpx),
+    );
+}
+
+function flatGateEntries(doc: unknown, event: string): Record<string, unknown>[] {
+  return hookList(doc, event).filter(
+    (e): e is Record<string, unknown> =>
+      isRecord(e) &&
+      typeof e.command === "string" &&
+      GATE_COMMAND_RE.test(e.command) &&
+      !NPX_RE.test(e.command),
+  );
+}
+
+/** Cursor / Windsurf shape: `hooks[event][]` with a `command`. */
+function flatWired(events: readonly string[]): (doc: unknown) => boolean {
+  return (doc) => events.some((e) => flatGateEntries(doc, e).length > 0);
+}
+
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) =>
+    (/(\d+)\.(\d+)\.(\d+)/.exec(v)?.slice(1) ?? ["0", "0", "0"]).map(Number);
+  const [x, y] = [parse(a), parse(b)];
+  for (let i = 0; i < 3; i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+type Bin = Awaited<ReturnType<BinLocator>>;
+
+function checkBin(opts: DoctorOptions, bin: Bin): DoctorCheck {
   if (bin === undefined) {
     return check(
       "bin",
@@ -259,37 +324,166 @@ async function checkBin(opts: DoctorOptions): Promise<DoctorCheck> {
   return check("bin", "ok", `axiom ${bin.version} at ${bin.path}`);
 }
 
-async function checkHooks(root: string): Promise<DoctorCheck[]> {
-  const out: DoctorCheck[] = [];
-  let wired = 0;
-  const hookFiles: [string, string, (d: unknown) => boolean][] = [
-    ["hook.copilot", INIT_FILES.copilotHook, copilotHookWired],
-    ["hook.claude", INIT_FILES.claudeSettings, claudeHookWired],
+interface HookFile {
+  id: string;
+  /** Display path (root-relative, or `~/…` for user-level files). */
+  rel: string;
+  abs: string;
+  wired: (doc: unknown) => boolean;
+  /** Extra warning for a wired file (e.g. Cursor without failClosed). */
+  extra?: (doc: unknown) => DoctorCheck | undefined;
+}
+
+function cursorFailClosed(doc: unknown): DoctorCheck | undefined {
+  const entries = [
+    ...flatGateEntries(doc, "preToolUse"),
+    ...flatGateEntries(doc, "beforeShellExecution"),
   ];
-  for (const [id, rel, wiredFn] of hookFiles) {
-    const r = await readJsonFile(path.join(root, rel));
+  if (entries.every((e) => e.failClosed === true)) return undefined;
+  return check(
+    "hook.cursor",
+    "warn",
+    `${INIT_FILES.cursorHooks}: an axiom gate entry lacks "failClosed": true — Cursor lets the tool run when the gate crashes or times out`,
+    'add "failClosed": true to every axiom entry (axiom init --force)',
+  );
+}
+
+async function nonEmptyJson(abs: string): Promise<boolean> {
+  const r = await readJsonFile(abs);
+  return (
+    r !== undefined && (r.error !== undefined || (isRecord(r.doc) && Object.keys(r.doc).length > 0))
+  );
+}
+
+async function hookFiles(root: string, home: string): Promise<HookFile[]> {
+  const at = (rel: string) => path.join(root, rel);
+  // Devin Desktop reads the legacy .windsurf/hooks.json only when .devin/hooks.json is missing/empty.
+  const windsurfRel = (await nonEmptyJson(at(INIT_FILES.devinHooks)))
+    ? INIT_FILES.devinHooks
+    : INIT_FILES.windsurfHooks;
+  return [
+    {
+      id: "hook.copilot",
+      rel: INIT_FILES.copilotHook,
+      abs: at(INIT_FILES.copilotHook),
+      wired: copilotHookWired,
+    },
+    {
+      id: "hook.claude",
+      rel: INIT_FILES.claudeSettings,
+      abs: at(INIT_FILES.claudeSettings),
+      wired: nestedWired("PreToolUse"),
+    },
+    {
+      id: "hook.cursor",
+      rel: INIT_FILES.cursorHooks,
+      abs: at(INIT_FILES.cursorHooks),
+      wired: flatWired(["preToolUse", "beforeShellExecution"]),
+      extra: cursorFailClosed,
+    },
+    {
+      id: "hook.windsurf",
+      rel: windsurfRel,
+      abs: at(windsurfRel),
+      wired: flatWired(["pre_write_code", "pre_run_command"]),
+    },
+    {
+      id: "hook.codex",
+      rel: INIT_FILES.codexHooks,
+      abs: at(INIT_FILES.codexHooks),
+      wired: nestedWired("PreToolUse"),
+    },
+    {
+      id: "hook.gemini",
+      rel: INIT_FILES.geminiSettings,
+      abs: at(INIT_FILES.geminiSettings),
+      wired: nestedWired("BeforeTool"),
+    },
+    {
+      id: "hook.junie",
+      rel: "~/.junie/config.json",
+      abs: path.join(home, ".junie", "config.json"),
+      wired: nestedWired("PreToolUse"),
+    },
+  ];
+}
+
+async function checkClineHooks(root: string, platform: NodeJS.Platform): Promise<DoctorCheck[]> {
+  const out: DoctorCheck[] = [];
+  for (const rel of [INIT_FILES.clineHook, INIT_FILES.clineHookPs1]) {
+    const abs = path.join(root, rel);
+    let text: string;
+    try {
+      text = await readFile(abs, "utf8");
+    } catch {
+      continue;
+    }
+    if (!GATE_COMMAND_RE.test(text) || NPX_RE.test(text)) {
+      out.push(
+        check(
+          "hook.cline",
+          "warn",
+          `${rel} does not run \`axiom gate --stdin --format cline\` (npx does not count)`,
+          "axiom init --harness cline --force",
+        ),
+      );
+      continue;
+    }
+    if (!text.includes('"cancel":true')) {
+      out.push(
+        check(
+          "hook.cline",
+          "warn",
+          `${rel} prints no cancel document when the gate cannot run — Cline ignores exit codes and lets the tool run`,
+          "axiom init --harness cline --force",
+        ),
+      );
+      continue;
+    }
+    if (rel === INIT_FILES.clineHook && platform !== "win32") {
+      const mode = (await stat(abs)).mode;
+      if ((mode & 0o111) === 0) {
+        out.push(check("hook.cline", "warn", `${rel} is not executable`, `chmod 0755 ${rel}`));
+        continue;
+      }
+    }
+    out.push(check("hook.cline", "ok", `${rel} runs the axiom gate`));
+  }
+  return out;
+}
+
+async function checkHooks(
+  root: string,
+  home: string,
+  platform: NodeJS.Platform,
+): Promise<DoctorCheck[]> {
+  const out: DoctorCheck[] = [];
+  for (const f of await hookFiles(root, home)) {
+    const r = await readJsonFile(f.abs);
     if (r === undefined) continue;
     if (r.error !== undefined) {
       out.push(
-        check(id, "fail", `${rel}: ${r.error}`, "fix the JSON or re-run `axiom init --force`"),
+        check(f.id, "fail", `${f.rel}: ${r.error}`, "fix the JSON or re-run `axiom init --force`"),
       );
-    } else if (wiredFn(r.doc)) {
-      wired++;
-      out.push(check(id, "ok", `${rel} runs \`axiom gate --stdin\``));
-    } else {
+    } else if (f.wired(r.doc)) {
+      out.push(check(f.id, "ok", `${f.rel} runs the axiom gate`));
+      const extra = f.extra?.(r.doc);
+      if (extra !== undefined) out.push(extra);
+    } else if (f.id !== "hook.junie" || (await isDirectory(path.join(root, ".junie")))) {
       out.push(
         check(
-          id,
+          f.id,
           "warn",
-          `${rel} has no \`axiom gate --stdin\` PreToolUse entry (npx entries do not count: they time out)`,
-          id === "hook.claude"
+          `${f.rel} has no axiom gate entry (npx entries do not count: they time out)`,
+          f.id === "hook.claude"
             ? `add ${JSON.stringify(CLAUDE_HOOK_ENTRY)} to hooks.PreToolUse`
             : "axiom init --force",
         ),
       );
     }
   }
-  if (wired === 0 && out.length === 0) {
+  out.push(...(await checkClineHooks(root, platform)));
+  if (out.length === 0) {
     out.push(
       check("hook", "warn", "no PreToolUse hook config found for any harness", "axiom init"),
     );
@@ -309,6 +503,158 @@ async function checkHooks(root: string): Promise<DoctorCheck[]> {
     }
   }
   return out;
+}
+
+async function isDirectory(abs: string): Promise<boolean> {
+  return stat(abs).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+}
+
+/** node:http GET of the daemon health endpoint, 1 s budget, loopback only. */
+export function defaultHealthFetch(timeoutMs = DAEMON_HEALTH_TIMEOUT_MS): HealthFetcher {
+  return (state) =>
+    new Promise((resolve, reject) => {
+      const headers: Record<string, string> = { [H_PROTOCOL]: String(DAEMON_PROTOCOL) };
+      if (state.token !== undefined) headers.authorization = `Bearer ${state.token}`;
+      const req = request(
+        { host: state.host, port: state.port, path: HEALTH_PATH, method: "GET", headers },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c: string) => {
+            if (body.length < 65_536) body += c;
+          });
+          res.on("end", () => {
+            let doc: unknown;
+            try {
+              doc = JSON.parse(body);
+            } catch {
+              doc = undefined;
+            }
+            resolve({ status: res.statusCode ?? 0, body: doc });
+          });
+          res.on("error", reject);
+        },
+      );
+      req.setTimeout(timeoutMs, () => req.destroy(new Error("timeout")));
+      req.on("error", reject);
+      req.end();
+    });
+}
+
+function isInside(root: string, served: string, platform: NodeJS.Platform): boolean {
+  const norm = (p: string) => {
+    const r = path.resolve(p);
+    return platform === "win32" ? r.toLowerCase() : r;
+  };
+  const rel = path.relative(norm(served), norm(root));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function checkDaemon(
+  root: string,
+  home: string,
+  platform: NodeJS.Platform,
+  fetchHealth: HealthFetcher,
+): Promise<DoctorCheck> {
+  const state = await readDaemonState(home);
+  if (state === undefined) {
+    return check("daemon", "ok", "no resident daemon (hooks run in-process)");
+  }
+  const where = `${state.host}:${state.port}`;
+  let res: { status: number; body: unknown };
+  try {
+    res = await fetchHealth(state);
+  } catch (err) {
+    return check(
+      "daemon",
+      "warn",
+      `stale daemon.json: pid ${state.pid} at ${where} is unreachable (${(err as Error).message})`,
+      "restart with `axiom serve --hook --root <dir>` or delete ~/.axiom/daemon.json",
+    );
+  }
+  if (res.status !== 200) {
+    return check(
+      "daemon",
+      "warn",
+      `daemon at ${where} answered ${res.status} to ${HEALTH_PATH}`,
+      res.status === 401 ? "the token in daemon.json does not match the running daemon" : undefined,
+    );
+  }
+  const body = isRecord(res.body) ? res.body : {};
+  const roots = Array.isArray(body.roots)
+    ? body.roots.filter((r): r is string => typeof r === "string")
+    : state.roots;
+  const pid = typeof body.pid === "number" ? body.pid : state.pid;
+  if (!roots.some((r) => isInside(root, r, platform))) {
+    return check(
+      "daemon",
+      "warn",
+      `daemon pid ${pid} at ${where} does not serve this root (roots: ${roots.join(", ") || "none"}) — hooks here fall back to in-process`,
+      `restart with \`axiom serve --hook --root ${path.dirname(root)}\``,
+    );
+  }
+  return check("daemon", "ok", `daemon pid ${pid} at ${where} serves ${roots.join(", ")}`);
+}
+
+const STEER_KEYS = ["steer", "steerGlobs", "record"] as const;
+
+async function checkSteerCompat(root: string, bin: Bin): Promise<DoctorCheck | undefined> {
+  const gp = await readJsonFile(path.join(root, INIT_FILES.gateProfile));
+  if (gp === undefined || !isRecord(gp.doc)) return undefined;
+  const doc = gp.doc;
+  const used = STEER_KEYS.filter((k) => doc[k] !== undefined);
+  if (used.length === 0) return undefined;
+  if (bin?.version === undefined) return undefined;
+  if (compareVersions(bin.version, STEER_MIN_VERSION) >= 0) {
+    return check(
+      "bin.profile",
+      "ok",
+      `global axiom ${bin.version} understands ${used.join(", ")} in ${INIT_FILES.gateProfile}`,
+    );
+  }
+  return check(
+    "bin.profile",
+    "fail",
+    `${INIT_FILES.gateProfile} uses ${used.join(", ")} but the global axiom is ${bin.version} (< ${STEER_MIN_VERSION}): its strict profile schema rejects unknown keys and the gate denies EVERY write`,
+    "npm install -g @codai/axiom-mcp@latest",
+  );
+}
+
+function hookLogCheck(s: HookLogStats): DoctorCheck {
+  const base = `${s.runs} axiom gate runs in the VS Code hook log: p50 ${s.p50} ms, p95 ${s.p95} ms, ${s.denies} denies, ${s.timeouts} timeouts`;
+  if (s.nonBlockingErrors > 0) {
+    return check(
+      "hook.log.vscode",
+      "warn",
+      `${s.nonBlockingErrors} axiom gate runs ended NonBlockingError — VS Code treated them as non-blocking (exit ≠ 0/2 or invalid JSON); a deny there did not block (${base})`,
+      "axiom ≥ 2.4.1; hook must call the global bin directly",
+    );
+  }
+  if (s.p95 > HOOK_LOG_P95_WARN_MS) {
+    return check(
+      "hook.log.vscode",
+      "warn",
+      `${base} — p95 above ${HOOK_LOG_P95_WARN_MS} ms risks the hook timeout`,
+      "consider `axiom init --daemon` (resident gate) or check machine load",
+    );
+  }
+  return check("hook.log.vscode", "ok", base);
+}
+
+async function checkHookLog(opts: DoctorOptions): Promise<DoctorCheck | undefined> {
+  const files =
+    opts.hookLogs ??
+    (await findHookLogs({
+      ...(opts.home === undefined ? {} : { home: opts.home }),
+      ...(opts.appData === undefined ? {} : { appData: opts.appData }),
+      ...(opts.platform === undefined ? {} : { platform: opts.platform }),
+    }));
+  if (files.length === 0) return undefined;
+  const stats = await readHookLogStats(files);
+  return stats.runs === 0 ? undefined : hookLogCheck(stats);
 }
 
 async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
@@ -443,8 +789,16 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
   // Canonical root, same as init/apply (CI: /var → /private/var, Windows 8.3 short names).
   const root = await realDir(path.resolve(opts.root), "ERR_ROOT_NOT_DIR");
   checks.push(check("root", "ok", root));
-  checks.push(await checkBin(opts));
-  checks.push(...(await checkHooks(root)));
+  const home = opts.home ?? homedir();
+  const platform = opts.platform ?? process.platform;
+  const bin = await (opts.locateBin ?? defaultBinLocator())();
+  checks.push(checkBin(opts, bin));
+  const steer = await checkSteerCompat(root, bin);
+  if (steer !== undefined) checks.push(steer);
+  checks.push(...(await checkHooks(root, home, platform)));
+  const hookLog = await checkHookLog(opts);
+  if (hookLog !== undefined) checks.push(hookLog);
+  checks.push(await checkDaemon(root, home, platform, opts.healthFetch ?? defaultHealthFetch()));
 
   const lock = await lockStatus(root);
   if (!lock.held) checks.push(check("lock", "ok", "lock free"));

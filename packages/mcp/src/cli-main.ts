@@ -51,8 +51,14 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
             [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}]
-  axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]
-                                         (MCP entry + PreToolUse hook + .axiom/profiles/<name>.json + gate profile + .gitignore; idempotent)
+  axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
+             [--profile-name <name>] [--force] [--json]
+                                         (MCP entry + PreToolUse hook + .axiom/profiles/<name>.json + gate profile + .gitignore; idempotent;
+                                          --daemon: hooks call the native axiom-hook client / Claude HTTP hook of \`axiom serve --hook\`)
+  axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>]
+                                         (resident gate daemon for hooks; loopback only; writes ~/.axiom/daemon.json; Ctrl+C stops)
+  axiom attest decisions --root <dir> [--since <iso>] [--limit <n>] [--sign [--key-file <path>]]
+                                         (gate decision journal → in-toto agent-decision Statements, JSON Lines; --sign = DSSE)
   axiom doctor [--root <dir>] [--json]   (bin on PATH, hooks, gate latency, lock, journals, chain, profiles; exit 2 = a check failed)
   axiom status [--root <dir>] [--json]   (lock holder/queue/intents, interrupted journals, last applied, chain)
   axiom log [--root <dir>] [--limit <n>] [--json]   (journal chain, newest first; default 20)
@@ -79,7 +85,10 @@ Usage:
                                           (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
   axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/guides/signing.md)
-  axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--log-level ...]   (PreToolUse hook; fail-closed; exit 0 allow / 2 deny)
+  axiom gate --stdin [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--root <dir>] [--profile <file>]
+             [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level ...]
+                                         (PreToolUse hook; fail-closed; deny = exit 0 + harness JSON, windsurf/--deny-exit 2 = exit 2;
+                                          answered by \`axiom serve --hook\` when it runs, in-process otherwise)
     axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
                                            (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
   axiom snapshot --root <dir> [-o <out.json>] [--include <glob>]... [--exclude <glob>]... [--max-files <n>] [--no-gitignore] [--no-digest]
@@ -654,16 +663,17 @@ async function cmdInit(argv: string[]): Promise<number> {
     harness: { type: "string" },
     "profile-name": { type: "string" },
     force: { type: "boolean" },
+    daemon: { type: "boolean" },
     json: { type: "boolean" },
   });
-  const { runInit, isHarnessArg } = await import("./ops-lazy.js");
+  const { runInit, isHarnessArg, HARNESSES } = await import("./ops-lazy.js");
   const harness = values.harness ?? "auto";
-  if (!isHarnessArg(harness))
-    throw new UsageError("--harness must be auto|copilot|claude|codex|vscode");
+  if (!isHarnessArg(harness)) throw new UsageError(`--harness must be auto|${HARNESSES.join("|")}`);
   const rootReal = await localRoot(values.root);
   const initOpts: Parameters<typeof runInit>[0] = { root: rootReal, harness };
   if (values["profile-name"] !== undefined) initOpts.profileName = values["profile-name"];
   if (values.force === true) initOpts.force = true;
+  if (values.daemon === true) initOpts.daemon = true;
   const r = await runInit(initOpts);
   if (values.json) {
     out(r);
@@ -790,8 +800,81 @@ async function cmdGate(argv: string[]): Promise<number> {
   const { gateMain } = await import("./gate-lazy.js");
   const r = await gateMain(argv);
   for (const line of r.stderr) console.error(line);
-  if (r.stdout !== undefined) console.log(r.stdout);
+  if (r.stdout !== undefined && r.stdout !== "") console.log(r.stdout);
   return r.exitCode;
+}
+
+/** `axiom serve --hook` (S-901): resident gate daemon; runs until SIGINT/SIGTERM. */
+async function cmdServe(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    hook: { type: "boolean" },
+    root: { type: "string", multiple: true },
+    host: { type: "string" },
+    port: { type: "string" },
+    "token-env": { type: "string" },
+  });
+  if (values.hook !== true) throw new UsageError("serve: only --hook is supported");
+  const rootArgs = (values.root ?? []).map((r) => path.resolve(r));
+  if (rootArgs.length === 0)
+    throw new UsageError("serve --hook: at least one --root <abs> is required");
+  const policy = await createRootsPolicy(rootArgs);
+  const port = intFlag(values.port, "--port", 0, 65_535);
+  let token: string | undefined;
+  if (values["token-env"] !== undefined) {
+    token = process.env[values["token-env"]];
+    if (token === undefined || token === "")
+      throw new UsageError(`serve --hook: env var ${values["token-env"]} is empty`);
+  }
+  const { startDaemon } = await import("./serve-lazy.js");
+  const d = await startDaemon({
+    roots: [...policy.roots],
+    version: MIGRATE_VERSION,
+    ...(values.host === undefined ? {} : { host: values.host }),
+    ...(port === undefined ? {} : { port }),
+    ...(token === undefined ? {} : { token }),
+  });
+  console.error(
+    JSON.stringify({
+      msg: "axiom serve --hook listening",
+      url: d.url,
+      pid: process.pid,
+      roots: d.state.roots,
+    }),
+  );
+  await new Promise<void>((resolve) => {
+    const stop = () => resolve();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  await d.close();
+  return EXIT_OK;
+}
+
+/** `axiom attest decisions` (S-904): decision journal → in-toto agent-decision JSON Lines. */
+async function cmdAttest(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  if (sub !== "decisions") throw new UsageError("attest: subcommand must be decisions");
+  const { values } = opts(rest, {
+    root: { type: "string" },
+    since: { type: "string" },
+    limit: { type: "string", short: "n" },
+    sign: { type: "boolean" },
+    "key-file": { type: "string" },
+  });
+  if (values.since !== undefined && Number.isNaN(Date.parse(values.since)))
+    throw new UsageError("--since must be an ISO 8601 timestamp");
+  const limit = intFlag(values.limit, "--limit", 1, LOG_LIMIT_MAX);
+  const { attestDecisions } = await import("./serve-lazy.js");
+  const rows = await attestDecisions({
+    root: await localRoot(values.root),
+    ...(values.since === undefined ? {} : { since: values.since }),
+    ...(limit === undefined ? {} : { limit }),
+    ...(values.sign === true
+      ? { sign: values["key-file"] === undefined ? {} : { keyFile: values["key-file"] } }
+      : {}),
+  });
+  for (const r of rows) console.log(JSON.stringify(r));
+  return EXIT_OK;
 }
 
 async function cmdMigrate(argv: string[]): Promise<number> {
@@ -922,6 +1005,8 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   sign: cmdSign,
   trust: cmdTrust,
   gate: cmdGate,
+  serve: cmdServe,
+  attest: cmdAttest,
   migrate: cmdMigrate,
   snapshot: cmdSnapshot,
   "snapshot-diff": cmdSnapshotDiff,

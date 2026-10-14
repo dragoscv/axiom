@@ -44,6 +44,8 @@ describe("spec/tools.json parity", () => {
     expect(risk.axiom_plan_seal).toBe("ACT");
     // S-706: status snapshot never takes the lock
     expect(risk.axiom_status).toBe("READ");
+    // one-tool write: preview + confirm, writes the tree
+    expect(risk.axiom_write).toBe("SENSITIVE");
   });
 
   it("riskClass follows annotations; names are unique and snake_case", () => {
@@ -75,6 +77,7 @@ describe("spec/tools.json parity", () => {
       "axiom_status",
       "axiom_task_cancel",
       "axiom_task_get",
+      "axiom_write",
     ]);
   });
 });

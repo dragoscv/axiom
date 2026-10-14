@@ -1,6 +1,7 @@
 #!/bin/sh
 # AXIOM installer — downloads the standalone binary for this OS/arch from the GitHub release,
-# verifies it against SHA256SUMS and installs it to $AXIOM_INSTALL_DIR (default ~/.local/bin).
+# verifies it against SHA256SUMS and installs it to $AXIOM_INSTALL_DIR (default ~/.local/bin),
+# together with `axiom-hook`, the native gate client for hooks (releases from v2.5.0 on).
 #
 #   curl -fsSL https://dragoscv.github.io/axiom/install.sh | sh
 #   AXIOM_VERSION=v2.2.1 AXIOM_INSTALL_DIR=/usr/local/bin sh install.sh
@@ -49,6 +50,7 @@ case "$arch" in
 esac
 
 asset="axiom-$os-$arch"
+hook_asset="axiom-hook-$os-$arch"
 
 if [ "$VERSION" = "latest" ]; then
   say "resolving latest release"
@@ -68,23 +70,43 @@ say "downloading $asset ($tag)"
 fetch "$base/$asset" "$tmp/$asset" || die "download failed: $base/$asset (does release $tag ship a binary for $os-$arch?)"
 fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
 
-expected=$(grep -E "[[:space:]]\*?$asset\$" "$tmp/SHA256SUMS" | head -n 1 | cut -d ' ' -f 1)
-[ -n "$expected" ] || die "$asset is not listed in SHA256SUMS for $tag"
+verify() {
+  # verify <asset>: dies unless $tmp/<asset> matches its SHA256SUMS line
+  expected=$(grep -E "[[:space:]]\*?$1\$" "$tmp/SHA256SUMS" | head -n 1 | cut -d ' ' -f 1)
+  [ -n "$expected" ] || die "$1 is not listed in SHA256SUMS for $tag"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$tmp/$1" | cut -d ' ' -f 1)
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$tmp/$1" | cut -d ' ' -f 1)
+  else
+    die "need sha256sum or shasum to verify the download"
+  fi
+  [ "$actual" = "$expected" ] || die "checksum mismatch for $1: expected $expected, got $actual — refusing to install"
+  say "checksum verified: $1"
+}
 
-if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$tmp/$asset" | cut -d ' ' -f 1)
-elif command -v shasum >/dev/null 2>&1; then
-  actual=$(shasum -a 256 "$tmp/$asset" | cut -d ' ' -f 1)
+verify "$asset"
+
+# axiom-hook ships from v2.5.0; an older release simply has no such asset (not an error).
+have_hook=0
+if grep -qE "[[:space:]]\*?$hook_asset\$" "$tmp/SHA256SUMS"; then
+  say "downloading $hook_asset ($tag)"
+  fetch "$base/$hook_asset" "$tmp/$hook_asset" || die "download failed: $base/$hook_asset"
+  verify "$hook_asset"
+  have_hook=1
 else
-  die "need sha256sum or shasum to verify the download"
+  say "note: $tag has no $hook_asset — installing axiom only"
 fi
-[ "$actual" = "$expected" ] || die "checksum mismatch for $asset: expected $expected, got $actual — refusing to install"
-say "checksum verified"
 
 mkdir -p "$INSTALL_DIR"
 chmod +x "$tmp/$asset"
 mv "$tmp/$asset" "$INSTALL_DIR/axiom"
 say "installed to $INSTALL_DIR/axiom"
+if [ "$have_hook" = 1 ]; then
+  chmod +x "$tmp/$hook_asset"
+  mv "$tmp/$hook_asset" "$INSTALL_DIR/axiom-hook"
+  say "installed to $INSTALL_DIR/axiom-hook"
+fi
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
@@ -95,4 +117,5 @@ case ":$PATH:" in
 esac
 
 "$INSTALL_DIR/axiom" --version
+if [ "$have_hook" = 1 ]; then "$INSTALL_DIR/axiom-hook" --version; fi
 say "done. Verify provenance with: gh attestation verify $INSTALL_DIR/axiom --repo $REPO"

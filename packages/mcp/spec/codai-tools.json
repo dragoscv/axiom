@@ -484,6 +484,97 @@
       }
     },
     {
+      "name": "axiom_write",
+      "risk": "SENSITIVE",
+      "description": "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically: pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "description": "Absolute repository root; must equal or lie inside an allowlisted --root",
+            "type": "string"
+          },
+          "files": {
+            "minItems": 1,
+            "maxItems": 2000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "description": "Relative POSIX path, NFC, no reserved names"
+                },
+                "content": {
+                  "description": "New file content; required for op write, forbidden for op delete",
+                  "type": "string"
+                },
+                "encoding": {
+                  "description": "Encoding of `content` (default utf8)",
+                  "type": "string",
+                  "enum": [
+                    "utf8",
+                    "base64"
+                  ]
+                },
+                "op": {
+                  "description": "write (default) or delete",
+                  "type": "string",
+                  "enum": [
+                    "write",
+                    "delete"
+                  ]
+                },
+                "mode": {
+                  "description": "File mode (default 0644)",
+                  "type": "string",
+                  "enum": [
+                    "0644",
+                    "0755"
+                  ]
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Files to write (whole new content) or delete; paths are relative POSIX"
+          },
+          "intent": {
+            "description": "Why — recorded in the Plan",
+            "type": "string",
+            "maxLength": 2000
+          },
+          "profile": {
+            "description": "Profile name (builtin default|strict|permissive, or <root>/.axiom/profiles/<name>.json)",
+            "type": "string"
+          },
+          "confirmDigest": {
+            "description": "Absent → preview; the manifestDigest returned by the preview → apply",
+            "type": "string"
+          },
+          "lockTimeoutMs": {
+            "description": "How long to wait in the root's lock queue (ms); timeout → ERR_LOCKED with details { holder, waitedMs, queuePosition }",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "keepBackups": {
+            "description": "Pre-image backup sets kept under .axiom/backup after commit (default 3)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "files"
+        ]
+      }
+    },
+    {
       "name": "axiom_rollback",
       "risk": "SENSITIVE",
       "description": "Replay the journal of a committed/committing manifest in reverse: restore backups, remove created files, drop the applied marker.",

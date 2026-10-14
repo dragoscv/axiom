@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makePlan, tmpRepo } from "./test-helpers.js";
+import { TOOL_DEFS } from "./tools.js";
 
 const execFileP = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -317,7 +318,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
       try {
         expect(client.getProtocolEra()).toBe(era);
         const { tools } = await client.listTools();
-        expect(tools).toHaveLength(18);
+        expect(tools).toHaveLength(TOOL_DEFS.length);
         const r = await client.callTool({ name: "axiom_roots_list", arguments: {} });
         expect((r.structuredContent as { roots: unknown[] }).roots).toHaveLength(1);
         const v = await client.callTool({

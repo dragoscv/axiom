@@ -1,0 +1,20 @@
+[package]
+name = "axiom-hook"
+# Kept equal to the @codai/axiom-mcp npm version (release ripple).
+version = "2.5.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Native thin client for the AXIOM resident gate daemon (`axiom serve --hook`)"
+license = "MIT"
+repository = "https://github.com/dragoscv/axiom"
+publish = false
+
+# std only — no dependencies, by design (small binary, trivial cross-compile).
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -76,7 +76,21 @@ export default defineConfig([
         /mcp-lazy/,
         /ops-lazy/,
         /yaml-lazy/,
+        /serve-lazy/,
       ],
+    },
+  },
+  {
+    ...shared,
+    // Standalone `axiom serve --hook` + `axiom attest decisions` chunk (D-36): resident gate
+    // daemon (the whole gate engine stays warm in it) and decision attestations; CLI only.
+    entry: { "serve-lazy": "src/serve-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/, CEDAR_WASM],
     },
   },
   {
