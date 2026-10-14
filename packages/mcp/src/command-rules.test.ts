@@ -66,6 +66,11 @@ describe("HOUSE_PACK / HOUSE_DEPLOY_RULE", () => {
     expect(
       evaluateCommand("pwsh -File deploy-clean.ps1 -Command 'docker push app:1'", withDeploy),
     ).toBeUndefined();
+    // Deploy-class reads the guard allows even on a dirty tree (S-1219 parity cases).
+    for (const c of corpus.filter((x) => x.note?.startsWith("deploy-class READ"))) {
+      expect(evaluateCommand(c.command, withDeploy), c.command).toBeUndefined();
+    }
+    expect(corpus.filter((x) => x.note?.startsWith("deploy-class READ")).length).toBe(3);
   });
 
   it("carries the sanctioned command as fix where the guard prints one", () => {

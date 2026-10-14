@@ -440,6 +440,21 @@
     "note": "deploy outside git = allowed; HOUSE_DEPLOY_RULE fires only on a dirty tree"
   },
   {
+    "command": "gcloud run services describe codai-gateway --region europe-west1",
+    "guard": "allow",
+    "note": "deploy-class READ: guard allows it on a dirty tree too (test-deploy-guard); git.cleanTreeFor must not gate it (S-1219)"
+  },
+  {
+    "command": "gcloud builds list --limit 3",
+    "guard": "allow",
+    "note": "deploy-class READ (test-guard reads list); not dirty-gated (S-1219)"
+  },
+  {
+    "command": "vercel ls",
+    "guard": "allow",
+    "note": "deploy-class READ (test-guard reads list); not dirty-gated (S-1219)"
+  },
+  {
     "command": "ls",
     "guard": "allow",
     "note": "neutral"

@@ -26,6 +26,7 @@ import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises
 import * as path from "node:path";
 import { inflateSync, constants as zlibConstants } from "node:zlib";
 import { z } from "zod";
+import { HOUSE_DEPLOY_RULE } from "./command-rules.js";
 import type { CommandClass } from "./coord.js";
 import { commandClasses } from "./coord.js";
 import type { RuleVerdict } from "./gate-verdict.js";
@@ -59,6 +60,18 @@ export const STAGED_PATH = ".git/index";
 
 /** The clean-worktree deploy wrapper builds from its own detached checkout: never dirty-gated. */
 const CLEAN_WRAPPER = /deploy-clean\.ps1/i;
+
+/**
+ * Deploy commands that MUTATE (the house guard's `$isDeploy` list). The `deploy` class also
+ * covers reads (`gcloud run services describe`, `vercel ls`) so agentq freezes catch them; the
+ * clean-tree rule must not refuse those (S-1219 end-state dry run).
+ */
+const DEPLOY_MUTATION = new RegExp(HOUSE_DEPLOY_RULE.pattern ?? "(?!)", "i");
+
+/** Classes for the clean-tree rule: `deploy` only when the command is a mutating deploy. */
+function cleanTreeClasses(command: string, classes: readonly CommandClass[]): CommandClass[] {
+  return classes.filter((c) => c !== "deploy" || DEPLOY_MUTATION.test(command));
+}
 
 // ------------------------------------------------------------------- git dirs --
 
@@ -746,7 +759,8 @@ export async function evaluateGit(
       };
     }
     const classes = commandClasses(command);
-    if (intersects(classes, cfg.cleanTreeFor) && !CLEAN_WRAPPER.test(command)) {
+    const dirtyGated = cleanTreeClasses(command, classes);
+    if (intersects(dirtyGated, cfg.cleanTreeFor) && !CLEAN_WRAPPER.test(command)) {
       let res: { dirty: string[]; complete: boolean };
       try {
         res = await gitDirtyPaths(root, { untracked: cfg.untracked, limit: 1, budgetMs: 2000 });
@@ -762,7 +776,7 @@ export async function evaluateGit(
       if (first !== undefined) {
         return {
           id: "git.dirtyTree",
-          reason: `This ${classes.join("/")} command needs a clean tree; '${first}' has uncommitted changes.`,
+          reason: `This ${dirtyGated.join("/")} command needs a clean tree; '${first}' has uncommitted changes.`,
           path: first,
           fix: "Commit first, then run it from a clean checkout at that commit.",
         };

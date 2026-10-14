@@ -239,6 +239,20 @@ describe("evaluateGit", () => {
     expect(await evaluateGit(viaWrapper, cfg, repo)).toBeUndefined();
   });
 
+  it("does not dirty-gate deploy-class reads (guard parity, S-1219)", async () => {
+    const cfg = RULES({ cleanTreeFor: ["deploy"], untracked: true });
+    await write("dir/b.txt", "dirty-now\n");
+    for (const read of [
+      w("gcloud", "run", "services", "describe", "svc", "--region", "europe-west1"),
+      w("gcloud", "builds", "list", "--limit", "3"),
+      w("vercel", "ls"),
+    ]) {
+      expect(await evaluateGit(read, cfg, repo)).toBeUndefined();
+    }
+    const mutate = w("gcloud", "run", "services", "replace", "svc.yaml");
+    expect((await evaluateGit(mutate, cfg, repo))?.id).toBe("git.dirtyTree");
+  });
+
   it("fails closed when the index cannot be read", async () => {
     await writeFile(join(repo, ".git", "index"), "garbage-garbage-garbage-garbage");
     const v = await evaluateGit(DEPLOY, RULES({ cleanTreeFor: ["deploy"] }), repo);
