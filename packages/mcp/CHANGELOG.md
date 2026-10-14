@@ -1,5 +1,18 @@
 # @codai/axiom-mcp
 
+## 2.6.1
+
+### Patch Changes
+
+- 505a92e: `git.cleanTreeFor: ["deploy"]` no longer refuses deploy-class READS (`gcloud run services describe`, `gcloud builds list`, `vercel ls`) on a dirty tree; only mutating deploy commands (the house guard's list) are dirty-gated. Found by the S-1219 cutover dry run.
+- @codai/axiom-apply@2.6.1
+  - @codai/axiom-axm@2.6.1
+  - @codai/axiom-canon@2.6.1
+  - @codai/axiom-checks@2.6.1
+  - @codai/axiom-emitters-web@2.6.1
+  - @codai/axiom-plan@2.6.1
+  - @codai/axiom-schema@2.6.1
+
 ## 2.6.0
 
 ### Minor Changes
@@ -11,14 +24,14 @@
   mapping as `AGENTQ_EXAMPLE`. `gitfacts.ts` reads `HEAD`, refs and the index (DIRC v2/v3/v4)
   straight from `.git` without spawning git, for `git.dirtyTree`, `git.noPathspec` and `git.branch`.
 - 6aec6c9: Human-only confirmDigest (S-1206).
-  
+
   - `axiom_apply` and `axiom_write` carry `_meta["anthropic/requiresUserInteraction"]: true` in `tools/list`, so Claude Code always asks the user before calling them (a `PreToolUse` hook cannot skip that prompt).
   - When the client declares form elicitation, the apply step first asks the human through MCP elicitation: a message with the manifestDigest, root, file count and ≤ 20 `op path` lines, plus a form with `confirm` (boolean) and `digest12` (the first 12 hex characters of the digest, typed by hand). Decline / cancel / wrong digest → `ERR_CONFIRM_DIGEST_MISMATCH` with `details.reason` = `declined` | `cancelled` | `mismatch`. It works on both wire eras: the handler returns the SDK's `input_required` result, which a 2026-07-28 client fulfils and retries (the requestState is HMAC-bound to the digest, 15 min TTL), and which the SDK's legacy shim turns into a real `elicitation/create` on 2025 connections.
   - Clients without elicitation keep the confirmDigest echo, unless the server runs with `requireHuman` (`CreateServerOptions.requireHuman`, `--require-human` on the CLI) → `ERR_CONFIRM_DIGEST_MISMATCH { reason: "elicitation-unsupported" }`.
   - New `auditElicitationHooks(root, home)` (`src/elicit-audit.ts`) for `axiom doctor`: Claude Code `Elicitation` / `ElicitationResult` hooks that could answer the confirmation without a human → `fail elicitation.autoAnswer`; VS Code `chat.tools.global.autoApprove` / `chat.tools.autoApprove` true → `warn elicitation.autoApprove`.
 - 6aec6c9: `axiom init --upgrade` upgrades an existing wiring in place (gate profile `record`/`steer`, `axiom-hook` when a daemon runs, npx → global bin MCP entries, legacy exec hook, missing PostToolUse entries). `axiom init --managed --out <dir>` writes Claude Code managed settings, a Codex `requirements.toml`, Cursor and Copilot policy hooks and a VS Code policy note. Claude, Codex and Copilot get a PostToolUse post-write check (`postMain` in `post-write.ts`, `axiom gate --stdin --post`). `axiom doctor` adds `failopen.<harness>` warnings for harnesses whose hook failure path fails open, plus `hook.post.<harness>`. Fresh gate profiles set `record: true`.
 - 6aec6c9: SARIF + OpenTelemetry (S-1214, S-1217).
-  
+
   - `reportToSarif()` (`src/sarif.ts`) maps a `CheckReport` to SARIF 2.1.0 (one rule per finding id, severity → level, POSIX `%SRCROOT%` locations with the bundle as fallback, stable `partialFingerprints["axiom/v1"]`) for `axiom check --format sarif`. The GitHub Action gains `sarif` / `check-profile` inputs and a `sarif-path` output and uploads the log with `github/codeql-action/upload-sarif` (SHA-pinned v4.38.3).
   - Opt-in OTLP/HTTP JSON trace export from the gate daemon (`src/otel.ts`, no new dependency): one `execute_tool <tool>` span per judged hook call with the GenAI semantic-convention attributes (`gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.call.id`) plus `axiom.*`; a deny is status UNSET, only `ERR_INTERNAL` is ERROR. Configured from `AXIOM_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_*` / `OTEL_SERVICE_NAME`; `ServeOptions.otel` records and flushes on close.
 - 6aec6c9: Session guards and undo (S-1209, S-1215, S-1210): `session-guard.ts` adds cross-session overwrite
@@ -50,7 +63,7 @@
 ### Patch Changes
 
 - **The gate now actually runs in VS Code.** `axiom init` wrote `.github/hooks/axiom-gate.json` with an `exec`/`args` entry — a Copilot-CLI-only form that VS Code silently skips (0 gate runs in ~11k VS Code tool calls on 2026-10-14). The file now uses `command` + `bash` + `powershell` (`axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE`), `timeoutSec: 15`, and serves VS Code, Copilot CLI and the Copilot cloud agent from one file. A pre-2.5.2 exec-only file is migrated by `axiom init` without `--force`.
-  
+
   - Windsurf/Devin and Codex Windows commands propagate the exit code: PowerShell `-Command` turned the deny exit 2 into 1, so Windsurf never blocked on Windows.
   - Claude Code hook: `onFailure: "block"` (a crashed/timed-out gate refuses the tool), matcher adds `Bash|PowerShell`, `--format claude`, 15 s timeout.
   - `axiom doctor` fails `hook.copilot` on an exec-only file, and fails `hook.log.vscode` when VS Code's hook log shows ≥ 20 PreToolUse runs for the workspace but none of them is the gate.

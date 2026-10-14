@@ -894,7 +894,12 @@ describe.skipIf(!hasDist)("gate: dist/cli.js end-to-end", () => {
       const child = execFile(
         process.execPath,
         [CLI, "gate", "--stdin", ...args],
-        { cwd: repo.root, maxBuffer: 8 * 1024 * 1024 },
+        {
+          cwd: repo.root,
+          maxBuffer: 8 * 1024 * 1024,
+          // The real ~/.axiom/gate-profile.json must not leak into the binary under test.
+          env: { ...process.env, HOME: home.root, USERPROFILE: home.root },
+        },
         (err, stdout, stderr) => {
           const code = err === null ? 0 : ((err as { code?: number }).code ?? -1);
           resolve({ code, stdout, stderr });

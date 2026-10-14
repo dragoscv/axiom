@@ -27,17 +27,25 @@ let repo: TmpRepo;
 let home: TmpRepo;
 let root: string;
 let d: RunningDaemon | undefined;
+const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 
 beforeEach(async () => {
   repo = await tmpRepo("axiom-serve-");
   home = await tmpRepo("axiom-serve-home-");
   root = await realpath(repo.root);
   await mkdir(join(root, ".git"));
+  // The daemon's gate falls back to ~/.axiom/gate-profile.json; keep the real one out.
+  process.env.HOME = home.root;
+  process.env.USERPROFILE = home.root;
 });
 
 afterEach(async () => {
   await d?.close();
   d = undefined;
+  for (const [k, v] of Object.entries(realHome)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
   await repo.cleanup();
   await home.cleanup();
 });

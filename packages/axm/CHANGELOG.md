@@ -1,5 +1,11 @@
 # @codai/axiom-axm
 
+## 2.6.1
+
+### Patch Changes
+
+- @codai/axiom-schema@2.6.1
+
 ## 2.6.0
 
 ### Patch Changes
