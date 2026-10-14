@@ -28,7 +28,6 @@ updates:
           - typescript
           - "@types/*"
           - fast-check
-          - "@stryker-mutator/*"
           - tsx
           - "@changesets/*"
       mcp-sdk:

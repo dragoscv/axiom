@@ -15,8 +15,6 @@ catalog:
   "@modelcontextprotocol/client": 2.3.1
   "@modelcontextprotocol/conformance": 0.1.16
   fast-check: 4.10.2
-  "@stryker-mutator/core": 10.0.0
-  "@stryker-mutator/vitest-runner": 10.0.0
   picomatch: 4.0.7
   "@types/picomatch": 4.0.3
   diff: 9.0.0
@@ -50,12 +48,11 @@ allowBuilds:
 
 # Transitive dependencies with published advisories (pnpm audit / OSV, 2026-10-14), lifted to the
 # first patched release inside their current major. None ship in the published packages: they come
-# from dev tooling (changesets, stryker, conformance) and the docs site. Drop an entry once the
+# from dev tooling (changesets, conformance) and the docs site. Drop an entry once the
 # parent depends on the patched range itself.
 overrides:
   shell-quote: ^1.11.0 # GHSA-pqg4-j6r4-53mv (critical) via @changesets/cli > launch-editor
   "@modelcontextprotocol/sdk": ^1.31.0 # GHSA-6qxp-vccf-f47h via @modelcontextprotocol/conformance
-  qs: ^6.16.0 # GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g via stryker > typed-rest-client
   http-cache-semantics: ^4.3.0 # GHSA-ch52-4w7c-c8xp via astro
   source-map-js: ^1.2.2 # GHSA-68fv-2mgg-jv7q via astro > unifont > css-tree
   smol-toml: ^1.9.0 # GHSA-r4xh-jqrq-34v2 via astro

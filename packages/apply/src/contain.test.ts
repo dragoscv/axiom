@@ -94,6 +94,24 @@ describe("resolveContained", () => {
     await fs.symlink(path.join(root, "real"), path.join(root, "inlink"), "junction");
     expect(await codeOf(resolveContained(root, "inlink/x.txt"))).toBe("ERR_SYMLINK_IN_PATH");
   });
+
+  it("refuses when the parent's realpath lies outside rootReal (containment backstop)", async () => {
+    // rootReal must be canonical; a caller that passes an alias (junction/symlink to the real
+    // root) would otherwise resolve parents to a path outside it. The segment walk sees no
+    // symlink below the root, so only the final realpath comparison can catch this.
+    const real = await mkRoot();
+    const holder = await mkRoot();
+    const alias = path.join(holder, "alias");
+    try {
+      await fs.symlink(real, alias, "junction");
+    } catch (err) {
+      const c = (err as { code?: string }).code;
+      if (c === "EPERM" || c === "EACCES") return; // no symlink privilege on this machine
+      throw err;
+    }
+    expect(await codeOf(resolveContained(alias, "new/file.txt"))).toBe("ERR_CONTAINMENT");
+    expect(await codeOf(resolveContained(alias, "file.txt"))).toBe("ERR_CONTAINMENT");
+  });
 });
 
 describe("checkTargetType", () => {

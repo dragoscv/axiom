@@ -1,19 +1,32 @@
-name: Mutation testing
+name: Mutation smoke
 
-# Stryker on the security-relevant, pure code only (canon, apply/contain +
-# write, checks/predicates) — see stryker.config.mjs. Weekly, plus on PRs that
-# touch those paths. Not on every PR: a full run costs ~10× the unit suite.
+# D-38: a fixed catalog of mutants on the write gate's security decisions
+# (containment, symlinks, TOCTOU, confirmDigest, DSSE, JCS, pre-image drift,
+# path.deny, --root) — see scripts/mutation-smoke.mjs. Each mutant must be killed
+# by the owning package's tests; a survivor fails the job. Replaces Stryker, whose
+# Vitest runner is not Vitest-5 aware (stryker-js#6210). Weekly, on pushes to main
+# and on PRs touching the mutated code.
 
 on:
   schedule:
     - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  push:
+    branches: [main]
+    paths:
+      - "packages/canon/src/**"
+      - "packages/apply/src/**"
+      - "packages/checks/src/**"
+      - "packages/mcp/src/roots*.ts"
+      - "scripts/mutation-smoke.mjs"
+      - ".github/workflows/mutation.yml"
   pull_request:
     branches: [main]
     paths:
       - "packages/canon/src/**"
       - "packages/apply/src/**"
       - "packages/checks/src/**"
-      - "stryker.config.mjs"
+      - "packages/mcp/src/roots*.ts"
+      - "scripts/mutation-smoke.mjs"
       - ".github/workflows/mutation.yml"
   workflow_dispatch:
 
@@ -29,9 +42,10 @@ env:
   COREPACK_ENABLE_STRICT: "0"
 
 jobs:
-  stryker:
+  smoke:
+    name: mutation smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,16 +65,5 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Stryker
-        # Informational until stryker-js#6210 (Vitest 5 support) lands; see stryker.config.mjs.
-        continue-on-error: true
-        run: pnpm exec stryker run
-
-      - name: Upload mutation report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: mutation-report
-          path: reports/mutation/
-          if-no-files-found: warn
-          retention-days: 30
+      - name: Mutation smoke (every mutant must be killed)
+        run: node scripts/mutation-smoke.mjs

@@ -6,7 +6,7 @@
 
 - 4009b59: `axiom <verb> --help` (or `-h`) now prints the usage text with exit 0. Before, every verb's strict argument parser rejected it with "Unknown option '--help'" (and `axiom gate --help` reported `AXIOM GATE ERROR`). Dependencies refreshed to the latest stable: zod 4.6.7, vitest 5.0.4.
 - 424297a: Hardening from the first CodeQL (security-extended) scan:
-  
+
   - Linear-time parsing where a regex was polynomial on adversarial input: base64 padding in `blobByteLength` (schema), trailing separators in root containment (mcp), git remote path trimming (apply), and legacy `FAIL name: reason` guard output (checks).
   - No check-then-read window: `repo.read` facts and pre-image hashing read through one file handle, and pre-image / worktree `.git` reads confirm the handle is the same inode `lstat` saw (a swap to a symlink reads as drift, never hashed).
   - `axiom doctor` refuses to probe a daemon whose `~/.axiom/daemon.json` names a non-loopback host, so a tampered state file cannot send the bearer token off the machine (same rule as the hook client).
@@ -26,14 +26,14 @@
 
 - 90def4c: New MCP tool `axiom_write`: a one-tool, two-step transactional write. Call it with `files` (write/delete, utf8/base64, mode) to get a `preview` (manifestDigest, diff, pre-apply checks; nothing outside `.axiom/` touched), then call it again with the same files and `confirmDigest` to apply exactly like `axiom_apply` (journal, two-phase commit, one-step rollback). Pre-images are bound into the digest, so a target changed since the preview fails with `ERR_CONFIRM_DIGEST_MISMATCH`.
 - 90def4c: Phase 8 (D-36, D-37): a gate cheap enough for every tool call, in every harness.
-  
+
   - `axiom serve --hook --root <abs>…` — resident gate daemon on loopback (Origin/Host refusal, optional bearer token, `~/.axiom/daemon.json`). `axiom gate --stdin` (node and SEA) asks it first and falls back to the in-process gate when it gives no verdict; Claude Code can call it as a `type: "http"` hook with `onFailure: "block"` (no process per call, ~4–5 ms).
   - Native thin client `axiom-hook` (Rust, std only) shipped as release assets, in the brew formula and the install scripts; fails closed in the harness's format when neither the daemon nor `axiom` can run.
   - `axiom gate --format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline` and payload support for Cursor, Windsurf/Devin, Codex `apply_patch`, Gemini CLI, Junie and Cline. Cursor `Delete` and Gemini/Cline `replace` tools are now write-class (they were allowed unchecked).
   - `axiom init` / `axiom doctor` cover all nine harnesses; `init --daemon`; doctor checks the daemon, the global bin against gate-profile keys, and VS Code's Copilot hook log for gate runs that ended `NonBlockingError` (advisory denies).
   - Gate profile `steer: off|hint|require` + `steerGlobs` (init writes `hint`) and the new MCP tool `axiom_write` (preview → apply with `confirmDigest`).
   - Gate profile `record: true` → `.axiom/decisions.jsonl`; `axiom attest decisions [--sign]` emits in-toto agent-decision v0.1 Statements (`AGENT_DECISION_V0_1`, `argsHash`, `buildAgentDecisionStatement` in `@codai/axiom-canon`).
-  
+
   A gate profile that uses `steer`, `steerGlobs` or `record` requires axiom ≥ 2.5.0 wherever the hook runs (older gates reject unknown keys and deny every write).
 
 ### Patch Changes
@@ -53,7 +53,7 @@
 
 - 0a80ca7: `axiom doctor` reads `.vscode/mcp.json`, hook files and `.claude/settings.json` as JSONC (comments, trailing commas) — a commented brivio `mcp.json` was reported as "not valid JSON".
 - 3745b9a: `axiom gate --stdin` now actually blocks in VS Code on Windows, stops denying agents that work in sibling worktrees, and answers read-only tools faster (D-35).
-  
+
   - **A deny exits `0` with the JSON document** (`hookSpecificOutput.permissionDecision: "deny"` + flat `permissionDecision`). Previously it exited `2`; the npm `axiom.ps1` shim rewrote that to `1`, and VS Code treats `1` as a non-blocking warning — 129 of 134 production denies in one week let the tool run. Every JSON-aware harness (VS Code, Claude Code, Copilot CLI, Codex, Gemini CLI, Junie) honours the document on exit `0`. `--deny-exit 2` restores the exit-code deny for harnesses that read only the exit code (Windsurf). Usage errors still exit `2`. `axiom doctor` now detects a denied probe from the JSON as well.
   - **Worktree-aware containment**: a write into another worktree of the same repository (same git common dir, verified through the worktree's `gitdir` back-link — read from disk, no `git` spawn) is judged against that worktree's root and gate profile instead of `ERR_CONTAINMENT`. Worktrees of other repositories and forged `.git` files still deny.
   - **Fast path**: read-only tool calls are answered by a zero-dependency module before the gate chunk loads (Windows p50 207 → 141 ms, ≈ node's own start).
@@ -70,7 +70,7 @@
 ### Minor Changes
 
 - 77ebf23: Phase 7 — adoption and the multi-agent promise (D-34, S-701..S-709).
-  
+
   - **`axiom init` / `axiom doctor`** (mcp): one command writes `.vscode/mcp.json` (merged), the PreToolUse hook for the detected harness (Copilot/VS Code file, Claude settings merge, Codex note), a repo profile extending `default`, the gate profile and the `.gitignore` rules — idempotent (`created|merged|updated|skipped`, `--force`). `doctor` checks the global bin, hook wiring (an `npx` hook is a warning), gate p95 against the 5 s harness timeout, lock/journal/chain health, profiles and `.gitignore`; exit 2 on any failure.
   - **Multi-agent roots** (apply): overlapping in-flight manifests fail early with the new `ERR_CONFLICT` (`details.otherDigest`, `details.paths`) instead of a late rollback; the root lock is a fair FIFO queue; `lockTimeoutMs` / `--lock-timeout`; `lockStatus()` + MCP resource `axiom://lock`; `ApplyResult.error.details` (schema) carries machine-readable context.
   - **PR mode in an isolated worktree** (apply): `.axiom/wt/<hex12>` on a new branch from HEAD; the shared working tree's HEAD, index and files are never touched.
@@ -121,7 +121,7 @@
 ### Patch Changes
 
 - 5b9efcd: Standalone binaries, MCP Registry listing and the docs site (Phase 5, D-27…D-31).
-  
+
   - **mcp**: new single-executable entry `src/sea.ts` + `tsdown.sea.config.ts`
     (`pnpm build:sea` → one inlined CommonJS bundle) and `scripts/build-sea.mjs`
     (`node --build-sea`, Node ≥ 25.5). `release.yml` builds `axiom-{linux,darwin}-{x64,arm64}`
@@ -151,7 +151,7 @@
 ### Minor Changes
 
 - 801d29e: Idempotency and error-code hygiene (S-407).
-  
+
   - **apply**: re-applying an already-applied digest whose files drifted now
     proceeds for `create` artifacts too (committed as an overwrite, foreign bytes
     backed up) instead of failing `ERR_EXISTS`; the re-written paths are reported
@@ -176,7 +176,7 @@
     (non-zero exit and timeout), `ERR_SIGNATURE_MISSING`, `ERR_ROLLBACK`.
 - 50900d6: New predicate `expr.cedar` (S-411, D-25): Cedar policies over the same facts
   `expr.cel` sees.
-  
+
   - **checks**: `expr.cedar { policies, mode?: "forbid" | "permit", message?,
     severity? }` runs one Cedar `isAuthorized` request per artifact — principal
     `Axiom::Plan::"<name>"`, action `Axiom::Action::"<op>"`, resource
@@ -200,7 +200,7 @@
     Standard mapping (AXIOM = Guardian on the write channel; `allow`/`deny`
     only) and why OPA/Rego was not chosen.
 - 5382984: Gate v2 (S-404, D-18) — `axiom gate --stdin`:
-  
+
   - **Fail-closed by default.** Malformed payload, empty/oversized/timed-out stdin,
     unreadable profile or any internal error now **deny** (`ERR_INTERNAL`, exit 2)
     with a reason. `--fail-open` restores the 2.1 behaviour; `--strict` is
@@ -226,7 +226,7 @@
   - Measured e2e p50 89 ms / p95 104 ms (15 spawns, Windows, Node 26); gate chunk
     283 KB, still SDK-free.
 - 6928def: MCP SDK v2 and the 2026-07-28 protocol revision (S-405, D-19):
-  
+
   - **SDK v2.** `@modelcontextprotocol/sdk` 1.30 → `@modelcontextprotocol/server` 2.0.0, reached
     through one seam, `src/adapter.ts` (new guard `check-sdk-adapter`: no other runtime module may
     import the SDK; tests may import `@modelcontextprotocol/client`).
@@ -245,13 +245,13 @@
     (`tools-call-simple-text`, `tools-call-error`) moved to `baseline.yml`.
 - c36c818: `content.noSecrets`: PII patterns become opt-in and every pattern gets
   corpus-derived precision (S-414).
-  
+
   Replaying the recent commits of 30 OSS repositories through the `default`
   profile (the codai SWE-harness write gate) rejected real, harmless edits: 110 of
   3240 files matched `email` (maintainer addresses in `pyproject.toml`,
   `git@github.com`, `user@example.com`) and 107 matched `credentialAssignment`
   (`token: str`, `token = var.set(...)`, `token: write`).
-  
+
   - **checks**: new param `pii: boolean` (default `false`). `cnp`, `email`,
     `phoneRo`, `card` run only with `pii: true`; `credentialAssignment`, `awsKey`,
     `githubToken`, `privateKey`, `jwt`, `slackToken` always run.
@@ -264,7 +264,7 @@
     `PII_PATTERN_NAMES` exported.
   - **mcp**: gate profile gains `pii: boolean` (default `false`), forwarded to
     `content.noSecrets`.
-  
+
   **Behaviour change**: a profile that relied on `params: {}` catching e-mails,
   CNPs, Romanian phone numbers or card numbers must set `pii: true` (brivio and
   metu profiles updated alongside this release).
@@ -291,12 +291,12 @@
   `ERR_PREIMAGE_CHANGED`, verdict `error`). `apply` refuses a first apply on a
   drifted tree with `ERR_PREIMAGE_CHANGED` (`details.phase: "prepare"`) before
   staging anything; re-applies of an already-applied digest are exempt.
-  
+
   **Manifest format change**: manifests compiled with a root now carry
   `preImage`; the golden `plan-patch` digest is re-pinned. Manifests compiled
   without a root (no `preImage`) are unchanged (`plan-basic` digest identical).
 - 38ff1c0: Signing hardening (S-409):
-  
+
   - **Root-bound signatures.** New DSSE `payloadType`
     `application/vnd.axiom.manifest-bound+json` signs `JCS({ manifest, rootId })`.
     `TrustStore.rootId` (optional) makes a store accept only envelopes bound to
@@ -318,7 +318,7 @@
     never lives on a developer machine).
   - `ManifestBundle.schema.json` regenerated.
 - 28a39a0: Long-running checks as tasks and chunked plan sessions (S-406, D-24):
-  
+
   - **Tasks (mcp).** `axiom_check_start` runs the same evaluation as `axiom_check` but returns
     immediately as `{ taskId, status: "working", pollIntervalMs, ttlMs }`; `axiom_task_get` polls
     (attaching the `CheckReport` as `result` once `completed`, or `error` once `failed`/`cancelled`);
@@ -384,7 +384,7 @@
 ### Minor Changes
 
 - a483fe8: DSSE signing, key pinning and anti-rollback (PLAN.md S-302 / D-16) — see `docs/signing.md`.
-  
+
   - **canon**: `signEnvelope(body, privateKey)`, `verifyEnvelope(env, trustedKeys)` →
     `{ ok, keyids, payload?, reason? }` with closed reasons `BAD_PAYLOAD_TYPE | NO_SIGNATURES |
     BAD_PAYLOAD | NOT_CANONICAL | UNKNOWN_KEY | BAD_SIGNATURE`; `keyidFor` (= hex sha256 of the raw
@@ -418,12 +418,12 @@
   bump changes `manifestDigest`, while `params` are hashed into `planDigest`. New closed error codes
   `ERR_EMITTER_UNKNOWN`, `ERR_TEMPLATE_UNKNOWN`, `ERR_TEMPLATE_PARAMS` (template sources no longer
   raise `ERR_UNSUPPORTED_OP`).
-  
+
   New package `@codai/axiom-emitters-web`: emitter `web@2.0.0` with seven small deterministic
   golden-stack templates — `next.route-handler`, `next.server-action`, `hono.route`,
   `drizzle.table`, `biome.config`, `tailwind.globals`, `readme.section` — each with strict Zod
   params, a committed golden file and a pinned cross-OS manifest digest. Not an app generator.
-  
+
   `@codai/axiom-mcp` registers `web` in `axiom_plan_compile` / `axiom_plan_validate` and
   `axiom compile`, adds the `axiom emitters [--json]` verb and the static `axiom://emitters`
   resource. No tool input schema changed.
@@ -446,7 +446,7 @@
   to origin + path. `compilePlan` gains `net?: RefNetOptions` (default offline); the manifest keeps
   `origin: "ref"` and ref bytes are never inlined into `blobs`. `apply` is unchanged: CAS or
   `ERR_REF_OFFLINE`.
-  
+
   CLI: `axiom compile … --allow-net [--net-allow host[,host]] [--allow-file]`, and a new
   `axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal]`
   that removes CAS blobs no stored manifest references (plus stale `*.tmp`), under `.axiom/lock`
@@ -456,7 +456,7 @@
   `docs/cas.md`, `docs/plan-format.md` § Ref sources.
 - 40d88ee: `axiom_repo_snapshot` — deterministic, content-addressed inventory of a root (PLAN.md S-304) —
   see `docs/snapshot.md`. Successor of the v1 `reverse-ir`.
-  
+
   - **schema**: `RepoSnapshotSchema` (`{ apiVersion, kind: "RepoSnapshot", root: { kind: "relative" },
     snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind: "file"|"symlink" }],
     truncated, counts: { files, bytes } } }`), `RepoSnapshotBodySchema`, `RepoSnapshotEntrySchema`.
@@ -520,7 +520,7 @@
   duplicate artifact path / unknown capability / Zod issues mapped back to source). `formatAxm(plan)` is the
   deterministic inverse (`parseAxm(formatAxm(p)).plan` deep-equals `p`, property-tested). CRLF input is normalised
   to LF; heredoc terminators must be alone on their line.
-  
+
   `@codai/axiom-mcp`: new read-only tool `axiom_axm_parse { source } → { plan?, diagnostics[] }` and
   `axiom compile <plan.axm>` (parses first; on errors prints diagnostics JSON and exits 2). The parser is a
   lazily imported chunk, so `cli.js + cli-main.js` stay inside the 950 KB budget and cold start is unchanged.
@@ -554,7 +554,7 @@
   `facts.allowGuards` **and** `runChecks` receives `allowGuards: true`; otherwise a single `error`
   finding ("external guards disabled"). `runChecks` executes guard checks in a pool of
   `min(4, os.cpus().length)` and reports the `guard` provider as `ok|skipped|error`.
-  
+
   `@codai/axiom-mcp`: `axiom mcp|check|apply` accept `--allow-guards` and repeatable
   `--guard-allowlist <abs>`, threaded into every `runChecks` call (`createServer(policy, { guards })`).
   Docs: `docs/checks.md` (contract table), `docs/integration/brivio.md` (adapter for `run-guards.mjs`).

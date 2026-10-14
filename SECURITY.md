@@ -123,8 +123,10 @@ shell spawn, no v1 imports, one MCP SDK seam, pinned GitHub Action SHAs, golden
 digest cross-OS comparison, bundle size, cold-start and gate-latency budgets,
 stale-marker and changeset presence, release completeness against the registry.
 Dependabot keeps npm and Actions current; OpenSSF Scorecard runs weekly.
-Mutation testing (Stryker) is configured but informational until its Vitest 5
-runner lands upstream.
+CodeQL (security-extended) scans every push and PR. A blocking mutation smoke
+(`scripts/mutation-smoke.mjs`, workflow `mutation.yml`) flips each security
+decision of the gate — containment, symlinks, TOCTOU, `confirmDigest`, DSSE, JCS,
+pre-image drift, `path.deny`, `--root` — and fails when the tests do not notice.
 
 ## Shipped security features by release
 

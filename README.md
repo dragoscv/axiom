@@ -7,6 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/ci.yml?branch=main&label=CI&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/release.yml?label=release&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/release.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dragoscv/axiom/badge)](https://scorecard.dev/viewer/?uri=github.com/dragoscv/axiom)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15478/badge)](https://www.bestpractices.dev/projects/15478)
 [![license](https://img.shields.io/badge/license-MIT-1c1917)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-dragoscv.github.io%2Faxiom-c2410c)](https://dragoscv.github.io/axiom/)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.dragoscv%2Faxiom-c2410c)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest)
