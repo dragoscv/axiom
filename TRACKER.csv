@@ -109,6 +109,7 @@ S-804,story,8,Dependabot merges + Scorecard pins,done,agent,D-35,#15 + #14 merge
 S-805,story,8,Release v2.4.1 + consumers,done,agent,S-801;S-802;S-803;S-804,9/9 npm 2.4.1; release-complete; codai drops axiom-gate.ps1 workaround; brivio doctor clean,2026-10-14 tag v2.4.1 e5c6965 (re-tagged from 959a2c1 after vsix fix; no src diff); release 38488061730 11/11 green; release-complete 9/9; 7 assets; registry 2.4.1; v2 -> e5c6965; brew 2.4.1; global bin 2.4.1; codai f63874b10 (catalog 2.4.1; axiom-gate.ps1 workaround dropped; doctor ok); brivio doctor mcp.vscode ok; metu doctor clean
 D-37,decision,8,Phase 8 design choices,done,owner,D-36,answer recorded in PLAN.md §1,2026-10-14 loopback HTTP daemon + node client + native Rust axiom-hook + Claude http hook; daemon missing -> in-process gate; steer hint + axiom_write two-step; predicateType = #554 URI; serve requires --root; decision journal + per-harness --format + doctor hook-log
 D-38,decision,10,Owner choices after the reality check,done,owner,D-36,answer recorded in PLAN.md §1,2026-10-14 light ruleset (no force-push/deletion); Code-Review alert dismissed; Best Practices badge; Open VSX namespace claim then OIDC; Stryker replaced by own mutation smoke; v2.6 research first
+D-39,decision,11,v2.6 scope after the adoption study,done,owner,D-38,answer recorded in PLAN.md §1,2026-10-14 all candidates in; P0 as v2.5.2 then v2.6.0; guard cutover after parity test + 1 week shadow mode
 S-901,story,8,Resident gate daemon serve --hook,done,agent,D-37,daemon answers byte-identical to gateMain; loopback/Origin/Host/token checks; cli.ts + SEA fall back in-process on no verdict; latency A/B before/after,2026-10-14 serve.ts + daemon-proto.ts + daemon-client.ts; cli.ts/SEA daemon-first with in-process fallback; serve.test 9/9 (byte-identical vs gateMain across formats; Origin/Host/token/protocol refusals; 40 concurrent calls); e2e 14/14 on built dist; HTTP hook p50 4.1-5.1 ms; spawned clients within load noise of 2.4.1 (A/B min 105 vs 106 ms after lazy node:http)
 S-902,story,8,Native thin client axiom-hook,done,agent,S-901,daemon round trip + shell-free fallback + fail-closed per format; 5 release targets + SHA256SUMS + attestation + brew + installers; CI rust job,2026-10-14 crates/axiom-hook 2.5.0 std-only 326 KB; cargo fmt/clippy -D warnings/test 26+9 green; release.yml builds 5 targets into SHA256SUMS + attestation; brew resource + install.sh/ps1; CI rust job; e2e: daemon + fallback + fail-closed cancel
 S-903,story,8,Gate --format + harness payloads,done,agent,D-37,deny/allow/hint per harness; Cursor/Windsurf/Codex/Gemini/Junie/Cline payloads normalised; Delete + replace write-class,2026-10-14 --format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline; Cursor/Windsurf/Codex/Gemini/Junie/Cline payloads; Delete + replace now write-class; gate.test green
@@ -127,4 +128,21 @@ S-1101,story,10,Light ruleset + Code-Review dismissal + private vuln reporting,d
 S-1102,story,10,OpenSSF Best Practices badge,done,agent,D-38,bestpractices.dev passing; README badge,2026-10-14 project 15478 passing 100 percent; badge endpoint 200; README row added
 S-1103,story,10,Open VSX namespace claim + trusted publishing,blocked,external,D-38,namespace owned; trusted publisher registered; OVSX_PAT deleted,2026-10-14 claim filed EclipseFdn/open-vsx.org#14174 - waiting on Eclipse moderation
 S-1104,story,10,Mutation smoke replaces Stryker,done,agent,D-38,14 of 14 mutants killed; blocking mutation.yml green,2026-10-14 scripts/mutation-smoke.mjs; first run 12 of 14 -> tests contain.test.ts realpath backstop + fsx.test.ts -> 14 of 14; Stryker config/deps/qs override removed
-S-1105,story,10,v2.6 research + scope decision,todo,agent,D-38,ranked candidates with evidence; scope decision recorded,
+S-1105,story,10,v2.6 research + scope decision,done,agent,D-38,ranked candidates with evidence; scope decision recorded,2026-10-14 adoption study (0 gate runs in VS Code / 0 transactions) + harness format research (VS Code source) + market ideas -> D-39
+S-1201,story,11,P0 gate fires in VS Code (v2.5.2 code),done,agent,D-39,hook file uses command/bash/powershell; doctor fails exec-only + silent gate; simulated VS Code deny,2026-10-14 init.ts copilotHook + legacy migration; windsurf/codex exit propagation; claude onFailure block; doctor + hooklog cwd filter; 65 tests; simulated powershell -Command deny rc 0 JSON deny + allow empty
+S-1202,story,11,Release v2.5.2 + re-wire consumers + live deny proof,todo,agent,D-39,deny line in VS Code hook log per consumer,
+S-1203,story,11,Fail-closed audit per harness,todo,agent,D-39,doctor warns on fail-open paths,
+S-1204,story,11,init --upgrade,todo,agent,D-39,record+steer+daemon+global-bin MCP,
+S-1205,story,11,Shell writes + PowerShell matcher,todo,agent,D-39,post-write check recorded,
+S-1206,story,11,Human-only confirmDigest,todo,agent,D-39,elicitation + requiresUserInteraction,
+S-1207,story,11,init --managed,todo,agent,D-39,managed layers written,
+S-1208,story,11,command.deny + house pack,todo,agent,D-39,guard rules ported,
+S-1209,story,11,Cross-session overwrite detection,todo,agent,D-39,deny on foreign recent write,
+S-1210,story,11,undo --session,todo,agent,D-39,session writes restored conflict-aware,
+S-1211,story,11,axiom stats + silent-gate alarm,todo,agent,D-39,stats verb,
+S-1212,story,11,Coordination adapter,todo,agent,D-39,marks/leases/queue facts,
+S-1213,story,11,Git-state facts without git spawn,todo,agent,D-39,clean-tree deploy rule,
+S-1214,story,11,SARIF export,todo,agent,D-39,code scanning upload,
+S-1215,story,11,Blind overwrite guard,todo,agent,D-39,create on unread file denied,
+S-1216,story,11,import-guard + parity + shadow week,todo,agent,D-39,zero diffs for one week,
+S-1217,story,11,OpenTelemetry spans,todo,agent,D-39,opt-in spans,

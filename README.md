@@ -296,6 +296,10 @@ a decision journal attested as in-toto agent-decision statements (`axiom attest 
 **2.5.1** is a hardening patch from the first CodeQL scan (linear-time parsers, open-then-verify
 reads, loopback-only daemon probe in `doctor`), `axiom <verb> --help`, and transitive dependency
 advisories cleared (`pnpm audit` clean).
+**2.5.2** makes the gate actually run in VS Code: `axiom init` now writes
+`.github/hooks/axiom-gate.json` with `command`/`bash`/`powershell` (VS Code ignored the old
+`exec` form) and migrates the old file, Windows hooks propagate the deny exit code, and
+`axiom doctor` fails when the hook log shows the gate never ran.
 codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).

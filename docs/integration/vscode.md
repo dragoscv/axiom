@@ -119,11 +119,23 @@ Install the global bin first (`npm i -g @codai/axiom-mcp` — never `npx` in a h
   "version": 1,
   "hooks": {
     "preToolUse": [
-      { "type": "command", "exec": "axiom", "args": ["gate", "--stdin"], "timeoutSec": 5 }
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --format auto",
+        "bash": "axiom gate --stdin --format auto",
+        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
+      }
     ]
   }
 }
 ```
+
+`axiom init` writes exactly this. VS Code ignores `exec`/`args` entries (Copilot-CLI-only) — the
+file written by axiom ≤ 2.5.1 never ran in VS Code, and `axiom doctor` now fails on it. New or
+changed hook files load after **Developer: Reload Window**; the workspace must be trusted. Check
+it worked in the "GitHub Copilot Chat Hooks" output channel (a `Running: {"command":"axiom…gate…"}`
+line per tool call) or with `axiom doctor` (`hook.log.vscode`).
 
 VS Code sends `tool_name` / `tool_input` in snake_case where the Copilot CLI sends camelCase; the
 gate reads both. Sub-agents started in `apps/web` still resolve the repository root because the

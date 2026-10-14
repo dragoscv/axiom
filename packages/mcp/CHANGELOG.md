@@ -1,5 +1,22 @@
 # @codai/axiom-mcp
 
+## 2.5.2
+
+### Patch Changes
+
+- **The gate now actually runs in VS Code.** `axiom init` wrote `.github/hooks/axiom-gate.json` with an `exec`/`args` entry — a Copilot-CLI-only form that VS Code silently skips (0 gate runs in ~11k VS Code tool calls on 2026-10-14). The file now uses `command` + `bash` + `powershell` (`axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE`), `timeoutSec: 15`, and serves VS Code, Copilot CLI and the Copilot cloud agent from one file. A pre-2.5.2 exec-only file is migrated by `axiom init` without `--force`.
+  
+  - Windsurf/Devin and Codex Windows commands propagate the exit code: PowerShell `-Command` turned the deny exit 2 into 1, so Windsurf never blocked on Windows.
+  - Claude Code hook: `onFailure: "block"` (a crashed/timed-out gate refuses the tool), matcher adds `Bash|PowerShell`, `--format claude`, 15 s timeout.
+  - `axiom doctor` fails `hook.copilot` on an exec-only file, and fails `hook.log.vscode` when VS Code's hook log shows ≥ 20 PreToolUse runs for the workspace but none of them is the gate.
+- @codai/axiom-apply@2.5.2
+  - @codai/axiom-axm@2.5.2
+  - @codai/axiom-canon@2.5.2
+  - @codai/axiom-checks@2.5.2
+  - @codai/axiom-emitters-web@2.5.2
+  - @codai/axiom-plan@2.5.2
+  - @codai/axiom-schema@2.5.2
+
 ## 2.5.1
 
 ### Patch Changes

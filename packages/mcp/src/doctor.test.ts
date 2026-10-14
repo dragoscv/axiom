@@ -446,4 +446,43 @@ describe("axiom doctor — VS Code hook log", () => {
     expect(byId(r, "hook.log.vscode")?.status).toBe("ok");
     expect(byId(r, "hook.log.vscode")?.message).toContain("p95 80 ms");
   });
+
+  const foreignRun = (id: number, cwd: string) =>
+    line(
+      id,
+      "Running",
+      JSON.stringify({ command: "C:/u/.copilot/hooks/hook-pre.ps1", cwd: { fsPath: cwd } }),
+    );
+
+  it("hooks fire for this workspace but the gate never runs → fail (VS Code skipped the file)", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    const lines = Array.from({ length: 25 }, (_, i) => foreignRun(i + 1, repo.root));
+    const c = byId(await runDoctor(base({ hookLogs: await writeLog(lines) })), "hook.log.vscode");
+    expect(c?.status).toBe("fail");
+    expect(c?.message).toMatch(
+      /^25 PreToolUse hook runs for this workspace .* 0 of them the axiom gate/,
+    );
+  });
+
+  it("runs from OTHER workspaces do not trigger the silent-gate failure", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    const lines = Array.from({ length: 25 }, (_, i) => foreignRun(i + 1, home.root));
+    expect(await statusOf("hook.log.vscode", { hookLogs: await writeLog(lines) })).toBeUndefined();
+  });
+});
+
+describe("axiom doctor — copilot hook shape", () => {
+  it("an exec-only axiom-gate.json fails: VS Code never runs it", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    await writeFile(
+      join(repo.root, ".github", "hooks", "axiom-gate.json"),
+      JSON.stringify({
+        version: 1,
+        hooks: { preToolUse: [{ type: "command", exec: "axiom", args: ["gate", "--stdin"] }] },
+      }),
+    );
+    const c = byId(await runDoctor(base()), "hook.copilot");
+    expect(c?.status).toBe("fail");
+    expect(c?.message).toMatch(/only via exec\/args/);
+  });
 });

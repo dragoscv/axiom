@@ -100,7 +100,7 @@ all under the root, each through the containment check (a symlink/junction segme
 | File | When | Content |
 |---|---|---|
 | `.vscode/mcp.json` | always | merges `servers.axiom` (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}`) |
-| `.github/hooks/axiom-gate.json` | copilot or vscode | `preToolUse` hook `axiom gate --stdin`, `timeoutSec: 5` |
+| `.github/hooks/axiom-gate.json` | copilot or vscode | `preToolUse` hook with `command`/`bash` `axiom gate --stdin --format auto` and `powershell` `axiom.cmd … ; exit $LASTEXITCODE`, `timeoutSec: 15` (an exec-only file from ≤ 2.5.1 is migrated) |
 | `.claude/settings.json` | claude | merges a `hooks.PreToolUse` entry (`Write\|Edit\|MultiEdit\|NotebookEdit` → `axiom gate --stdin`, timeout 5) |
 | `.cursor/hooks.json`, `.cursor/mcp.json` | cursor | `preToolUse` + `beforeShellExecution` → `axiom gate --stdin --format cursor`, `failClosed: true`; `mcpServers.axiom` |
 | `.devin/hooks.json` or `.windsurf/hooks.json` | windsurf | `pre_write_code` + `pre_run_command` → `--format windsurf` (exit 2 on deny) |

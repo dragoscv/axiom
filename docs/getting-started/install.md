@@ -76,8 +76,9 @@ version from the CLI you ran it with — the usual cause of "the hook does nothi
 
 Per-OS notes:
 
-- **Windows** — `npm i -g` puts `axiom.cmd` on `PATH` for cmd/pwsh; the hook config uses
-  `"exec": "axiom"` and it resolves. Paths in `--root` may use either slash; the server
+- **Windows** — `npm i -g` puts `axiom.cmd` (and `axiom.ps1`) on `PATH`; the hook config calls
+  `axiom.cmd … ; exit $LASTEXITCODE` in its `powershell` field so the execution policy cannot
+  block the `.ps1` shim and the deny exit code survives. Paths in `--root` may use either slash; the server
   realpaths them (drive letter case and 8.3 names normalise). Directory `fsync` is a no-op and
   `0755` is recorded, not applied — see [apply.md](../guides/apply.md#windows-notes).
 - **macOS** — with Homebrew node, the global bin lands in `/opt/homebrew/bin`; make sure that is

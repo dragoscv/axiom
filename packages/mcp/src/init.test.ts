@@ -19,6 +19,7 @@ import {
   GITIGNORE_LINES,
   geminiHookEntry,
   type HarnessName,
+  HOOK_TIMEOUT_SEC,
   isAxiomGateEntry,
   JUNIE_GUIDELINES_MARKER,
   MCP_SERVER_ENTRY,
@@ -387,5 +388,61 @@ describe("axiom init — every harness", () => {
 
   it("the gate profile opts into steering hints", () => {
     expect(GATE_PROFILE.steer).toBe("hint");
+  });
+
+  it("copilot hook is visible to VS Code: command + bash + powershell, no exec (2.5.2)", () => {
+    for (const doc of [COPILOT_HOOK, COPILOT_HOOK_DAEMON]) {
+      const e = (doc.hooks as { preToolUse: Record<string, unknown>[] }).preToolUse[0] ?? {};
+      expect(e.exec).toBeUndefined();
+      expect(e.args).toBeUndefined();
+      expect(String(e.command)).toMatch(/gate --stdin --format auto$/);
+      expect(String(e.bash)).toMatch(/gate --stdin --format auto$/);
+      // PowerShell -Command maps exit 2 (the deny) to 1 unless the code is propagated.
+      expect(String(e.powershell)).toMatch(
+        /^axiom(\.cmd|-hook\.exe) gate .*; exit \$LASTEXITCODE$/,
+      );
+      expect(e.timeoutSec).toBe(HOOK_TIMEOUT_SEC);
+    }
+  });
+
+  it("migrates a pre-2.5.2 exec-only axiom-gate.json without --force; leaves foreign files alone", async () => {
+    await mkdir(join(repo.root, ".github", "hooks"), { recursive: true });
+    const legacy = {
+      version: 1,
+      hooks: {
+        preToolUse: [{ type: "command", exec: "axiom", args: ["gate", "--stdin"], timeoutSec: 5 }],
+      },
+    };
+    await writeFile(join(repo.root, ".github/hooks/axiom-gate.json"), JSON.stringify(legacy));
+    const r = await runInit({ root: repo.root, profileName: "demo" });
+    expect(r.files.find((f) => f.path === ".github/hooks/axiom-gate.json")).toMatchObject({
+      action: "updated",
+    });
+    expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK);
+    // A hand-written file with command fields is not ours to rewrite.
+    const mine = { version: 1, hooks: { preToolUse: [{ type: "command", command: "guard.ps1" }] } };
+    await writeFile(join(repo.root, ".github/hooks/axiom-gate.json"), JSON.stringify(mine));
+    const again = await runInit({ root: repo.root, profileName: "demo" });
+    expect(again.files.find((f) => f.path === ".github/hooks/axiom-gate.json")?.action).toBe(
+      "skipped",
+    );
+  });
+
+  it("windsurf + codex Windows commands propagate the exit code (exit 2 = block)", () => {
+    const w = windsurfHooks() as { hooks: Record<string, { powershell: string }[]> };
+    expect(w.hooks.pre_write_code?.[0]?.powershell).toBe(
+      "axiom.cmd gate --stdin --format windsurf; exit $LASTEXITCODE",
+    );
+    const c = codexHookEntry() as { hooks: { commandWindows: string }[] };
+    expect(c.hooks[0]?.commandWindows).toMatch(/; exit \$LASTEXITCODE$/);
+  });
+
+  it("claude command hook fails closed and covers shell tools", () => {
+    expect(CLAUDE_HOOK_ENTRY.matcher).toBe("Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell");
+    expect(CLAUDE_HOOK_ENTRY.hooks[0]).toMatchObject({
+      onFailure: "block",
+      timeout: HOOK_TIMEOUT_SEC,
+    });
+    expect(CLAUDE_HOOK_ENTRY.hooks[0]?.command).toBe("axiom gate --stdin --format claude");
   });
 });

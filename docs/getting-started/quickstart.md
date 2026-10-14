@@ -33,8 +33,8 @@ to copilot + vscode when none exists.
 | File | Written for | How |
 |---|---|---|
 | `.vscode/mcp.json` | every harness | merged: adds `servers.axiom` (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}`), keeps every other server |
-| `.github/hooks/axiom-gate.json` | copilot, vscode | whole file: `preToolUse` → `exec: "axiom"`, `args: ["gate", "--stdin"]`, `timeoutSec: 5` ([hooks.md](hooks.md#wiring)) |
-| `.claude/settings.json` | claude | merged: appends one `hooks.PreToolUse` entry (`matcher: "Write\|Edit\|MultiEdit\|NotebookEdit"`, `axiom gate --stdin`, `timeout: 5`), keeps the rest |
+| `.github/hooks/axiom-gate.json` | copilot, vscode | whole file: `preToolUse` → `command`/`bash` `axiom gate --stdin --format auto`, `powershell` `axiom.cmd … ; exit $LASTEXITCODE`, `timeoutSec: 15` ([hooks.md](hooks.md#wiring)) |
+| `.claude/settings.json` | claude | merged: appends one `hooks.PreToolUse` entry (`matcher: "Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|PowerShell"`, `axiom gate --stdin --format claude`, `timeout: 15`, `onFailure: "block"`), keeps the rest |
 | — | codex | nothing: Codex has no PreToolUse hook API; `init` prints a note pointing at [harnesses.md § Codex](../integration/harnesses.md#codex) |
 | `.axiom/profiles/<name>.json` | always | whole file: a repo profile `extends: "default"` with `repo.noOverwriteOf` (`.git/**`, `.axiom/**`, `.github/**`, lockfiles, `.env*`), `content.noSecrets`, `path.deny` (`node_modules`, `.next`, `dist`, `.turbo`) |
 | `.axiom/gate-profile.json` | always | whole file: the gate's deny list, `noSecrets: true`, `pii: false`, `maxBytes: 262144` ([hooks.md § Profile file](hooks.md#profile-file)) |

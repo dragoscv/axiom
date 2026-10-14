@@ -26,6 +26,8 @@ export interface HookRun {
   id: string;
   event: string;
   command: string;
+  /** Workspace folder of the hook (`cwd.fsPath` in the Running document), when present. */
+  cwd?: string;
   /** Seconds, as declared in the Running document. */
   timeoutSec?: number;
   outcome?: string;
@@ -40,16 +42,31 @@ export interface HookLogStats {
   nonBlockingErrors: number;
   denies: number;
   timeouts: number;
+  /** Every PreToolUse hook run (any command): proves hooks fire at all. */
+  preToolUseRuns: number;
 }
 
 const LINE_RE = /\[#([^\]]+)\]\s+\[([^\]]+)\]\s+(Running|Output|Completed)(?::\s?|\s+)(.*)$/;
 const COMPLETED_RE = /^\(([^)]+)\)\s+in\s+(\d+(?:\.\d+)?)ms/;
 
-function parseRunning(rest: string): { command: string; timeoutSec?: number } {
+function parseRunning(rest: string): { command: string; timeoutSec?: number; cwd?: string } {
   try {
-    const doc = JSON.parse(rest) as { command?: unknown; timeout?: unknown };
+    const doc = JSON.parse(rest) as { command?: unknown; timeout?: unknown; cwd?: unknown };
     const command = typeof doc.command === "string" ? doc.command : rest;
-    return typeof doc.timeout === "number" ? { command, timeoutSec: doc.timeout } : { command };
+    const cwdRaw = doc.cwd;
+    const cwd =
+      typeof cwdRaw === "string"
+        ? cwdRaw
+        : typeof cwdRaw === "object" &&
+            cwdRaw !== null &&
+            typeof (cwdRaw as { fsPath?: unknown }).fsPath === "string"
+          ? (cwdRaw as { fsPath: string }).fsPath
+          : undefined;
+    return {
+      command,
+      ...(typeof doc.timeout === "number" ? { timeoutSec: doc.timeout } : {}),
+      ...(cwd === undefined ? {} : { cwd }),
+    };
   } catch {
     return { command: rest };
   }
@@ -104,7 +121,24 @@ export function summarizeRuns(runs: readonly HookRun[]): HookLogStats {
     timeouts: gate.filter(
       (r) => r.ms !== undefined && r.timeoutSec !== undefined && r.ms >= r.timeoutSec * 1000,
     ).length,
+    preToolUseRuns: runs.filter((r) => r.event === "PreToolUse").length,
   };
+}
+
+/** Case-insensitive on win32 path equality for `cwd` filtering (`e:\gh\x` vs `E:\gh\x`). */
+function samePathLoose(a: string, b: string): boolean {
+  const n = (p: string) => {
+    const s = path.resolve(p);
+    let end = s.length;
+    while (end > 1 && (s[end - 1] === "/" || s[end - 1] === "\\")) end--;
+    return s.slice(0, end).toLowerCase();
+  };
+  return n(a) === n(b);
+}
+
+/** Only the runs whose workspace is `root` (runs without a cwd are kept: they may be ours). */
+export function runsForRoot(runs: readonly HookRun[], root: string): HookRun[] {
+  return runs.filter((r) => r.cwd === undefined || samePathLoose(r.cwd, root));
 }
 
 /** Axiom gate statistics for one log text (pure). */
@@ -193,7 +227,10 @@ export async function readTail(abs: string, maxBytes = HOOK_LOG_MAX_BYTES): Prom
 }
 
 /** Parse every file (tail-capped) and merge the runs into one summary. */
-export async function readHookLogStats(files: readonly string[]): Promise<HookLogStats> {
+export async function readHookLogStats(
+  files: readonly string[],
+  root?: string,
+): Promise<HookLogStats> {
   const runs: HookRun[] = [];
   for (const f of files) {
     try {
@@ -202,5 +239,5 @@ export async function readHookLogStats(files: readonly string[]): Promise<HookLo
       // unreadable (rotated / locked) — skip
     }
   }
-  return summarizeRuns(runs);
+  return summarizeRuns(root === undefined ? runs : runsForRoot(runs, root));
 }

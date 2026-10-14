@@ -86,30 +86,78 @@ export const GITIGNORE_LINES = [".axiom/*", "!.axiom/profiles/", "!.axiom/gate-p
 /** A hook command that runs the gate through the global bin or the native thin client. */
 export const GATE_COMMAND_RE = /\baxiom(?:-hook)?\b.*\bgate\b/;
 
+/**
+ * Seconds a hook may take. Every harness that documents a timeout lets the tool run when it
+ * fires (fail-open), and a cold Windows PowerShell start alone can exceed 5 s under load.
+ */
+export const HOOK_TIMEOUT_SEC = 15;
+
+export type GateBin = "axiom" | "axiom-hook";
+
+export function gateCommand(bin: GateBin, format: string): string {
+  return `${bin} gate --stdin --format ${format}`;
+}
+
+/**
+ * The same command for a harness that runs it through `powershell -Command` on Windows
+ * (VS Code Local, Windsurf/Devin, Codex): call the `.cmd` shim/exe explicitly — a bare name
+ * resolves to npm's `axiom.ps1`, which may be blocked by execution policy — and propagate the
+ * exit code, because `-Command` turns any code other than 0/1 into 1 and exit 2 IS the deny.
+ */
+export function gateCommandPowerShell(bin: GateBin, format: string): string {
+  const exe = bin === "axiom" ? "axiom.cmd" : "axiom-hook.exe";
+  return `${exe} gate --stdin --format ${format}; exit $LASTEXITCODE`;
+}
+
+/**
+ * `.github/hooks/axiom-gate.json` — read by VS Code (Local harness and Agent Host), Copilot CLI
+ * and the Copilot cloud agent. VS Code only understands `command` / `bash` / `powershell`
+ * (`exec`/`args` is Copilot-CLI-only and made VS Code skip the hook silently — 0 gate runs in
+ * ~11k tool calls, 2026-10-14). `bash` serves POSIX and the Linux cloud agent; `--format auto`
+ * answers each harness in its own shape.
+ */
+export function copilotHook(bin: GateBin = "axiom"): Record<string, unknown> {
+  return {
+    version: 1,
+    hooks: {
+      preToolUse: [
+        {
+          type: "command",
+          command: gateCommand(bin, "auto"),
+          bash: gateCommand(bin, "auto"),
+          powershell: gateCommandPowerShell(bin, "auto"),
+          timeoutSec: HOOK_TIMEOUT_SEC,
+        },
+      ],
+    },
+  };
+}
+
 /** Global bin, never `npx` — `npx` resolution alone exceeds every harness hook timeout (hooks.md). */
-export const COPILOT_HOOK = {
-  version: 1,
-  hooks: {
-    preToolUse: [{ type: "command", exec: "axiom", args: ["gate", "--stdin"], timeoutSec: 5 }],
-  },
-};
+export const COPILOT_HOOK = copilotHook("axiom");
 
 /** `--daemon`: same document, the native thin client (falls back to in-process `axiom gate`). */
-export const COPILOT_HOOK_DAEMON = {
-  version: 1,
-  hooks: {
-    preToolUse: [{ type: "command", exec: "axiom-hook", args: ["gate", "--stdin"], timeoutSec: 5 }],
-  },
-};
+export const COPILOT_HOOK_DAEMON = copilotHook("axiom-hook");
 
+/** File tools + shell (Claude names it `PowerShell` on Windows without Git Bash). */
+export const CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell";
+
+/** `onFailure: "block"` (Claude Code ≥ 2.1.295): a crashed or timed-out gate refuses the tool. */
 export const CLAUDE_HOOK_ENTRY = {
-  matcher: "Write|Edit|MultiEdit|NotebookEdit",
-  hooks: [{ type: "command", command: "axiom gate --stdin", timeout: 5 }],
+  matcher: CLAUDE_MATCHER,
+  hooks: [
+    {
+      type: "command",
+      command: gateCommand("axiom", "claude"),
+      timeout: HOOK_TIMEOUT_SEC,
+      onFailure: "block",
+    },
+  ],
 };
 
 /** `--daemon`: Claude posts the payload to the resident daemon; `onFailure: block` = fail-closed. */
 export const CLAUDE_HTTP_HOOK_ENTRY = {
-  matcher: "Write|Edit|MultiEdit|NotebookEdit",
+  matcher: CLAUDE_MATCHER,
   hooks: [
     {
       type: "http",
@@ -146,12 +194,6 @@ export const CODEX_MCP_TOML = [
   'args = ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "."]',
 ];
 
-export type GateBin = "axiom" | "axiom-hook";
-
-export function gateCommand(bin: GateBin, format: string): string {
-  return `${bin} gate --stdin --format ${format}`;
-}
-
 export function cursorHooks(bin: GateBin = "axiom"): Record<string, unknown> {
   const command = gateCommand(bin, "cursor");
   return {
@@ -165,10 +207,12 @@ export function cursorHooks(bin: GateBin = "axiom"): Record<string, unknown> {
 
 export function windsurfHooks(bin: GateBin = "axiom"): Record<string, unknown> {
   const command = gateCommand(bin, "windsurf");
+  // Only exit 2 blocks in Windsurf/Devin; on Windows the command runs via `powershell -Command`.
+  const powershell = gateCommandPowerShell(bin, "windsurf");
   return {
     hooks: {
-      pre_write_code: [{ command, powershell: command }],
-      pre_run_command: [{ command, powershell: command }],
+      pre_write_code: [{ command, powershell }],
+      pre_run_command: [{ command, powershell }],
     },
   };
 }
@@ -181,7 +225,7 @@ export function codexHookEntry(bin: GateBin = "axiom"): Record<string, unknown> 
       {
         type: "command",
         command,
-        commandWindows: command,
+        commandWindows: gateCommandPowerShell(bin, "codex"),
         timeout: 10,
         statusMessage: "AXIOM gate",
       },
@@ -446,6 +490,12 @@ class Writer {
    * Append-only text file (TOML, Markdown): when `marker` is absent, append `block`; never
    * rewrite existing content (we cannot round-trip TOML/Markdown edits safely).
    */
+  /** Overwrite a file we own and know to be broken (no `--force` needed). */
+  async replaceOwned(rel: string, text: string, reason: string): Promise<void> {
+    await this.write(rel, text);
+    this.record(rel, "updated", reason);
+  }
+
   async appendBlock(rel: string, marker: RegExp, block: readonly string[]): Promise<void> {
     await resolveContained(this.root, rel);
     const current = await readOrUndefined(path.join(this.root, rel));
@@ -558,6 +608,29 @@ function mergeMcp(doc: Record<string, unknown>, force: boolean): Merge {
 /** Flat hook entry (`{command, …}`: Cursor, Windsurf) that runs the gate. */
 export function isFlatGateEntry(v: unknown): boolean {
   return isRecord(v) && typeof v.command === "string" && GATE_COMMAND_RE.test(v.command);
+}
+
+/** A Copilot-format entry that ONLY uses `exec`/`args` (Copilot CLI) — invisible to VS Code. */
+export function isExecOnlyGateEntry(v: unknown): boolean {
+  if (!isRecord(v) || typeof v.exec !== "string") return false;
+  if (v.command !== undefined || v.bash !== undefined || v.powershell !== undefined) return false;
+  const args = Array.isArray(v.args)
+    ? v.args.filter((a): a is string => typeof a === "string")
+    : [];
+  return GATE_COMMAND_RE.test([v.exec, ...args].join(" "));
+}
+
+/** `.github/hooks/axiom-gate.json` written by axiom < 2.5.2: every preToolUse entry is exec-only. */
+export async function isLegacyExecHook(abs: string): Promise<boolean> {
+  const text = await readOrUndefined(abs);
+  if (text === undefined) return false;
+  try {
+    const doc = JSON.parse(text) as unknown;
+    const list = isRecord(doc) && isRecord(doc.hooks) ? doc.hooks.preToolUse : undefined;
+    return Array.isArray(list) && list.length > 0 && list.every(isExecOnlyGateEntry);
+  } catch {
+    return false;
+  }
 }
 
 /** Claude-style hook hit `{hooks:[…]}`: a gate command (`axiom` / `axiom-hook`) or the daemon http hook. */
@@ -693,7 +766,16 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   await w.mergeJson(INIT_FILES.mcp, () => ({ servers: { axiom: MCP_SERVER_ENTRY } }), mergeMcp);
   if (has("copilot") || has("vscode")) {
-    await w.owned(INIT_FILES.copilotHook, json(daemon ? COPILOT_HOOK_DAEMON : COPILOT_HOOK));
+    const text = json(daemon ? COPILOT_HOOK_DAEMON : COPILOT_HOOK);
+    if (await isLegacyExecHook(path.join(root, INIT_FILES.copilotHook))) {
+      await w.replaceOwned(
+        INIT_FILES.copilotHook,
+        text,
+        "migrated exec-only hook (VS Code ignored it)",
+      );
+    } else {
+      await w.owned(INIT_FILES.copilotHook, text);
+    }
   }
   if (has("claude")) {
     const entry = daemon ? CLAUDE_HTTP_HOOK_ENTRY : CLAUDE_HOOK_ENTRY;

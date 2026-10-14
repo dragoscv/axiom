@@ -220,13 +220,22 @@ the decision too. The stderr line is what the model sees as the reason.
   crash / non-zero exit) is a **deny**; stdout JSON `{permissionDecision, permissionDecisionReason}`
   is merged into the deny. **Command-hook timeouts always fail open**. Hook files are
   `.github/hooks/*.json` (repo) or `~/.copilot/hooks/*.json` (user), `{"version":1,"hooks":{"preToolUse":[…]}}`,
-  entries `{"type":"command","bash":…,"powershell":…}` or `{"type":"command","exec":…,"args":[…]}`,
-  `timeoutSec`. There is **no matcher** — the hook fires on every tool call and must filter on
+  entries `{"type":"command","bash":…,"powershell":…,"command":…}` or
+  `{"type":"command","exec":…,"args":[…]}` — **`exec`/`args` is Copilot-CLI-only**, VS Code ignores
+  such an entry entirely — plus `timeoutSec`. There is **no matcher** — the hook fires on every tool call and must filter on
   `toolName` itself (the gate does: non-write tools return in well under a millisecond).
 - **VS Code agent hooks** (`code.visualstudio.com/docs/copilot/customization/hooks`, Preview):
   VS Code loads `.github/hooks/*.json` from the workspace **and** `.claude/settings.json`, plus user
-  `~/.copilot/hooks` and `~/.claude/settings.json`. Event is `PreToolUse` with
-  `{"type":"command","command":"…","timeoutSec":N}`. Observed 2026-08-31 in the house guard
+  `~/.copilot/hooks` and `~/.claude/settings.json`. The Local harness reads only `command`,
+  `windows`/`linux`/`osx`, or the Copilot `bash`/`powershell` fields (mapped to linux+osx/windows;
+  `timeoutSec` → `timeout`, default 30 s). **An `exec`-only entry has no command for VS Code and is
+  skipped without a warning** — axiom ≤ 2.5.1 wrote exactly that, and the gate ran 0 times in
+  ~11k VS Code tool calls (2026-10-14). On Windows the command runs as
+  `powershell.exe -ExecutionPolicy Bypass -NoProfile -NoLogo -Command …`: a bare `axiom` resolves to
+  npm's `axiom.ps1`, and `-Command` turns every exit code except 0/1 into 1 — hence
+  `axiom.cmd … ; exit $LASTEXITCODE`. Timeouts, launch failures and exit codes other than 0/2 are
+  non-blocking warnings (fail-open). Workspace hook files need Workspace Trust and `chat.useHooks`
+  (on by default); new files load on window reload. Observed 2026-08-31 in the house guard
   (`~/.copilot/hooks/guard-tooluse.ps1`): VS Code sends **`tool_name` / `tool_input`** (snake_case),
   while the CLI sends camelCase — reading only one casing silently failed open 790 times. The gate
   reads both.
@@ -244,11 +253,11 @@ in a hook file — and `axiom doctor` checks them afterwards:
 
 | Harness | File `axiom init` writes | How |
 |---|---|---|
-| Copilot CLI · VS Code | `.github/hooks/axiom-gate.json` | whole file, exactly the first JSON block below; an existing different file is `skipped (exists)` unless `--force` |
-| Claude Code | `.claude/settings.json` | merged: the Claude entry below is appended to `hooks.PreToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
+| Copilot CLI · VS Code · Copilot cloud agent | `.github/hooks/axiom-gate.json` | whole file, exactly the JSON block below; an existing different file is `skipped (exists)` unless `--force` — except the exec-only file written by axiom ≤ 2.5.1, which is migrated automatically |
+| Claude Code | `.claude/settings.json` | merged: the Claude entry below (matcher incl. `Bash\|PowerShell`, `onFailure: "block"`) is appended to `hooks.PreToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
 | Cursor | `.cursor/hooks.json` + `.cursor/mcp.json` | `preToolUse` (`Write\|Delete\|Shell`) + `beforeShellExecution`, `--format cursor`, `failClosed: true` |
-| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | `pre_write_code` + `pre_run_command`, `--format windsurf` (exit 2) |
-| Codex | `.codex/hooks.json` + `.codex/config.toml` | `PreToolUse` matcher `^(Bash\|apply_patch\|Edit\|Write)$`, `--format codex`; TOML `[mcp_servers.axiom]` appended only when absent |
+| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | `pre_write_code` + `pre_run_command`, `--format windsurf` (exit 2); the Windows `powershell` field ends `; exit $LASTEXITCODE` — without it PowerShell turned exit 2 into 1 and no deny blocked |
+| Codex | `.codex/hooks.json` + `.codex/config.toml` | `PreToolUse` matcher `^(Bash\|apply_patch\|Edit\|Write)$`, `--format codex` (`commandWindows` propagates the exit code); TOML `[mcp_servers.axiom]` appended only when absent |
 | Gemini CLI | `.gemini/settings.json` | `hooks.BeforeTool` (`write_file\|replace\|run_shell_command`, timeout in ms) + `mcpServers.axiom` |
 | Junie | `.junie/mcp/mcp.json` (+ `.junie/guidelines.md` section) | hooks run only from the user's `~/.junie/config.json` — `init` prints the snippet |
 | Cline | `.clinerules/hooks/PreToolUse` (sh, 0755) + `PreToolUse.ps1` | both print a `cancel` document when `axiom` cannot run (Cline has no fail-closed); tick "Enable Hooks" |
@@ -259,7 +268,9 @@ Details and the exact snippets per harness: [integration/harnesses.md](../integr
 `axiom doctor` reports `hook.<harness>` as `ok` only when the file has an entry that runs
 `axiom gate --stdin` / `axiom-hook gate --stdin` (or the Claude HTTP hook) **without** `npx` — an
 `npx` entry is a `warn` because it will time out; a Cursor entry without `failClosed: true` is a
-`warn`. It checks the resident daemon (`daemon`: health, and whether this root is one of its
+`warn`; an **exec-only** `.github/hooks/axiom-gate.json` is a `fail` (VS Code never runs it). It
+also fails `hook.log.vscode` when VS Code's hook log shows ≥ 20 PreToolUse runs **for this
+workspace** and none of them is the gate — proof the file is not being loaded. It checks the resident daemon (`daemon`: health, and whether this root is one of its
 roots), the global bin against the gate profile (`bin.profile`: a profile using `steer`/`record`
 with a global bin < 2.5.0 is a `fail` — the old strict schema denies every write), and reads VS
 Code's own "GitHub Copilot Chat Hooks.log" (`hook.log.vscode`): gate runs that ended
@@ -279,25 +290,19 @@ is a `warn` pointing at `gate-profile.json`.
     "preToolUse": [
       {
         "type": "command",
-        "exec": "axiom",
-        "args": ["gate", "--stdin"],
-        "timeoutSec": 5
+        "command": "axiom gate --stdin --format auto",
+        "bash": "axiom gate --stdin --format auto",
+        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
       }
     ]
   }
 }
 ```
 
-Or, mirroring the shell form used by the other house hooks (same bin, resolved through the shell):
-
-```json
-{
-  "type": "command",
-  "bash": "axiom gate --stdin",
-  "powershell": "axiom gate --stdin",
-  "timeoutSec": 5
-}
-```
+One file serves VS Code (Local harness and Agent Host), Copilot CLI and the Linux cloud agent.
+Do **not** use `exec`/`args`: only Copilot CLI honours it. `--daemon` writes the same entry with
+`axiom-hook` / `axiom-hook.exe`.
 
 ### Claude Code — `.claude/settings.json` (project) or `~/.claude/settings.json`
 

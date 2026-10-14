@@ -51,8 +51,8 @@ Devin's `mcp_config.json`):
 | Harness | Hook | MCP entry |
 |---|---|---|
 | Claude Code | `.claude/settings.json` — the `PreToolUse` entry from [§ Claude Code](#claude-code) merged in | `.vscode/mcp.json` (add `.mcp.json` by hand for the Claude CLI) |
-| Copilot CLI | `.github/hooks/axiom-gate.json` — exactly the `exec`/`args` file from [§ Copilot CLI](#copilot-cli) | `.vscode/mcp.json` (the CLI reads `~/.copilot/mcp-config.json`; add it there by hand) |
-| VS Code | `.github/hooks/axiom-gate.json` (VS Code loads it) | `.vscode/mcp.json` — `servers.axiom` merged in, `npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` |
+| Copilot CLI | `.github/hooks/axiom-gate.json` — the `command`/`bash`/`powershell` file from [§ Copilot CLI](#copilot-cli) | `.vscode/mcp.json` (the CLI reads `~/.copilot/mcp-config.json`; add it there by hand) |
+| VS Code | `.github/hooks/axiom-gate.json` (same file — VS Code ignores `exec`-only entries) | `.vscode/mcp.json` — `servers.axiom` merged in, `npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` |
 | Codex | `.codex/hooks.json` — `PreToolUse` merged in ([§ Codex](#codex)) | `.codex/config.toml` — `[mcp_servers.axiom]` appended only when absent |
 | Cursor | `.cursor/hooks.json` — `preToolUse` + `beforeShellExecution`, `failClosed: true` | `.cursor/mcp.json` |
 | Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | user-level only — a note |
@@ -177,14 +177,20 @@ exit `2` with schema-invalid JSON still blocks. A timed-out hook does **not** bl
   "version": 1,
   "hooks": {
     "preToolUse": [
-      { "type": "command", "exec": "axiom", "args": ["gate", "--stdin"], "timeoutSec": 5 }
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --format auto",
+        "bash": "axiom gate --stdin --format auto",
+        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
+      }
     ]
   }
 }
 ```
 
-Or the shell form used by other house hooks:
-`{ "type": "command", "bash": "axiom gate --stdin", "powershell": "axiom gate --stdin", "timeoutSec": 5 }`.
+`exec`/`args` also works in Copilot CLI but makes VS Code skip the entry silently, so `init`
+(≥ 2.5.2) never writes it and migrates the old exec-only file.
 There is **no matcher** — the hook fires on every tool call and must be cheap for non-writes (the
 gate returns in well under a millisecond for `grep_search`, `list_dir`, …). `toolArgs` arrives as
 a JSON *string*; the gate parses it. Any non-zero exit or crash is a deny, so fail-closed costs
@@ -211,8 +217,10 @@ callbacks.
 ```
 
 **Hook** — VS Code loads `.github/hooks/*.json` from the workspace **and** `.claude/settings.json`,
-plus the user-level `~/.copilot/hooks` and `~/.claude/settings.json`, so either of the two files
-above works unchanged. Event `PreToolUse`, entry `{ "type": "command", "command": "axiom gate --stdin", "timeoutSec": 5 }`.
+plus the user-level `~/.copilot/hooks` and `~/.claude/settings.json`, so the Copilot file above
+works unchanged (`powershell` maps to Windows, `bash` to Linux/macOS, `command` is the fallback).
+On Windows VS Code runs it through `powershell.exe -Command`, which is why the entry calls
+`axiom.cmd` and ends `; exit $LASTEXITCODE` (otherwise exit 2 becomes 1, a non-blocking warning).
 Observed 2026-08-31: VS Code sends **`tool_name` / `tool_input`** (snake_case) while the CLI sends
 camelCase — a hook that read only one casing silently failed open 790 times; the gate reads both.
 Sub-agents start in sub-directories (`apps/web`); the gate walks up to the repository root so

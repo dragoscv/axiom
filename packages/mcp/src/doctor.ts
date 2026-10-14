@@ -26,6 +26,7 @@ import {
   GITIGNORE_LINES,
   INIT_FILES,
   isAxiomGateHook,
+  isExecOnlyGateEntry,
 } from "./init.js";
 import { realDir } from "./roots.js";
 
@@ -254,6 +255,13 @@ function copilotHookWired(doc: unknown): boolean {
   });
 }
 
+/** Every gate entry is exec-only: VS Code (command/bash/powershell only) never runs it. */
+function copilotHookExecOnly(doc: unknown): boolean {
+  if (!isRecord(doc) || !isRecord(doc.hooks) || !Array.isArray(doc.hooks.preToolUse)) return false;
+  const gate = doc.hooks.preToolUse.filter((h) => copilotHookWired({ hooks: { preToolUse: [h] } }));
+  return gate.length > 0 && gate.every(isExecOnlyGateEntry);
+}
+
 function hookList(doc: unknown, event: string): unknown[] {
   if (!isRecord(doc) || !isRecord(doc.hooks)) return [];
   const list = doc.hooks[event];
@@ -467,6 +475,17 @@ async function checkHooks(
         check(f.id, "fail", `${f.rel}: ${r.error}`, "fix the JSON or re-run `axiom init --force`"),
       );
     } else if (f.wired(r.doc)) {
+      if (f.id === "hook.copilot" && copilotHookExecOnly(r.doc)) {
+        out.push(
+          check(
+            f.id,
+            "fail",
+            `${f.rel} runs the gate only via exec/args — Copilot CLI honours that, VS Code ignores the entry and never runs the gate`,
+            "axiom init (2.5.2+ migrates it) or add command/bash/powershell fields",
+          ),
+        );
+        continue;
+      }
       out.push(check(f.id, "ok", `${f.rel} runs the axiom gate`));
       const extra = f.extra?.(r.doc);
       if (extra !== undefined) out.push(extra);
@@ -654,7 +673,14 @@ function hookLogCheck(s: HookLogStats): DoctorCheck {
   return check("hook.log.vscode", "ok", base);
 }
 
-async function checkHookLog(opts: DoctorOptions): Promise<DoctorCheck | undefined> {
+/** Hooks fire for this workspace, yet the axiom gate is not among them → it is not wired. */
+const GATE_SILENT_MIN_RUNS = 20;
+
+async function checkHookLog(
+  opts: DoctorOptions,
+  root: string,
+  copilotWired: boolean,
+): Promise<DoctorCheck | undefined> {
   const files =
     opts.hookLogs ??
     (await findHookLogs({
@@ -663,8 +689,17 @@ async function checkHookLog(opts: DoctorOptions): Promise<DoctorCheck | undefine
       ...(opts.platform === undefined ? {} : { platform: opts.platform }),
     }));
   if (files.length === 0) return undefined;
-  const stats = await readHookLogStats(files);
-  return stats.runs === 0 ? undefined : hookLogCheck(stats);
+  const stats = await readHookLogStats(files, root);
+  if (stats.runs > 0) return hookLogCheck(stats);
+  if (copilotWired && stats.preToolUseRuns >= GATE_SILENT_MIN_RUNS) {
+    return check(
+      "hook.log.vscode",
+      "fail",
+      `${stats.preToolUseRuns} PreToolUse hook runs for this workspace in the newest VS Code log session, 0 of them the axiom gate — VS Code is not running ${INIT_FILES.copilotHook}`,
+      "axiom init (2.5.2+ writes command/bash/powershell), trust the workspace, then Developer: Reload Window",
+    );
+  }
+  return undefined;
 }
 
 async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
@@ -805,8 +840,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
   checks.push(checkBin(opts, bin));
   const steer = await checkSteerCompat(root, bin);
   if (steer !== undefined) checks.push(steer);
-  checks.push(...(await checkHooks(root, home, platform)));
-  const hookLog = await checkHookLog(opts);
+  const hookChecks = await checkHooks(root, home, platform);
+  checks.push(...hookChecks);
+  const copilotWired = hookChecks.some((c) => c.id === "hook.copilot");
+  const hookLog = await checkHookLog(opts, root, copilotWired);
   if (hookLog !== undefined) checks.push(hookLog);
   checks.push(await checkDaemon(root, home, platform, opts.healthFetch ?? defaultHealthFetch()));
 

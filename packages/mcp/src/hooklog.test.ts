@@ -9,6 +9,7 @@ import {
   parseHookRuns,
   readHookLogStats,
   readTail,
+  runsForRoot,
 } from "./hooklog.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -38,6 +39,7 @@ describe("parseHookLog", () => {
       nonBlockingErrors: 1,
       denies: 1,
       timeouts: 1,
+      preToolUseRuns: 2,
     });
   });
 
@@ -74,7 +76,23 @@ describe("parseHookLog", () => {
       nonBlockingErrors: 0,
       denies: 0,
       timeouts: 0,
+      preToolUseRuns: 1,
     });
+  });
+
+  it("reads the workspace from cwd.fsPath and filters runs by root (case-insensitive)", () => {
+    const text = [
+      '[#1] [PreToolUse] Running: {"command":"hook-pre.ps1","cwd":{"fsPath":"e:\\\\gh\\\\a"}}',
+      '[#2] [PreToolUse] Running: {"command":"hook-pre.ps1","cwd":{"fsPath":"e:\\\\gh\\\\b"}}',
+      '[#3] [PreToolUse] Running: {"command":"hook-pre.ps1"}',
+    ].join("\n");
+    const runs = parseHookRuns(text);
+    expect(runs.map((r) => r.cwd)).toEqual(["e:\\gh\\a", "e:\\gh\\b", undefined]);
+    // Runs without a cwd are always kept; on win32 the match is case-insensitive.
+    const kept = runsForRoot(runs, "E:\\gh\\A\\").map((r) => r.id);
+    expect(kept).toContain("3");
+    expect(kept).not.toContain("2");
+    if (process.platform === "win32") expect(kept).toEqual(["1", "3"]);
   });
 
   it("a non-JSON Running payload keeps the raw command text", () => {

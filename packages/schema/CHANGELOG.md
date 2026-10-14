@@ -1,5 +1,9 @@
 # @codai/axiom-schema
 
+## 2.5.2
+
+No changes in this release.
+
 ## 2.5.1
 
 ### Patch Changes
