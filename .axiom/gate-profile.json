@@ -19,5 +19,21 @@
   "steer": "hint",
   "record": true,
   "shadow": true,
-  "commands": { "pack": "house" }
+  "commands": {
+    "pack": "house"
+  },
+  "coordination": {
+    "marksDir": "~/.codai/coord/marks",
+    "leasesDir": "~/.codai/coord/leases",
+    "slotsRoot": "${env:CODAI_WT_ROOT:-E:/gh/.wt}",
+    "exemptVia": [
+      "agentq\\.ps1"
+    ]
+  },
+  "git": {
+    "cleanTreeFor": [
+      "deploy"
+    ],
+    "untracked": true
+  }
 }
