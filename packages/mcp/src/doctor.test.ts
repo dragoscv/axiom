@@ -475,6 +475,14 @@ describe("axiom doctor — VS Code hook log", () => {
     const lines = Array.from({ length: 25 }, (_, i) => foreignRun(i + 1, home.root));
     expect(await statusOf("hook.log.vscode", { hookLogs: await writeLog(lines) })).toBeUndefined();
   });
+
+  it("a log cwd that is an alias of the root (macOS /var, Windows 8.3, junction) still counts", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    const alias = join(home.root, "alias-root");
+    await symlink(repo.root, alias, process.platform === "win32" ? "junction" : "dir");
+    const lines = Array.from({ length: 25 }, (_, i) => foreignRun(i + 1, alias));
+    expect(await statusOf("hook.log.vscode", { hookLogs: await writeLog(lines) })).toBe("fail");
+  });
 });
 
 describe("axiom doctor — copilot hook shape", () => {

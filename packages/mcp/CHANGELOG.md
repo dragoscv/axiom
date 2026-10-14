@@ -1,5 +1,50 @@
 # @codai/axiom-mcp
 
+## 2.6.0
+
+### Minor Changes
+
+- 6aec6c9: `command.deny` rules (S-1208): the gate can refuse shell commands by regex or argv prefix, with `unless`, `fix` and `ask`; `"pack": "house"` enables the ported rules of the PowerShell house guard, pinned by a 93-case parity corpus generated from the real guard. `importGuard` / `importGuardProfile` (S-1216) convert a PowerShell guard's rule tables into command rules, and `scripts/guard-parity.mjs` generates, checks and replays shadow-mode decisions against the guard.
+- 6aec6c9: Gate coordination adapter and git-state facts (S-1212, S-1213). `coord.ts` reads a generic file
+  protocol of marks (frozen/blocked resource classes), leases (protected worktree slots) and
+  queue-required wrappers (`coord.frozen`, `coord.leased`, `coord.queueRequired`), with the agentq
+  mapping as `AGENTQ_EXAMPLE`. `gitfacts.ts` reads `HEAD`, refs and the index (DIRC v2/v3/v4)
+  straight from `.git` without spawning git, for `git.dirtyTree`, `git.noPathspec` and `git.branch`.
+- 6aec6c9: Human-only confirmDigest (S-1206).
+  
+  - `axiom_apply` and `axiom_write` carry `_meta["anthropic/requiresUserInteraction"]: true` in `tools/list`, so Claude Code always asks the user before calling them (a `PreToolUse` hook cannot skip that prompt).
+  - When the client declares form elicitation, the apply step first asks the human through MCP elicitation: a message with the manifestDigest, root, file count and ≤ 20 `op path` lines, plus a form with `confirm` (boolean) and `digest12` (the first 12 hex characters of the digest, typed by hand). Decline / cancel / wrong digest → `ERR_CONFIRM_DIGEST_MISMATCH` with `details.reason` = `declined` | `cancelled` | `mismatch`. It works on both wire eras: the handler returns the SDK's `input_required` result, which a 2026-07-28 client fulfils and retries (the requestState is HMAC-bound to the digest, 15 min TTL), and which the SDK's legacy shim turns into a real `elicitation/create` on 2025 connections.
+  - Clients without elicitation keep the confirmDigest echo, unless the server runs with `requireHuman` (`CreateServerOptions.requireHuman`, `--require-human` on the CLI) → `ERR_CONFIRM_DIGEST_MISMATCH { reason: "elicitation-unsupported" }`.
+  - New `auditElicitationHooks(root, home)` (`src/elicit-audit.ts`) for `axiom doctor`: Claude Code `Elicitation` / `ElicitationResult` hooks that could answer the confirmation without a human → `fail elicitation.autoAnswer`; VS Code `chat.tools.global.autoApprove` / `chat.tools.autoApprove` true → `warn elicitation.autoApprove`.
+- 6aec6c9: `axiom init --upgrade` upgrades an existing wiring in place (gate profile `record`/`steer`, `axiom-hook` when a daemon runs, npx → global bin MCP entries, legacy exec hook, missing PostToolUse entries). `axiom init --managed --out <dir>` writes Claude Code managed settings, a Codex `requirements.toml`, Cursor and Copilot policy hooks and a VS Code policy note. Claude, Codex and Copilot get a PostToolUse post-write check (`postMain` in `post-write.ts`, `axiom gate --stdin --post`). `axiom doctor` adds `failopen.<harness>` warnings for harnesses whose hook failure path fails open, plus `hook.post.<harness>`. Fresh gate profiles set `record: true`.
+- 6aec6c9: SARIF + OpenTelemetry (S-1214, S-1217).
+  
+  - `reportToSarif()` (`src/sarif.ts`) maps a `CheckReport` to SARIF 2.1.0 (one rule per finding id, severity → level, POSIX `%SRCROOT%` locations with the bundle as fallback, stable `partialFingerprints["axiom/v1"]`) for `axiom check --format sarif`. The GitHub Action gains `sarif` / `check-profile` inputs and a `sarif-path` output and uploads the log with `github/codeql-action/upload-sarif` (SHA-pinned v4.38.3).
+  - Opt-in OTLP/HTTP JSON trace export from the gate daemon (`src/otel.ts`, no new dependency): one `execute_tool <tool>` span per judged hook call with the GenAI semantic-convention attributes (`gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.call.id`) plus `axiom.*`; a deny is status UNSET, only `ERR_INTERNAL` is ERROR. Configured from `AXIOM_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_*` / `OTEL_SERVICE_NAME`; `ServeOptions.otel` records and flushes on close.
+- 6aec6c9: Session guards and undo (S-1209, S-1215, S-1210): `session-guard.ts` adds cross-session overwrite
+  detection (`session.foreignWrite`), the blind whole-file overwrite guard (`blind.overwrite`) and the
+  stale-script guard (`blind.staleScript`), configured by `"sessions"` in the gate profile. `undo.ts`
+  captures gate-side pre-images into the CAS and restores a session's writes conflict-aware
+  (`undoSession`). `axiom gc` keeps undo pre-images younger than `undoTtlMs` (default 7 days) live and
+  prunes expired undo logs; `GcResult` gains `undoLive` and `undoPruned`.
+- 6aec6c9: `axiom stats` (S-1211): allow/deny/ask counts, deny codes, shadow diffs and gate p50/p95 from
+  `.axiom/decisions.jsonl`, broken down per harness, tool and post-tool phase, plus harness-log
+  alarms — `gate.silent` (hooks fire for the workspace in VS Code but the axiom gate is not among
+  them), `gate.nonBlocking`, `gate.slow` and `decisions.empty`. Reads the VS Code hook log and, new,
+  the Copilot CLI `~/.copilot/session-state/*/events.jsonl` hook events (`parseCopilotCliHookRuns`,
+  `findCopilotCliEventLogs`); `hooklog` now exports `GATE_SILENT_MIN_RUNS` and `samePathLoose`.
+
+### Patch Changes
+
+- `axiom doctor` / `axiom stats`: a VS Code hook-log cwd that is an alias of the root (macOS `/var` → `/private/var`, Windows 8.3 short names, junctions) now matches the root, so the silent-gate check fires there too (CI was red on macOS/Windows since 2.5.2).
+- @codai/axiom-apply@2.6.0
+  - @codai/axiom-axm@2.6.0
+  - @codai/axiom-canon@2.6.0
+  - @codai/axiom-checks@2.6.0
+  - @codai/axiom-emitters-web@2.6.0
+  - @codai/axiom-plan@2.6.0
+  - @codai/axiom-schema@2.6.0
+
 ## 2.5.2
 
 ### Patch Changes

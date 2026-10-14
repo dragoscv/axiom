@@ -12,7 +12,7 @@
  * Several hooks run sequentially under one `[#id]`: a Completed/Output line belongs to the most
  * recent Running line of that id.
  */
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
@@ -248,7 +248,30 @@ export async function readHookLogStats(
       // unreadable (rotated / locked) — skip
     }
   }
-  return summarizeRuns(root === undefined ? runs : runsForRoot(runs, root));
+  if (root === undefined) return summarizeRuns(runs);
+  // The log's cwd may be an alias of the (realpath'd) root: macOS /var → /private/var, Windows
+  // 8.3 short names (RUNNER~1), junctions. Canonicalise each distinct cwd once.
+  const rootReal = await realOrSelf(root);
+  const canon = new Map<string, string>();
+  for (const r of runs) {
+    if (r.cwd !== undefined && !canon.has(r.cwd)) canon.set(r.cwd, await realOrSelf(r.cwd));
+  }
+  return summarizeRuns(
+    runs.filter(
+      (r) =>
+        r.cwd === undefined ||
+        samePathLoose(r.cwd, root) ||
+        samePathLoose(canon.get(r.cwd) ?? r.cwd, rootReal),
+    ),
+  );
+}
+
+async function realOrSelf(p: string): Promise<string> {
+  try {
+    return await realpath(path.resolve(p));
+  } catch {
+    return p;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
