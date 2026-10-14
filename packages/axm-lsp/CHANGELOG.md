@@ -1,5 +1,12 @@
 # @codai/axiom-axm-lsp
 
+## 2.5.0
+
+### Patch Changes
+
+- @codai/axiom-axm@2.5.0
+  - @codai/axiom-schema@2.5.0
+
 ## 2.4.1
 
 ### Patch Changes

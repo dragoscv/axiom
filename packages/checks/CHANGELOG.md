@@ -1,5 +1,13 @@
 # @codai/axiom-checks
 
+## 2.5.0
+
+### Patch Changes
+
+- Updated dependencies [90def4c]
+  - @codai/axiom-canon@2.5.0
+  - @codai/axiom-schema@2.5.0
+
 ## 2.4.1
 
 ### Patch Changes

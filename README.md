@@ -287,6 +287,11 @@ Sigstore keyless signing with an issuer/subject policy, `axiom status` / `axiom 
 `axiom_status`. **2.4.1 (D-35)** makes the gate's deny actually block in VS Code on Windows (exit 0 +
 JSON; `--deny-exit 2` for exit-code-only harnesses), judges writes in sibling worktrees of the same
 repository against that worktree, and answers read-only tools before the gate chunk loads.
+**2.5.0 (Phase 8, D-36/D-37)** adds the resident gate daemon `axiom serve --hook` (Claude HTTP hook
+~4–5 ms, no process per call) and the native `axiom-hook` client, `--format` + `init`/`doctor` for
+nine harnesses (Claude, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline),
+the 19th MCP tool `axiom_write` (preview → apply with `confirmDigest`) with gate-side steering, and
+a decision journal attested as in-toto agent-decision statements (`axiom attest decisions`).
 codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).

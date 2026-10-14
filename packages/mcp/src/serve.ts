@@ -36,7 +36,7 @@ import {
   HEALTH_PATH,
 } from "./daemon-proto.js";
 import { GATE_STDIN_MAX_BYTES, type GateResult, gateMain } from "./gate.js";
-import { isSameOrInside } from "./roots.js";
+import { isSameOrInside, realDir } from "./roots.js";
 
 export interface ServeOptions {
   /** realpath'd allowlisted roots (at least one). */
@@ -118,8 +118,16 @@ function send(
 }
 
 /** The cwd the hook ran in decides the root fallback; it must lie inside an allowlisted root. */
-function cwdAllowed(roots: readonly string[], cwd: string): boolean {
-  return cwd !== "" && path.isAbsolute(cwd) && roots.some((r) => isSameOrInside(r, cwd));
+async function cwdAllowed(roots: readonly string[], cwd: string): Promise<boolean> {
+  if (cwd === "" || !path.isAbsolute(cwd)) return false;
+  // Roots are realpaths; a harness may hand us /var/... or RUNNER~1 forms.
+  let real = cwd;
+  try {
+    real = await realDir(cwd, "ERR_ROOT_NOT_DIR");
+  } catch {
+    // nonexistent: compare as given
+  }
+  return roots.some((r) => isSameOrInside(r, real) || isSameOrInside(r, cwd));
 }
 
 /** Payload `cwd` (any harness key) when present — also must be inside a root. */
@@ -215,7 +223,7 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
       // Claude `type: "http"` hook: no headers of ours; the payload carries `cwd`.
       const text = body === "toolarge" ? "" : body.toString("utf8");
       const cwd = payloadCwd(text) ?? "";
-      if (body !== "toolarge" && !cwdAllowed(roots, cwd)) {
+      if (body !== "toolarge" && !(await cwdAllowed(roots, cwd))) {
         // Outside every root: no verdict from this daemon. Claude only blocks on a JSON deny or
         // `onFailure: "block"` (non-2xx counts as a failure) — 421 makes it fail closed.
         send(res, 421, "cwd outside the daemon roots");
@@ -250,7 +258,8 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     const explicitRoot = rootArg >= 0 ? argv[rootArg + 1] : undefined;
     // Every directory the gate may resolve a root from must be inside an allowlisted root.
     const dirs = [cwd, pcwd, explicitRoot].filter((d): d is string => d !== undefined);
-    if (dirs.length === 0 || !dirs.every((d) => cwdAllowed(roots, d))) {
+    const allowed = await Promise.all(dirs.map((d) => cwdAllowed(roots, d)));
+    if (dirs.length === 0 || !allowed.every(Boolean)) {
       send(res, 421, "cwd outside the daemon roots");
       done(421);
       return;

@@ -588,7 +588,11 @@ async function checkDaemon(
     ? body.roots.filter((r): r is string => typeof r === "string")
     : state.roots;
   const pid = typeof body.pid === "number" ? body.pid : state.pid;
-  if (!roots.some((r) => isInside(root, r, platform))) {
+  // `root` is a realpath (/var → /private/var, RUNNER~1 expanded); compare like with like.
+  const servedReal = await Promise.all(
+    roots.map((r) => realDir(path.resolve(r), "ERR_ROOT_NOT_DIR").catch(() => r)),
+  );
+  if (!servedReal.some((r) => isInside(root, r, platform))) {
     return check(
       "daemon",
       "warn",

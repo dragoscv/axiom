@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -352,6 +352,20 @@ describe("axiom doctor — resident daemon", () => {
   });
 
   it("a daemon that does not serve this root warns", async () => {
+    const port = await listen([join(home.root, "elsewhere")], []);
+    await writeState(port, [join(home.root, "elsewhere")]);
+    expect(await statusOf("daemon")).toBe("warn");
+  });
+
+  it("a daemon root given as an alias of the parent (macOS /var, Windows 8.3) still counts", async () => {
+    const alias = join(home.root, "alias-parent");
+    await symlink(join(repo.root, ".."), alias, process.platform === "win32" ? "junction" : "dir");
+    const port = await listen([alias], []);
+    await writeState(port, [alias]);
+    expect(await statusOf("daemon")).toBe("ok");
+  });
+
+  it("a daemon that serves nothing relevant warns (sanity)", async () => {
     const port = await listen([join(home.root, "elsewhere")], []);
     await writeState(port, [join(home.root, "elsewhere")]);
     expect(await statusOf("daemon")).toBe("warn");
