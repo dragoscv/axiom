@@ -1,0 +1,99 @@
+# Manual (re)publish of the VS Code extension `dragoscv.axiom-axm` at the current ref — for a
+# version whose tag release ran before the Marketplace/Open VSX credentials existed, or to retry a
+# failed store publish. Tag releases publish from release.yml (job vscode-extension); this uses the
+# same credentials: Entra managed identity `codai-marketplace-publisher` via OIDC (environment
+# `marketplace-publish`, federated credential `gh-axiom-marketplace-publish`) and repo secret
+# OVSX_PAT for Open VSX namespace `dragoscv`. Both stores reject an existing version; that is
+# reported, not failed.
+name: vscode-extension publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      marketplace:
+        description: Publish to the VS Code Marketplace
+        type: boolean
+        default: true
+      openvsx:
+        description: Publish to Open VSX
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: vscode-axm → Marketplace + Open VSX
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: marketplace-publish
+    permissions:
+      contents: read
+      id-token: write # Azure OIDC → managed identity → Marketplace
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+
+      - name: Setup Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace libs (axm-lsp is bundled into the extension)
+        run: pnpm build
+
+      - name: Package .vsix
+        run: pnpm --filter axiom-axm run package
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: axiom-axm-vsix
+          path: .copilot-tmp/axiom-axm-*.vsix
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - name: Azure login (OIDC, managed identity)
+        if: inputs.marketplace
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish to the VS Code Marketplace
+        if: inputs.marketplace
+        run: |
+          set +e
+          vsix=$(ls .copilot-tmp/axiom-axm-*.vsix)
+          out=$(pnpm --filter axiom-axm exec vsce publish --packagePath "$GITHUB_WORKSPACE/$vsix" --azure-credential 2>&1); rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -eq 0 ]; then exit 0; fi
+          if printf '%s' "$out" | grep -qi 'already exists'; then echo "::notice::version already on the Marketplace"; exit 0; fi
+          exit "$rc"
+
+      - name: Publish to Open VSX
+        if: inputs.openvsx
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set +e
+          if [ -z "$OVSX_PAT" ]; then echo "::error::repo secret OVSX_PAT is not set"; exit 1; fi
+          vsix=$(ls .copilot-tmp/axiom-axm-*.vsix)
+          out=$(npx -y ovsx@1.2.0 publish "$vsix" -p "$OVSX_PAT" 2>&1); rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -eq 0 ]; then exit 0; fi
+          if printf '%s' "$out" | grep -qi 'already published'; then echo "::notice::version already on Open VSX"; exit 0; fi
+          exit "$rc"
