@@ -1,6 +1,6 @@
 # VS Code
 
-*The `.axm` extension (`codai.axiom-axm`) and language server, how to install the `.vsix`, and the `mcp.json` / hook that make Copilot in VS Code go through the gate.*
+*The `.axm` extension (`dragoscv.axiom-axm`) and language server, how to install the `.vsix`, and the `mcp.json` / hook that make Copilot in VS Code go through the gate.*
 
 Three separate pieces meet in VS Code, and you can adopt them independently:
 
@@ -13,7 +13,7 @@ Three separate pieces meet in VS Code, and you can adopt them independently:
 ```mermaid
 flowchart LR
   subgraph vscode [VS Code]
-    ED[.axm editor] --> EXT[codai.axiom-axm<br/>vscode-languageclient]
+    ED[.axm editor] --> EXT[dragoscv.axiom-axm<br/>vscode-languageclient]
     CP[Copilot agent] -->|tools/call| MCPC[MCP client]
     CP -->|PreToolUse| HK[axiom gate --stdin]
   end
@@ -51,10 +51,10 @@ code --install-extension axiom-axm-<version>.vsix
 ```
 
 or *Extensions view → ⋯ → Install from VSIX…*. Reload, open a `.axm` file, and the status bar
-shows the language as *AXIOM plan*. Once the Marketplace publisher `codai` is live (S-412),
-`ext install codai.axiom-axm` works without the download; Cursor, VSCodium, Windsurf and Gitpod
-get the same `.vsix` from [Open VSX](https://open-vsx.org/extension/codai/axiom-axm) (S-601)
-once its token is configured.
+shows the language as *AXIOM plan*. From the VS Code Marketplace it is simply
+`ext install dragoscv.axiom-axm` ([listing](https://marketplace.visualstudio.com/items?itemName=dragoscv.axiom-axm),
+S-412); Cursor, VSCodium, Windsurf and Gitpod get the same `.vsix` from
+[Open VSX](https://open-vsx.org/extension/dragoscv/axiom-axm) (S-601).
 
 Other editors: the language server is a plain LSP 3.18 binary —
 `npx @codai/axiom-axm-lsp --stdio` for neovim, helix, zed, emacs

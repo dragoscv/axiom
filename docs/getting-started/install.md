@@ -133,9 +133,10 @@ code --install-extension axiom-axm-<version>.vsix
 ```
 
 or *Extensions → ⋯ → Install from VSIX…*. The extension bundles the language server; nothing else
-to install. `release.yml` also publishes the same `.vsix` to the VS Code Marketplace (publisher
-`codai`, once its token is configured) and to [Open VSX](https://open-vsx.org/extension/codai/axiom-axm)
-for Cursor, VSCodium, Windsurf and Gitpod; from then on `ext install codai.axiom-axm` works too. Features and the `mcp.json` that pairs with it: [integration/vscode.md](../integration/vscode.md).
+to install. `release.yml` also publishes the same `.vsix` to the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=dragoscv.axiom-axm) — so
+`ext install dragoscv.axiom-axm` works — and to [Open VSX](https://open-vsx.org/extension/dragoscv/axiom-axm)
+for Cursor, VSCodium, Windsurf and Gitpod. Features and the `mcp.json` that pairs with it: [integration/vscode.md](../integration/vscode.md).
 
 ## GitHub Action
 

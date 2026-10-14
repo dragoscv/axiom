@@ -1,10 +1,10 @@
 {
   "name": "axiom-axm",
-  "displayName": "AXIOM .axm",
-  "description": "Language support for AXIOM `.axm` plans: diagnostics, completion, hover, symbols, formatting and semantic highlighting via @codai/axiom-axm-lsp",
+  "displayName": "AXIOM .axm — plans for the agent write gate",
+  "description": "Language support for AXIOM .axm plans (the transactional write gate for coding agents): diagnostics, completion, hover, outline, formatting and semantic highlighting.",
   "version": "2.0.0",
   "private": true,
-  "publisher": "codai",
+  "publisher": "dragoscv",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",
   "repository": {
@@ -30,8 +30,15 @@
     "axiom",
     "axm",
     "plan",
-    "lsp"
+    "lsp",
+    "ai agents",
+    "mcp",
+    "coding agents",
+    "write gate",
+    "manifest"
   ],
+  "qna": "https://github.com/dragoscv/axiom/issues",
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.138.0",
     "node": ">=22.14"

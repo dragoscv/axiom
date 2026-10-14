@@ -409,16 +409,20 @@ jobs:
           echo "::notice title=S-602::HOMEBREW_TAP_DEPLOY_KEY is not set - dragoscv/homebrew-tap not updated. Add a write deploy key to dragoscv/homebrew-tap and store its private key as repo secret HOMEBREW_TAP_DEPLOY_KEY."
 
   vscode-extension:
-    # S-412: the .vsix is always built and attached to the GitHub release; Marketplace publish
-    # runs only when the owner has created publisher `codai` and stored its PAT as `VSCE_PAT`
-    # (Azure DevOps PAT, scope Marketplace → Manage). Without the secret the job still proves the
-    # artifact packages and leaves it downloadable from the release page.
-    name: vscode-axm → .vsix (+ Marketplace when VSCE_PAT is set)
+    # S-412: the .vsix is always built and attached to the GitHub release, then published to the
+    # VS Code Marketplace as `dragoscv.axiom-axm` — the same publisher and the same credential as
+    # `dragoscv.codai-vscode`: Entra managed identity `codai-marketplace-publisher` via GitHub OIDC
+    # (environment `marketplace-publish`, federated credential `gh-axiom-marketplace-publish`,
+    # `vsce --azure-credential`). No PAT is stored; `VSCE_PAT` is only an optional fallback
+    # (global Azure DevOps PATs retire 2026-12-01).
+    name: vscode-axm → .vsix + Marketplace (managed identity)
     needs: publish
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: marketplace-publish
     permissions:
       contents: write # gh release create/upload
+      id-token: write # Azure OIDC → managed identity → Marketplace
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -462,25 +466,41 @@ jobs:
             || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
           gh release upload "$tag" .copilot-tmp/axiom-axm-*.vsix --repo "$GITHUB_REPOSITORY" --clobber
 
-      - name: Publish to the VS Code Marketplace
-        if: startsWith(github.ref, 'refs/tags/v') && env.VSCE_PAT != ''
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          set -euo pipefail
-          pnpm --filter axiom-axm exec vsce publish --packagePath .copilot-tmp/axiom-axm-*.vsix
+      - name: Azure login (OIDC, managed identity)
+        id: azlogin
+        if: startsWith(github.ref, 'refs/tags/v') && vars.AZURE_CLIENT_ID != ''
+        continue-on-error: true
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Marketplace publish skipped
-        if: startsWith(github.ref, 'refs/tags/v') && env.VSCE_PAT == ''
+      - name: Publish to the VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          AZ_OK: ${{ steps.azlogin.outcome == 'success' }}
+          PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          echo "::notice title=S-412::VSCE_PAT is not set - .vsix attached to the release only. Owner: create Marketplace publisher codai and add the PAT as repo secret VSCE_PAT."
+          set +e
+          vsix=$(ls .copilot-tmp/axiom-axm-*.vsix)
+          publish() { pnpm --filter axiom-axm exec vsce publish --packagePath "$GITHUB_WORKSPACE/$vsix" "$@" 2>&1; }
+          code=1
+          if [ "$AZ_OK" = "true" ]; then
+            out=$(publish --azure-credential); code=$?
+            printf '%s\n' "$out"
+            if [ $code -eq 0 ] || printf '%s' "$out" | grep -qi 'already exists'; then echo "::notice::published dragoscv.axiom-axm with managed identity"; exit 0; fi
+            echo "::warning::managed-identity publish failed - trying VSCE_PAT"
+          fi
+          if [ -z "$PAT" ]; then echo "::error::no Marketplace credential (Azure login failed, VSCE_PAT unset)"; exit 1; fi
+          out=$(VSCE_PAT="$PAT" publish); code=$?
+          printf '%s\n' "$out"
+          if [ $code -ne 0 ] && ! printf '%s' "$out" | grep -qi 'already exists'; then exit $code; fi
 
       - name: Publish to Open VSX
-        # S-601: the same .vsix for Cursor, VSCodium, Windsurf and Gitpod. Needs namespace `codai`
-        # on open-vsx.org (created once with `ovsx create-namespace codai`) and its access token as
-        # OVSX_PAT. Open VSX rejects an existing version, so a re-run of the same tag is tolerated.
+        # S-601: the same .vsix for Cursor, VSCodium, Windsurf and Gitpod, under the existing
+        # open-vsx.org namespace `dragoscv` (tasks2, vsrchat live there); its access token is the
+        # repo secret OVSX_PAT. Open VSX rejects an existing version, so a re-run is tolerated.
         if: startsWith(github.ref, 'refs/tags/v') && env.OVSX_PAT != ''
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
@@ -500,4 +520,4 @@ jobs:
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          echo "::notice title=S-601::OVSX_PAT is not set - Open VSX not published. Owner: sign in at open-vsx.org (Eclipse account + publisher agreement), create an access token, run 'npx ovsx create-namespace codai -p <token>' once, add the token as repo secret OVSX_PAT."
+          echo "::notice title=S-601::OVSX_PAT is not set - Open VSX not published. Owner: open-vsx.org (namespace dragoscv) → Settings → Access Tokens, add the token as repo secret OVSX_PAT."

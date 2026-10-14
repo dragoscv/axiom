@@ -1,49 +1,81 @@
-# axiom-axm (VS Code extension)
+# AXIOM .axm for VS Code
 
-Language support for AXIOM `.axm` plans. Thin `vscode-languageclient` that spawns
-`@codai/axiom-axm-lsp` over node-ipc; the TextMate grammar (`syntaxes/axm.tmLanguage.json`)
-provides colouring before the server answers, then semantic tokens refine it.
+Language support for **`.axm` plans** — the authoring format of [AXIOM](https://dragoscv.github.io/axiom/),
+the transactional write gate for coding agents. A plan describes a change set (files, sources,
+checks); AXIOM compiles it into a content-addressed manifest, runs set-level checks and applies it
+atomically with a journal and one-step rollback.
 
-- language id `axm`, extension `.axm`, comments `//` and `/* */`, brackets `{}` `[]`
-- heredoc bodies and `check … {json}` / `meta {json}` blocks are highlighted as strings / embedded JSON
-- diagnostics, completion, hover, outline, *Format Document*, semantic highlighting — see
-  `packages/axm-lsp/README.md`
+```axm
+axiom "2"
 
-## Develop
+plan add-readme {
+  intent "Add a README, guarded by a secret scan"
+  profile default
 
-```
-pnpm build                              # builds @codai/axiom-axm-lsp (root filter is @codai/axiom-*)
-pnpm --filter axiom-axm run build       # this package (not matched by that filter)
-code --extensionDevelopmentPath=packages/vscode-axm   (F5 "Run Extension" also works)
-```
+  artifact "README.md" {
+    op create
+    inline <<MD
+# hello
+MD
+  }
 
-In a workspace install the client resolves `@codai/axiom-axm-lsp/main` from `node_modules`, so
-rebuilding `packages/axm-lsp` is picked up on the next reload without repackaging.
-
-## Package
-
-```
-pnpm --filter axiom-axm run package     # tsdown, then → <repo>/.copilot-tmp/axiom-axm-<version>.vsix
+  check no-secrets using content.noSecrets {}
+}
 ```
 
-`vsce package --no-dependencies` with **no** `node_modules` in the .vsix: both
-`dist/extension.cjs` (client) and `dist/server.cjs` (the LSP bin bundled with
-`vscode-languageserver`) are self-contained. vsce rejects pnpm's `catalog:` spec for
-`@types/vscode`, so the script writes the resolved version into `package.json` for the duration of
-the call and restores the file afterwards. The .vsix is not committed; install a local build with
-`code --install-extension <file>.vsix`.
+## Features
 
-## Release (S-412)
+- **Diagnostics** as you type — the same parser and error codes (`ERR_*`) as `axiom compile`
+- **Completion** for keywords, predicate ids after `using`, capabilities, `mode` / `op` / `profile` values
+- **Hover** documentation for keywords and predicates
+- **Outline** (document symbols) for plans, files and checks
+- **Format Document** — idempotent, only on a clean parse
+- **Semantic highlighting** on top of a TextMate grammar (heredocs, digests, embedded JSON in `check` / `meta` blocks)
 
-`release.yml` job `vscode-extension` runs on every `v*` tag after the npm publish: it packages the
-.vsix, uploads it as a workflow artifact and attaches it to the GitHub release
-(`gh release upload`). When the repo secret **`VSCE_PAT`** exists (Azure DevOps PAT with
-*Marketplace → Manage* for publisher `codai`) it also runs `vsce publish --packagePath`, so
-`ext install codai.axiom-axm` works. Without the secret the job emits a notice and the release
-page still carries the .vsix — creating the publisher and the PAT is the owner step that unblocks
-S-412. The same job publishes the .vsix to **Open VSX** (Cursor, VSCodium, Windsurf, Gitpod)
-with `ovsx publish` when the repo secret **`OVSX_PAT`** exists (open-vsx.org access token; the
-namespace `codai` is created once with `npx ovsx create-namespace codai -p <token>`) — S-601.
-The .vsix `version` is stamped from `@codai/axiom-mcp`'s version at package time (the
-extension is `private` and outside the changesets group), so it always matches the release tag
-and never collides with an already-published Marketplace version.
+The language server (`@codai/axiom-axm-lsp`) is bundled — nothing else to install. In a workspace
+that has `@codai/axiom-axm-lsp` in `node_modules`, the extension uses that version instead.
+
+## Use it with the gate
+
+Install the CLI and wire your repository in one step:
+
+```sh
+npm install -g @codai/axiom-mcp
+axiom init      # MCP server + PreToolUse hook for Copilot / Claude / Codex / Cursor / Windsurf / Gemini / Junie / Cline
+axiom doctor    # checks the wiring and the gate latency
+axiom compile plan.axm -o bundle.json && axiom apply bundle.json --root . --confirm <digest>
+```
+
+Agents can then write through the `axiom_write` MCP tool (preview → apply with `confirmDigest`) and
+every direct write is checked by the gate first.
+
+## Links
+
+- Documentation: <https://dragoscv.github.io/axiom/>
+- `.axm` syntax: <https://dragoscv.github.io/axiom/reference/axm-syntax/>
+- VS Code integration (MCP + hooks): <https://dragoscv.github.io/axiom/integration/vscode/>
+- Source and issues: <https://github.com/dragoscv/axiom>
+
+MIT licensed.
+
+---
+
+## Development
+
+```sh
+pnpm build                              # builds @codai/axiom-axm-lsp
+pnpm --filter axiom-axm run build       # this package
+pnpm --filter axiom-axm run package     # → <repo>/.copilot-tmp/axiom-axm-<version>.vsix
+```
+
+The .vsix carries no `node_modules`: `dist/extension.cjs` (client) and `dist/server.cjs` (the LSP,
+bundled with `vscode-languageserver`) are self-contained. vsce rejects pnpm's `catalog:` spec, so
+the package script writes the resolved `@types/vscode` version (and the release version from
+`@codai/axiom-mcp`) into `package.json` for the duration of the call and restores it.
+
+**Release (S-412, S-601).** `release.yml` job `vscode-extension` runs on every `v*` tag: it
+packages the .vsix, attaches it to the GitHub release and publishes `dragoscv.axiom-axm` to the
+VS Code Marketplace with the Entra managed identity `codai-marketplace-publisher` (GitHub OIDC,
+environment `marketplace-publish`, `vsce --azure-credential`) — the same publisher and credential
+as `dragoscv.codai-vscode`; `VSCE_PAT` is only a fallback. When the repo secret `OVSX_PAT` exists
+the same .vsix goes to Open VSX under the namespace `dragoscv`.

@@ -136,7 +136,7 @@ npx @codai/axiom-axm-lsp --stdio      # any LSP client (neovim, helix, zed, emac
 | formatting | canonical form (`formatAxm`) — applied only when the file parses without diagnostics |
 | semantic tokens | `keyword`, `string`, `number`, `comment`, `property` |
 
-**VS Code**: the extension `packages/vscode-axm` (`codai.axiom-axm`) bundles the client, a
+**VS Code**: the extension `packages/vscode-axm` (`dragoscv.axiom-axm`) bundles the client, a
 TextMate grammar (heredocs, digests, embedded JSON) and `language-configuration.json`. Install the
 `axiom-axm-<version>.vsix` from the GitHub release — see [integration/vscode.md](../integration/vscode.md).
 
