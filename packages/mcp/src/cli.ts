@@ -8,10 +8,11 @@ import { PACKAGE_VERSION as version } from "./version.js";
 
 const argv = process.argv.slice(2);
 const verb = argv[0];
+const wantsHelp = argv.includes("--help") || argv.includes("-h");
 
 if (verb === "--version" || verb === "-v") {
   console.log(version);
-} else if (verb === "gate") {
+} else if (verb === "gate" && !wantsHelp) {
   // Hook mode. Read stdin here (zero-dependency) and answer read-only tools without loading
   // the gate chunk at all (2.4.1 fast path); everything else goes to the full gate, which gets
   // the already-read payload. Parsing errors in argv are left to the full gate.

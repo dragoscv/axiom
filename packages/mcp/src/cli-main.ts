@@ -1030,6 +1030,14 @@ export async function main(argv: readonly string[], version: string): Promise<nu
     console.error(`unknown verb: ${verb}\n\n${HELP}`);
     return EXIT_USAGE;
   }
+  // `axiom <verb> --help` used to reach the verb's strict parseArgs → "Unknown option '--help'".
+  // No option of any verb is `-h`, so either flag before a `--` separator means "show usage".
+  const dashDash = rest.indexOf("--");
+  const flags = dashDash === -1 ? rest : rest.slice(0, dashDash);
+  if (flags.includes("--help") || flags.includes("-h")) {
+    process.stdout.write(HELP);
+    return EXIT_OK;
+  }
   try {
     return await run(rest);
   } catch (err) {

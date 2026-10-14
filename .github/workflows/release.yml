@@ -316,8 +316,11 @@ jobs:
           v=$(node -p 'require("./package.json").version')
           # Idempotent like `changeset publish`: the registry rejects a duplicate version with
           # 400 "cannot publish duplicate version" (a re-run of the same tag, run 35549765572).
-          have=$(curl -fsSL "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/${v}" 2>/dev/null \
-            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.server??j).version??"")}catch{console.log("")}})' || true)
+          # Saved to a file, then parsed: piping curl into an interpreter reads as download-then-run
+          # to OpenSSF Scorecard (Pinned-Dependencies), even though this is only JSON.
+          curl -fsSL -o have.json "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/${v}" 2>/dev/null || echo '{}' > have.json
+          have=$(node -e 'try{const j=JSON.parse(require("fs").readFileSync("have.json","utf8"));console.log((j.server??j).version??"")}catch{console.log("")}')
+          rm -f have.json
           if [ "$have" = "$v" ]; then echo "io.github.dragoscv/axiom@$v is already on the registry - nothing to publish"; exit 0; fi
           for i in 1 2 3 4 5 6; do
             if ../../mcp-publisher publish 2>&1 | tee publish.log; then exit 0; fi

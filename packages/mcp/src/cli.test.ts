@@ -57,6 +57,21 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     expect((await run(["--help"])).code).toBe(0);
   });
 
+  it("<verb> --help / -h prints usage with exit 0 instead of 'Unknown option'", async () => {
+    for (const args of [
+      ["init", "--help"],
+      ["compile", "-h"],
+      ["doctor", "--help"],
+      ["serve", "--help"],
+      ["gate", "--help"],
+    ]) {
+      const r = await run(args);
+      expect(r.code, args.join(" ")).toBe(0);
+      expect(r.stdout, args.join(" ")).toContain("Usage:");
+      expect(r.stderr, args.join(" ")).not.toContain("Unknown option");
+    }
+  });
+
   it("dist/cli.js is self-contained: no workspace or npm imports remain", async () => {
     const text = await readFile(CLI, "utf8");
     const mainText = await readFile(join(here, "..", "dist", "cli-main.js"), "utf8");

@@ -176,7 +176,7 @@ rows.forEach((r, i) => {
   if (!title) problems.push(`TRACKER.csv:${ln}: ${id} has empty title`);
 });
 
-const planIds = new Set([...plan.matchAll(/\b([SD]-\d{2,3})\b/g)].map((m) => m[1]));
+const planIds = new Set([...plan.matchAll(/\b([SD]-\d{2,})\b/g)].map((m) => m[1]));
 for (const id of csvIds.keys())
   if (!planIds.has(id)) problems.push(`${id} is in TRACKER.csv but not in PLAN.md`);
 for (const id of planIds)

@@ -238,6 +238,17 @@ Goal: the hook decision costs a loopback round trip instead of a node start; `in
 | S-907 | Docs + ripple: hooks.md, harnesses.md (nine harnesses), cli.md (`serve`, `attest`, `--format`, `init --daemon`), mcp-tools.md + spec/tools.json + README (`axiom_write`), trust-model.md (ACS + agent-decision), changeset; full gate green (biome, typecheck, test, build, run-guards --strict --skip=release-complete) | done |
 | S-908 | Release v2.5.0 + live verification (9/9 npm, 12 assets incl. `axiom-hook`, registry, `action@v2`, brew with `axiom-hook`) + consumers codai/brivio/metu bumped, `axiom doctor` ok | done |
 
+### Phase 9 — reality check after v2.5.0 (2026-10-14) — hygiene, security posture, CLI UX
+
+Goal: nothing open that the owner did not choose to leave open — every PR, alert and tracker row either fixed or stated with its reason.
+
+| ID | Story | Status |
+|---|---|---|
+| S-1001 | Merge the 3 green Dependabot PRs (#16 tsdown 0.23.1, #17 @types/node 26.6.5 + starlight-links-validator 0.27.0, #18 scorecard-action 2.5.0) and refresh the catalog to the latest stable (zod 4.6.7, vitest 5.0.4, @vitest/coverage-v8 5.0.4, happy-dom 21.0.1); `@types/vscode` stays 1.138.0 = `engines.vscode` floor | done |
+| S-1002 | Security posture: Dependabot vulnerability alerts + security updates enabled (were off); CodeQL SAST workflow (`javascript-typescript` + `actions`, security-extended) on push/PR/weekly for Scorecard SAST; release.yml registry probe no longer pipes curl into node (Scorecard Pinned-Dependencies `downloadThenRun`) | done |
+| S-1003 | CLI: `axiom <verb> --help` / `-h` printed "Unknown option '--help'" (and `gate --help` an AXIOM GATE ERROR) — now prints usage, exit 0; test in cli.test.ts; `check-tracker-sync` id regex widened from 2-3 to 2+ digits (four-digit ids were invisible to it) | done |
+
+
 ---
 
 ## 4. Verification protocol (every phase)
