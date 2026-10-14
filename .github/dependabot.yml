@@ -6,6 +6,9 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
+    # Frozen v1 legacy: excluded from pnpm-workspace.yaml and vitest, never installed or run.
+    exclude-paths:
+      - "packages/_v1/**"
     schedule:
       interval: weekly
       day: monday
