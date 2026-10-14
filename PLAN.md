@@ -219,7 +219,7 @@ Goal: every deny the gate emits blocks the tool in every JSON-aware harness, age
 | S-801 | Deny contract: a deny exits `0` with the JSON document (VS Code/Claude/Copilot CLI/Codex/Gemini/Junie honour it; survives the npm `.ps1` shim that rewrote 2 → 1); `--deny-exit 2` keeps the exit-code deny for Windsurf; usage errors still exit 2; doctor's probe reads the deny JSON | doing |
 | S-802 | Worktree-aware containment: a target outside the root whose nearest `.git` file is a worktree of the SAME repository (gitdir back-link + `commondir` equal to the root's git dir, read from disk) is judged against that worktree's root and gate profile; another repo / forged `.git` stays `ERR_CONTAINMENT` | doing |
 | S-803 | Fast path: `cli.ts` reads stdin via zero-dependency `gate-fast.ts` (single home of the tool-class hint lists, imported by gate.ts) and answers other-class tools before loading the gate chunk; exactness test against `runGate` | doing |
-| S-804 | Maintenance: Dependabot #15 + #14 merged; release.yml per-job token permissions and hash-pinned npm / mcp-publisher (Scorecard TokenPermissions, PinnedDependencies) | doing |
+| S-804 | Maintenance: Dependabot #15 + #14 merged; release.yml per-job token permissions and hash-pinned npm / mcp-publisher (Scorecard TokenPermissions, PinnedDependencies). **Done**: also biome schema 2.5.15; `@types/vscode` pinned to 1.138.0 = `engines.vscode` floor (Dependabot's 1.140 broke `.vsix` packaging in release run 38486626658) + Dependabot ignore + a CI packaging step so it fails before a tag | done |
 | S-805 | Release v2.4.1 (includes the doctor JSONC fix 0a80ca7) + live verification + consumers (codai drops its `axiom-gate.ps1` workaround, catalog 2.4.1; brivio doctor clean) | todo |
 
 ---

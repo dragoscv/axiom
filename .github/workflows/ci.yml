@@ -152,6 +152,10 @@ jobs:
       - name: Conformance (expected-failures baseline)
         run: pnpm --filter @codai/axiom-conformance conformance --out packages/conformance/results
 
+      - name: Package the .vsix (catches engines.vscode vs @types/vscode drift before a tag)
+        # release run 38486626658 failed only here: Dependabot bumped @types/vscode past engines.vscode.
+        run: pnpm --filter axiom-axm run package
+
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -33,6 +33,11 @@ updates:
           - "@modelcontextprotocol/*"
       production:
         dependency-type: production
+    ignore:
+      # @types/vscode must match packages/vscode-axm `engines.vscode` (^1.138.0) — vsce refuses to
+      # package a .vsix whose @types/vscode is newer (release run 38486626658). Raise both by hand.
+      - dependency-name: "@types/vscode"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -47,10 +52,10 @@ updates:
     ignore:
       # v6 self-updates pnpm to the `packageManager` version but on windows-2025 the resulting
       # `pnpm install`/`pnpm build` produce no output and no dist (PR #7, run 35556883562):
-      # bundle-size then fails with "packages/mcp/dist/cli.js missing". Stay on v4 until the
-      # Windows path is fixed upstream; re-test by removing this block.
+      # bundle-size then fails with "packages/mcp/dist/cli.js missing". v5.0.0 is green on the
+      # full matrix (PR #14, CI 38486158997); stay below v6 until the Windows path is fixed upstream.
       - dependency-name: pnpm/action-setup
-        versions: [">=5"]
+        versions: [">=6"]
     groups:
       actions:
         patterns:

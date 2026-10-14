@@ -30,7 +30,9 @@ catalog:
   vscode-languageserver: 10.1.2
   vscode-languageserver-textdocument: 1.0.15
   vscode-languageclient: 10.1.2
-  "@types/vscode": 1.140.0
+  # Must equal packages/vscode-axm engines.vscode (^1.138.0): vsce refuses to package when
+  # @types/vscode is newer than the engines floor (release run 38486626658). Bump both together.
+  "@types/vscode": 1.138.0
   "@vscode/vsce": 4.0.0
   astro: 7.3.8
   "@astrojs/starlight": 0.42.6
