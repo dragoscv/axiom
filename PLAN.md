@@ -223,7 +223,7 @@ Goal: every deny the gate emits blocks the tool in every JSON-aware harness, age
 | S-804 | Maintenance: Dependabot #15 + #14 merged; release.yml per-job token permissions and hash-pinned npm / mcp-publisher (Scorecard TokenPermissions, PinnedDependencies). **Done**: also biome schema 2.5.15; `@types/vscode` pinned to 1.138.0 = `engines.vscode` floor (Dependabot's 1.140 broke `.vsix` packaging in release run 38486626658) + Dependabot ignore + a CI packaging step so it fails before a tag | done |
 | S-805 | Release v2.4.1 (includes the doctor JSONC fix 0a80ca7) + live verification + consumers (codai drops its `axiom-gate.ps1` workaround, catalog 2.4.1; brivio doctor clean). First run 38486626658 failed only in vscode-extension (Dependabot `@types/vscode` 1.140 > `engines.vscode` 1.138; fixed e5c6965, tag moved — no package source diff); rerun 38488061730 green | done |
 
-### Phase 8b — v2.5.0 — a gate cheap enough for every tool call, every harness, and a transactional path agents actually use (decided 2026-10-14, D-36, D-37)
+### Phase 8b — v2.5.0 — **RELEASED 2026-10-14** (tag v2.5.0 965828a, run 38502104283) — a gate cheap enough for every tool call, every harness, and a transactional path agents actually use (decided 2026-10-14, D-36, D-37)
 
 Goal: the hook decision costs a loopback round trip instead of a node start; `init`/`doctor` wire and check all nine harnesses; agents are steered to a two-call transactional write; every judged call can be journaled and attested as an in-toto agent-decision.
 
@@ -236,7 +236,7 @@ Goal: the hook decision costs a loopback round trip instead of a node start; `in
 | S-905 | Steer writes to the transactional path: gate profile `steer: off|hint|require` + `steerGlobs` (once-per-session `additionalContext` hint; `require` denies direct writes to the globs with `steer.requireApply`); `init` writes `steer: "hint"`; new MCP tool `axiom_write` (files[] → preview with diff + digest, then apply with `confirmDigest`; pre-image bound, TOCTOU → `ERR_CONFIRM_DIGEST_MISMATCH`) | done |
 | S-906 | Decision journal + attestation: gate profile `record: true` appends `.axiom/decisions.jsonl` (JCS `args_hash`, `args_state`, decision, code, paths); `axiom attest decisions [--sign]` → in-toto Statement v1 per record, predicateType `AGENT_DECISION_V0_1` (in-toto/attestation#554), DSSE `application/vnd.in-toto+json`; OWASP Agent Control Standard v0.1 mapping in docs/concepts/trust-model.md | done |
 | S-907 | Docs + ripple: hooks.md, harnesses.md (nine harnesses), cli.md (`serve`, `attest`, `--format`, `init --daemon`), mcp-tools.md + spec/tools.json + README (`axiom_write`), trust-model.md (ACS + agent-decision), changeset; full gate green (biome, typecheck, test, build, run-guards --strict --skip=release-complete) | done |
-| S-908 | Release v2.5.0 + live verification (9/9 npm, 12 assets incl. `axiom-hook`, registry, `action@v2`, brew with `axiom-hook`) + consumers codai/brivio/metu bumped, `axiom doctor` ok | todo |
+| S-908 | Release v2.5.0 + live verification (9/9 npm, 12 assets incl. `axiom-hook`, registry, `action@v2`, brew with `axiom-hook`) + consumers codai/brivio/metu bumped, `axiom doctor` ok | done |
 
 ---
 
