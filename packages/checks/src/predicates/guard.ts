@@ -304,21 +304,31 @@ function parseJsonOutput(stdout: string): GuardOutput | undefined {
   return r.success ? r.data : undefined;
 }
 
-const LEGACY_FAIL = /^FAIL\s+([^:\n]+?)(?::\s*(.*))?$/;
 const LEGACY_OK = /^OK\s+\S/;
+
+/** `FAIL  name: reason` → {id, message}; hand-parsed (the regex form was polynomial). */
+function parseLegacyFail(line: string): { id: string; message: string } | undefined {
+  if (!line.startsWith("FAIL") || !/^\s$/.test(line.charAt(4))) return undefined;
+  const rest = line.slice(4).trimStart();
+  if (rest === "" || rest.startsWith(":")) return undefined;
+  const colon = rest.indexOf(":");
+  return colon === -1
+    ? { id: rest.trim(), message: "" }
+    : { id: rest.slice(0, colon).trim(), message: rest.slice(colon + 1).trim() };
+}
 
 /** brivio `run-guards.mjs` contract: `OK    name` / `FAIL  name: reason` lines. */
 export function parseLegacyText(stdout: string): GuardOutput | undefined {
   const findings: NonNullable<GuardOutput["findings"]> = [];
   let sawAny = false;
   for (const line of stdout.split(/\r?\n/)) {
-    const m = LEGACY_FAIL.exec(line);
-    if (m !== null) {
+    const m = parseLegacyFail(line);
+    if (m !== undefined) {
       sawAny = true;
       findings.push({
-        id: (m[1] ?? "guard").trim(),
+        id: m.id || "guard",
         severity: "error",
-        message: (m[2] ?? "").trim() || "guard failed",
+        message: m.message || "guard failed",
       });
     } else if (LEGACY_OK.test(line)) {
       sawAny = true;

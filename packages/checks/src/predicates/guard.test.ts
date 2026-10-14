@@ -273,6 +273,19 @@ describe("guard.external output mapping", () => {
     expect(parseLegacyText("random\n")).toBeUndefined();
     expect(parseLegacyText("FAIL  x\n")?.findings[0]?.message).toBe("guard failed");
   });
+  it("parseLegacyText: FAIL line edge cases and a pathological line stay linear", () => {
+    expect(parseLegacyText("FAILED  x\n")).toBeUndefined();
+    expect(parseLegacyText("FAIL\n")).toBeUndefined();
+    expect(parseLegacyText("FAIL  : no id\n")).toBeUndefined();
+    expect(parseLegacyText("FAIL\tid: a: b\n")?.findings[0]).toMatchObject({
+      id: "id",
+      message: "a: b",
+    });
+    const t0 = performance.now();
+    const r = parseLegacyText(`FAIL ${" ".repeat(100_000)}x${" ".repeat(100_000)}`);
+    expect(r?.findings[0]?.id).toBe("x");
+    expect(performance.now() - t0).toBeLessThan(1_000);
+  });
   it("cwd: staging without a staging dir → params error", async () => {
     const r = await run({ command: "ok.mjs", cwd: "staging" });
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");

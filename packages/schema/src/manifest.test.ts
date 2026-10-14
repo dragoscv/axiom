@@ -121,6 +121,16 @@ describe("blobByteLength", () => {
     expect(blobByteLength({ encoding: "base64", data: "YWJj" })).toBe(3);
     expect(blobByteLength({ encoding: "base64", data: "YWJj\nZA==" })).toBe(4);
   });
+
+  it("handles a 256 KiB run of padding in linear time (was a polynomial regex)", () => {
+    const t0 = performance.now();
+    // Non-trailing `=` is not padding: nothing is stripped (same as the old regex).
+    expect(blobByteLength({ encoding: "base64", data: `YQ${"=".repeat(262_144)}x` })).toBe(
+      Math.floor((262_147 * 3) / 4),
+    );
+    expect(blobByteLength({ encoding: "base64", data: `YQ${"=".repeat(262_144)}` })).toBe(1);
+    expect(performance.now() - t0).toBeLessThan(1_000);
+  });
 });
 
 describe("ManifestBundleSchema", () => {

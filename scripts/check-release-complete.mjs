@@ -30,7 +30,7 @@ async function registryVersions(name) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${REGISTRY}/${encodeURIComponent(name).replace("%40", "@")}`, {
+    const res = await fetch(`${REGISTRY}/${encodeURIComponent(name).replace(/%40/g, "@")}`, {
       signal: ctrl.signal,
       headers: { accept: "application/vnd.npm.install-v1+json" },
     });

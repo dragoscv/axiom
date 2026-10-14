@@ -1113,7 +1113,17 @@ export async function gitCommonDir(dir: string): Promise<string | undefined> {
   if (st.isDirectory()) return realOrResolved(dotGit);
   if (!st.isFile()) return undefined;
   try {
-    const m = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotGit, "utf8"));
+    // Same inode as the lstat above, read through one handle (no swap between check and read).
+    const fh = await open(dotGit, "r");
+    let text: string;
+    try {
+      const now = await fh.stat();
+      if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) return undefined;
+      text = await fh.readFile("utf8");
+    } finally {
+      await fh.close();
+    }
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
     if (m?.[1] === undefined) return undefined;
     const gitdir = path.resolve(dir, m[1]);
     const back = (await readFile(path.join(gitdir, "gitdir"), "utf8")).trim();

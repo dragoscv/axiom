@@ -43,7 +43,10 @@ export async function realDir(
 }
 
 function norm(p: string): string {
-  const n = path.normalize(p).replace(/[\\/]+$/, "");
+  const s = path.normalize(p);
+  let end = s.length;
+  while (end > 0 && (s[end - 1] === "/" || s[end - 1] === "\\")) end--;
+  const n = s.slice(0, end);
   return IS_WIN32 ? n.toLowerCase() : n;
 }
 

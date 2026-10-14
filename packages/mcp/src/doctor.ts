@@ -15,6 +15,7 @@ import {
   type DaemonState,
   H_PROTOCOL,
   HEALTH_PATH,
+  isLoopbackHost,
   readDaemonState,
 } from "./daemon-proto.js";
 import { GateProfileSchema } from "./gate.js";
@@ -516,6 +517,11 @@ async function isDirectory(abs: string): Promise<boolean> {
 export function defaultHealthFetch(timeoutMs = DAEMON_HEALTH_TIMEOUT_MS): HealthFetcher {
   return (state) =>
     new Promise((resolve, reject) => {
+      // daemon.json is user-writable: a tampered host must not receive the bearer token.
+      if (!isLoopbackHost(state.host)) {
+        reject(new Error(`daemon host ${state.host} is not loopback`));
+        return;
+      }
       const headers: Record<string, string> = { [H_PROTOCOL]: String(DAEMON_PROTOCOL) };
       if (state.token !== undefined) headers.authorization = `Bearer ${state.token}`;
       const req = request(

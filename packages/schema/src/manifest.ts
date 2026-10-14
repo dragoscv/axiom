@@ -142,8 +142,11 @@ export const BlobSchema = z
 export function blobByteLength(blob: { encoding: "utf8" | "base64"; data: string }): number {
   if (blob.encoding === "utf8") return new TextEncoder().encode(blob.data).length;
   // Strip whitespace and padding; each 4 base64 chars encode 3 bytes.
-  const unpadded = blob.data.replace(/\s+/g, "").replace(/=+$/, "");
-  return Math.floor((unpadded.length * 3) / 4);
+  // Padding is trimmed with a loop: `/=+$/` is quadratic on a long run of `=` (blobs reach 256 KiB).
+  const compact = blob.data.replace(/\s+/g, "");
+  let end = compact.length;
+  while (end > 0 && compact.charCodeAt(end - 1) === 61 /* = */) end--;
+  return Math.floor((end * 3) / 4);
 }
 
 /** in-toto Statement is loosely typed here; `@codai/axiom-canon` owns the strict builder. */

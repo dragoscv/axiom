@@ -247,6 +247,7 @@ Goal: nothing open that the owner did not choose to leave open — every PR, ale
 | S-1001 | Merge the 3 green Dependabot PRs (#16 tsdown 0.23.1, #17 @types/node 26.6.5 + starlight-links-validator 0.27.0, #18 scorecard-action 2.5.0) and refresh the catalog to the latest stable (zod 4.6.7, vitest 5.0.4, @vitest/coverage-v8 5.0.4, happy-dom 21.0.1); `@types/vscode` stays 1.138.0 = `engines.vscode` floor | done |
 | S-1002 | Security posture: Dependabot vulnerability alerts + security updates enabled (were off); CodeQL SAST workflow (`javascript-typescript` + `actions`, security-extended) on push/PR/weekly for Scorecard SAST; release.yml registry probe no longer pipes curl into node (Scorecard Pinned-Dependencies `downloadThenRun`) | done |
 | S-1003 | CLI: `axiom <verb> --help` / `-h` printed "Unknown option '--help'" (and `gate --help` an AXIOM GATE ERROR) — now prints usage, exit 0; test in cli.test.ts; `check-tracker-sync` id regex widened from 2-3 to 2+ digits (four-digit ids were invisible to it) | done |
+| S-1004 | CodeQL findings (first security-extended scan, 11 alerts) fixed: polynomial ReDoS → linear loops in `blobByteLength`, roots `norm`, git `parseRemote`, guard legacy `FAIL` parser; stat→read races closed (repo facts read via one handle; pre-image + worktree `.git` reads confirm the lstat inode); `doctor` refuses a non-loopback daemon host (token stays local); `check-release-complete` replaces every `%40`; Dependabot alert on frozen `packages/_v1` vitest dismissed (not used) + `exclude-paths`; tests for each | done |
 
 
 ---

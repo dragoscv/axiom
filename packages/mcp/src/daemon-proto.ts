@@ -32,6 +32,14 @@ import * as path from "node:path";
 
 export const DAEMON_PROTOCOL = 1;
 export const DAEMON_DEFAULT_HOST = "127.0.0.1";
+/** Hosts a daemon state file may name; anything else is treated as tampering (no request sent). */
+export const DAEMON_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  "127.0.0.1",
+  "::1",
+  "localhost",
+]);
+export const isLoopbackHost = (host: string): boolean =>
+  DAEMON_LOOPBACK_HOSTS.has(host.toLowerCase());
 export const DAEMON_DEFAULT_PORT = 47861;
 export const DAEMON_STATE_DIR = ".axiom";
 export const DAEMON_STATE_FILE = "daemon.json";

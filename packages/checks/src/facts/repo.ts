@@ -139,11 +139,12 @@ export async function createRepoFacts(
       const abs = resolve(path);
       if (abs === undefined) return undefined;
       try {
-        const st = await stat(abs);
-        if (!st.isFile()) return undefined;
-        if (max === undefined) return new Uint8Array(await readFile(abs));
+        // One handle for the type check and the read: no window between stat and read.
         const fh = await open(abs, "r");
         try {
+          const st = await fh.stat();
+          if (!st.isFile()) return undefined;
+          if (max === undefined) return new Uint8Array(await fh.readFile());
           const buf = new Uint8Array(Math.min(max, st.size));
           const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
           return buf.subarray(0, bytesRead);

@@ -281,7 +281,12 @@ export function parseRemote(
     }
   }
   if (host === undefined || pathPart === undefined) return undefined;
-  const p = pathPart.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
+  let p = pathPart.endsWith(".git") ? pathPart.slice(0, -4) : pathPart;
+  let start = 0;
+  let end = p.length;
+  while (start < end && p[start] === "/") start++;
+  while (end > start && p[end - 1] === "/") end--;
+  p = p.slice(start, end);
   const segs = p.split("/");
   if (segs.length < 2 || segs.some((s) => s === "")) return undefined;
   const h = host.toLowerCase();

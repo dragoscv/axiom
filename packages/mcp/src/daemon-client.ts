@@ -18,6 +18,7 @@ import {
   H_STDERR,
   H_STDIN,
   H_VERSION,
+  isLoopbackHost,
   readDaemonState,
 } from "./daemon-proto.js";
 
@@ -39,14 +40,12 @@ export interface DaemonCallInput {
   timeoutMs?: number;
 }
 
-const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
-
 export async function callDaemon(input: DaemonCallInput): Promise<DaemonVerdict | undefined> {
   if (process.env.AXIOM_GATE_DAEMON === "0") return undefined;
   const state = input.state ?? (await readDaemonState(input.home));
   if (state === undefined || state.protocol !== DAEMON_PROTOCOL) return undefined;
   // A tampered state file must not send the payload (or the token) off the machine.
-  if (!LOOPBACK.has(state.host.toLowerCase())) return undefined;
+  if (!isLoopbackHost(state.host)) return undefined;
   // `node:http` costs ~10 ms to load; only pay it when a daemon is actually configured.
   const { default: http } = await import("node:http");
   const qs = input.argv.map((a) => `a=${encodeURIComponent(a)}`).join("&");

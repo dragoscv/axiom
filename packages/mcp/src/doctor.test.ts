@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   compareVersions,
   type DoctorOptions,
+  defaultHealthFetch,
   GATE_P95_FAIL_MS,
   GATE_PROBE_RUNS,
   runDoctor,
@@ -299,6 +300,21 @@ describe("axiom doctor — gate profile vs global bin", () => {
 });
 
 describe("axiom doctor — resident daemon", () => {
+  it("health probe refuses a non-loopback host from daemon.json (token never sent)", async () => {
+    await expect(
+      defaultHealthFetch(200)({
+        protocol: 1,
+        pid: 1,
+        host: "example.com",
+        port: 80,
+        version: "9.9.9",
+        roots: [],
+        startedAt: "2026-10-14T00:00:00Z",
+        token: "t",
+      }),
+    ).rejects.toThrow(/not loopback/);
+  });
+
   let server: Server | undefined;
   afterEach(async () => {
     await new Promise<void>((r) => (server ? server.close(() => r()) : r()));

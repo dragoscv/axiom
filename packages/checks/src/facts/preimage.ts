@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import type { PreImageEntry } from "@codai/axiom-schema";
@@ -15,7 +15,16 @@ export async function currentPreImage(root: string, relPath: string): Promise<st
   try {
     const st = await lstat(abs);
     if (!st.isFile()) return "absent";
-    return sha256Hex(new Uint8Array(await readFile(abs)));
+    // Read through a handle and check it is the same inode lstat saw: a swap to a symlink or
+    // another file between the two calls is reported as drift, never hashed.
+    const fh = await open(abs, "r");
+    try {
+      const now = await fh.stat();
+      if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) return "absent";
+      return sha256Hex(new Uint8Array(await fh.readFile()));
+    } finally {
+      await fh.close();
+    }
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "ENOENT" || code === "ENOTDIR") return "absent";
