@@ -32,7 +32,24 @@ const LANDING = "index.mdx"; // hand-written, never touched by this script
 const ORDER = {
   "getting-started": ["install", "quickstart", "hooks"],
   concepts: ["pipeline", "invariants", "trust-model", "cas"],
-  guides: ["apply", "checks", "signing", "verify-tree", "snapshot", "emitters", "migrate"],
+  guides: [
+    "apply",
+    "checks",
+    "command-rules",
+    "sessions",
+    "undo",
+    "coordination",
+    "human-confirm",
+    "stats",
+    "managed",
+    "signing",
+    "verify-tree",
+    "sarif",
+    "otel",
+    "snapshot",
+    "emitters",
+    "migrate",
+  ],
   reference: [
     "cli",
     "mcp-tools",
@@ -42,7 +59,7 @@ const ORDER = {
     "axm-syntax",
     "versioning",
   ],
-  integration: ["harnesses", "github-action", "vscode", "codai", "brivio", "metu"],
+  integration: ["harnesses", "github-action", "vscode", "codai", "brivio", "metu", "agentq"],
   design: ["v2-architecture", "decisions"],
   research: [], // dated files — sorted by name (= by date)
 };

@@ -1,0 +1,44 @@
+{
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Profile",
+  "name": "axiom",
+  "extends": "default",
+  "facts": {
+    "allowRepo": true,
+    "allowGuards": false
+  },
+  "checks": [
+    {
+      "id": "repo.noOverwriteOf",
+      "predicate": "repo.noOverwriteOf",
+      "params": {
+        "globs": [
+          ".git/**",
+          ".axiom/**",
+          ".github/**",
+          "pnpm-lock.yaml",
+          "**/*.lock",
+          ".env*",
+          "**/.env*"
+        ]
+      }
+    },
+    {
+      "id": "content.noSecrets",
+      "predicate": "content.noSecrets",
+      "params": {}
+    },
+    {
+      "id": "path.deny",
+      "predicate": "path.deny",
+      "params": {
+        "globs": [
+          "**/node_modules/**",
+          "**/.next/**",
+          "**/dist/**",
+          "**/.turbo/**"
+        ]
+      }
+    }
+  ]
+}

@@ -47,6 +47,8 @@ import {
 } from "@codai/axiom-checks";
 import { type ErrorCode, isAxiomError, relPathIssues } from "@codai/axiom-schema";
 import { z } from "zod";
+import { CommandsConfigSchema, evaluateCommand } from "./command-rules.js";
+import { CoordinationSchema, evaluateCoordination } from "./coord.js";
 import { appendDecision, hashArgs, principalSubject } from "./decisions.js";
 import {
   allowStdout,
@@ -64,6 +66,19 @@ import {
   TOOL_NAME_KEYS,
   type ToolClass,
 } from "./gate-fast.js";
+import type { RuleVerdict } from "./gate-verdict.js";
+import { evaluateGit, type GitRules, GitRulesSchema } from "./gitfacts.js";
+import { postMain } from "./post-write.js";
+import {
+  checkSessionWrite,
+  checkStaleScript,
+  recordDeniedCreate,
+  recordSessionRead,
+  recordSessionWrite,
+  SessionsConfigSchema,
+  type SessionTarget,
+} from "./session-guard.js";
+import { captureUndo } from "./undo.js";
 
 export {
   allowStdout,
@@ -112,6 +127,21 @@ export const GateProfileSchema = z
     steerGlobs: z.array(z.string().min(1)).default([]),
     /** Append every judged write/shell decision to `.axiom/decisions.jsonl`. */
     record: z.boolean().default(false),
+    /** Command rules for shell tools (S-1208): own `deny` list + optional built-in `house` pack. */
+    commands: CommandsConfigSchema.optional(),
+    /** Cross-session overwrite / blind overwrite / stale-script rules (S-1209, S-1215). */
+    sessions: SessionsConfigSchema.optional(),
+    /** Capture the pre-image of every allowed write into CAS for `axiom undo --session` (S-1210). */
+    undo: z.boolean().default(false),
+    /** File-protocol coordination: marks, leases, queue-required commands (S-1212). */
+    coordination: CoordinationSchema.optional(),
+    /** Git-state rules read from `.git` without spawning git (S-1213). */
+    git: GitRulesSchema.optional(),
+    /**
+     * Shadow mode (S-1216): never deny; record what the gate WOULD have decided (and the shell
+     * command text) into `.axiom/decisions.jsonl` for a parity replay before a cutover.
+     */
+    shadow: z.boolean().default(false),
   })
   .strict();
 
@@ -134,6 +164,8 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
   steer: "hint",
   steerGlobs: [],
   record: false,
+  undo: false,
+  shadow: false,
 };
 
 /** `--profile`, then `<root>/.axiom/gate-profile.json`, then `~/.axiom/gate-profile.json`, then default. */
@@ -709,12 +741,31 @@ export interface ResolvedGateTarget {
 export class GateDeny extends Error {
   readonly code: string;
   readonly relPath: string | undefined;
-  constructor(code: string, message: string, relPath?: string) {
+  /** Sanctioned command/step that does the same thing (v2.6 rule verdicts). */
+  readonly fix: string | undefined;
+  /** Let the human decide instead of refusing (formats that support `ask`; deny elsewhere). */
+  readonly ask: boolean;
+  constructor(
+    code: string,
+    message: string,
+    relPath?: string,
+    opts: { fix?: string; ask?: boolean } = {},
+  ) {
     super(message);
     this.name = "GateDeny";
     this.code = code;
     this.relPath = relPath;
+    this.fix = opts.fix;
+    this.ask = opts.ask === true;
   }
+}
+
+/** A v2.6 rule verdict (`command.deny`, `coord.frozen`, …) as a gate deny. */
+export function verdictDeny(v: RuleVerdict): GateDeny {
+  return new GateDeny(v.id, v.reason, v.path, {
+    ...(v.fix === undefined ? {} : { fix: v.fix }),
+    ask: v.decision === "ask",
+  });
 }
 
 const PATH_CODES: ReadonlySet<string> = new Set<ErrorCode>([
@@ -855,6 +906,67 @@ export async function runGatePredicates(
 /** Deny id of `steer: "require"` (predicate-style, like `path.deny`). */
 export const STEER_REQUIRE_CODE = "steer.requireApply";
 
+/** Whole-file write tools: a create/overwrite, as opposed to a targeted edit. */
+const WHOLE_FILE_TOOL_RE = /^(create_file|createfile|write_file|writefile|write|create_new_file)$/i;
+
+export function isWholeFileTool(toolName: string): boolean {
+  return WHOLE_FILE_TOOL_RE.test(toolName.replace(/^.*[.:/]/, ""));
+}
+
+function toSessionTargets(
+  resolved: readonly ResolvedGateTarget[],
+  toolName: string,
+): SessionTarget[] {
+  const whole = isWholeFileTool(toolName);
+  return resolved.map((r) => ({ relPath: r.relPath, op: r.target.op, whole }));
+}
+
+/** A denied whole-file create leaves a marker so re-running that script is refused (S-1215). */
+async function noteDeniedCreate(
+  rootReal: string,
+  cls: ToolClass,
+  toolName: string,
+  resolved: readonly ResolvedGateTarget[],
+  targetRoot: string,
+  profile: GateProfile,
+): Promise<void> {
+  if (cls !== "write" || !isWholeFileTool(toolName)) return;
+  if (profile.sessions !== undefined && !profile.sessions.staleScript) return;
+  for (const r of resolved) await recordDeniedCreate(rootReal, path.join(targetRoot, r.relPath));
+}
+
+/**
+ * Shell-command rules of the v2.6 profile, in order: stale script (S-1215) → command rules
+ * (S-1208) → coordination (S-1212) → git state (S-1213). First verdict wins.
+ */
+export async function runCommandRules(
+  command: string,
+  profile: GateProfile,
+  rootReal: string,
+  home?: string,
+): Promise<RuleVerdict | undefined> {
+  if (profile.sessions === undefined || profile.sessions.staleScript) {
+    const v = await checkStaleScript(rootReal, command);
+    if (v !== undefined) return v;
+  }
+  if (profile.commands !== undefined) {
+    const v = evaluateCommand(command, profile.commands);
+    if (v !== undefined) return v;
+  }
+  if (profile.coordination !== undefined) {
+    const v = await evaluateCoordination(command, profile.coordination, {
+      root: rootReal,
+      ...(home === undefined ? {} : { home }),
+    });
+    if (v !== undefined) return v;
+  }
+  if (profile.git !== undefined) {
+    const v = await evaluateGit(command, profile.git as GitRules, rootReal);
+    if (v !== undefined) return v;
+  }
+  return undefined;
+}
+
 /**
  * `steer: "require"`: a direct write touching `steerGlobs` is denied — the agent must go through
  * `axiom_write`. Same glob semantics as `path.deny` (it IS `path.deny` over the steer globs).
@@ -926,6 +1038,9 @@ export function renderDeny(
   extra: { toolClass?: ToolClass; denyExit?: 0 | 2 },
 ): { stdout: string | undefined; exitCode: 0 | 2 } {
   const exit = (dflt: 0 | 2): 0 | 2 => extra.denyExit ?? dflt;
+  // `ask` hands the decision to the human where the harness has a prompt for it; every other
+  // format gets a plain deny (fail-closed).
+  const decision = d.ask && ASK_FORMATS.has(format) ? "ask" : "deny";
   switch (format) {
     case "codex":
       return {
@@ -958,12 +1073,21 @@ export function renderDeny(
             d,
             reason,
             extra.toolClass === undefined ? {} : { toolClass: extra.toolClass },
+            decision,
           ),
         ),
         exitCode: exit(GATE_DENY_EXIT_DEFAULT),
       };
   }
 }
+
+/** Formats whose PreToolUse contract has `permissionDecision: "ask"` (Claude, VS Code, Copilot). */
+const ASK_FORMATS: ReadonlySet<GateFormat> = new Set<GateFormat>([
+  "auto",
+  "claude",
+  "copilot",
+  "vscode",
+]);
 
 // ------------------------------------------------------------------- run --
 
@@ -988,6 +1112,11 @@ export interface GateOptions {
   /** Do not walk up from `cwd` to the nearest `.axiom/`/`.git/` ancestor. */
   noRootDiscovery?: boolean;
   /**
+   * `--track-reads` (S-1215): read tools reach the full gate (the `cli.ts` fast path is skipped)
+   * so a profile with `sessions.trackReads` can record what each session has seen.
+   */
+  trackReads?: boolean;
+  /**
    * Exit code for a deny (D-35). Default 0: the JSON document on stdout carries the decision,
    * which survives the npm `.ps1` shim. 2 for harnesses that only read the exit code (Windsurf).
    */
@@ -1003,6 +1132,39 @@ export interface GateOptions {
    * same value in the payload's `cwd`, so there is no ambiguity about who owns it.
    */
   cwdFallback?: () => string;
+}
+/** Read keys of read-only file tools (`read_file`, Claude `Read`, …). */
+const READ_TOOL_RE = /(^|[_.:-])(read|view)([_-]?file|[_-]?notebook)?$|^read/i;
+
+/** Record a read for `sessions.trackReads` (advisory; never fails the call). */
+async function trackRead(
+  payload: NormalizedPayload,
+  opts: GateOptions,
+  log: (lvl: GateLogLevel, msg: string) => void,
+): Promise<void> {
+  try {
+    if (payload.sessionId === undefined || !READ_TOOL_RE.test(payload.toolName)) return;
+    const rawPath = firstString(payload.input, PATH_KEYS);
+    if (rawPath === undefined) return;
+    const rootArg = payload.cwd ?? opts.root ?? (opts.cwdFallback ?? (() => process.cwd()))();
+    const cwdReal = await realOrResolved(path.resolve(rootArg));
+    const rootReal =
+      opts.noRootDiscovery === true ? cwdReal : await discoverRoot(cwdReal, opts.home);
+    const { profile } = await loadGateProfile({
+      root: rootReal,
+      ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
+      ...(opts.home === undefined ? {} : { home: opts.home }),
+    });
+    if (profile.sessions?.trackReads !== true) return;
+    const r = await resolveGateTarget(
+      rootReal,
+      { rawPath, op: "write", content: undefined },
+      cwdReal,
+    );
+    await recordSessionRead(rootReal, payload.sessionId, "", [r.relPath]);
+  } catch (err) {
+    log("debug", `track read: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export interface GateResult {
@@ -1035,19 +1197,25 @@ export interface GateResult {
  * them into their own deny; `axiom` carries the machine-readable verdict (OWASP ACS
  * vocabulary) plus code/path for log consumers. Unknown keys are ignored by both harnesses.
  */
-export function denyDocument(d: GateDeny, reason: string, extra: { toolClass?: ToolClass }) {
+export function denyDocument(
+  d: GateDeny,
+  reason: string,
+  extra: { toolClass?: ToolClass },
+  decision: "deny" | "ask" = "deny",
+) {
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: "deny",
+      permissionDecision: decision,
       permissionDecisionReason: reason,
     },
-    permissionDecision: "deny",
+    permissionDecision: decision,
     permissionDecisionReason: reason,
     axiom: {
-      verdict: "deny",
+      verdict: decision,
       code: d.code,
       ...(d.relPath === undefined ? {} : { path: d.relPath }),
+      ...(d.fix === undefined ? {} : { fix: d.fix }),
       ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
       standard: "owasp-acs/0.1",
     },
@@ -1061,15 +1229,17 @@ function denyResult(
   extra: { toolClass?: ToolClass; root?: string; denyExit?: 0 | 2; format?: GateFormat } = {},
 ): GateResult {
   const where = d.relPath === undefined ? "" : ` (${d.relPath})`;
-  const reason = `AXIOM GATE DENY ${d.code}: ${d.message}${where}`;
+  const fix = d.fix === undefined ? "" : ` — fix: ${d.fix}`;
+  const reason = `AXIOM GATE ${d.ask ? "ASK" : "DENY"} ${d.code}: ${d.message}${where}${fix}`;
   stderr.push(reason);
   const out = renderDeny(extra.format ?? "auto", d, reason, {
     ...(extra.toolClass === undefined ? {} : { toolClass: extra.toolClass }),
     ...(extra.denyExit === undefined ? {} : { denyExit: extra.denyExit }),
   });
+  const asked = d.ask && ASK_FORMATS.has(extra.format ?? "auto");
   return {
     decision: "deny",
-    verdict: "deny",
+    verdict: asked ? "ask" : "deny",
     exitCode: out.exitCode,
     code: d.code,
     reason: d.message,
@@ -1288,7 +1458,10 @@ export async function runGate(
   }
   const extracted = extractTargets(payload);
   toolClass = extracted.cls;
-  if (extracted.cls === "other") return allow(`tool ${payload.toolName} is not a write/shell tool`);
+  if (extracted.cls === "other") {
+    if (opts.trackReads === true) await trackRead(payload, opts, log);
+    return allow(`tool ${payload.toolName} is not a write/shell tool`);
+  }
   if (extracted.cls === "shell" && opts.noShellScan === true) {
     return allow(`tool ${payload.toolName} is a shell tool and --no-shell-scan is set`);
   }
@@ -1309,32 +1482,71 @@ export async function runGate(
     );
   }
   const targets = extracted.targets;
-  if (targets.length === 0) return allow(`tool ${payload.toolName} writes nothing recognisable`);
+  // A shell command with no write target may still hit a command / coordination / git rule
+  // (v2.6), so it needs the profile; a write tool with none was handled above.
+  const command = extracted.cls === "shell" ? commandString(payload.input) : undefined;
+  if (targets.length === 0 && command === undefined)
+    return allow(`tool ${payload.toolName} writes nothing recognisable`);
+  const agentId = `${payload.harness ?? (format === "auto" ? "unknown" : format)}:${payload.sessionId ?? "unknown"}`;
 
   /** Set once the main root and its profile are known: what the decision journal needs. */
   let rec: { root: string; profile: GateProfile; source: string } | undefined;
   const judgedPaths: string[] = [];
+  /**
+   * Shadow mode (S-1216): the FIRST v2.6 rule verdict (command / coordination / git / session)
+   * is remembered instead of enforced; the call continues and the journal line carries what the
+   * gate would have decided. Path / content predicates keep enforcing — shadow never weakens the
+   * protection a profile already had.
+   */
+  let shadowOf: GateResult | undefined;
+  /** Id of the v2.6 rule that decided (enforced or shadowed), for the journal's `rule` field. */
+  let ruleOf: string | undefined;
   const recorded = async (r: GateResult): Promise<GateResult> => {
-    if (rec === undefined || !rec.profile.record) return r;
+    if (rec === undefined) return r;
+    if (!rec.profile.record && !rec.profile.shadow) return r;
     try {
-      const harness = payload.harness ?? (format === "auto" ? "unknown" : format);
+      const judged = r.decision === "allow" && shadowOf !== undefined ? shadowOf : r;
       await appendDecision(rec.root, {
         v: 1,
         decided_at: new Date().toISOString(),
-        agent_id: `${harness}:${payload.sessionId ?? "unknown"}`,
+        agent_id: agentId,
         principal: { subject: principalSubject() },
         tool: payload.toolName,
         ...hashArgs(payload.input),
-        decision: r.decision,
-        ...(r.code === undefined ? {} : { code: r.code }),
-        ...(r.reason === undefined ? {} : { reason: r.reason }),
+        decision: judged.verdict === "ask" ? "ask" : judged.decision,
+        ...(judged.code === undefined ? {} : { code: judged.code }),
+        ...(judged.reason === undefined ? {} : { reason: judged.reason }),
         paths: [...new Set(judgedPaths)],
         profile: rec.source,
+        ms: Math.round(judged.durationMs * 10) / 10,
+        ...(rec.profile.shadow ? { shadow: true as const } : {}),
+        // Shadow records carry the command so `guard-parity.mjs --replay` can diff it (S-1216).
+        ...(rec.profile.shadow && command !== undefined ? { command } : {}),
+        ...(ruleOf !== undefined && judged.code === ruleOf ? { rule: ruleOf } : {}),
       });
     } catch (err) {
       log("debug", `decision journal: ${err instanceof Error ? err.message : String(err)}`);
     }
     return r;
+  };
+  /** A v2.6 rule verdict: enforced, or (shadow mode) remembered and `undefined` returned. */
+  const ruleVerdict = async (v: RuleVerdict): Promise<GateResult | undefined> => {
+    if (rec?.profile.shadow === true) {
+      if (shadowOf === undefined) {
+        ruleOf = v.id;
+        shadowOf = denyResult(verdictDeny(v), [], t0, {
+          ...(toolClass === undefined ? {} : { toolClass }),
+          format,
+        });
+      }
+      log(
+        "info",
+        `shadow: would ${v.decision ?? "deny"} ${v.id}${v.path === undefined ? "" : ` (${v.path})`}`,
+      );
+      return undefined;
+    }
+    ruleOf = v.id;
+    return recorded(deny(verdictDeny(v)));
   };
 
   try {
@@ -1370,6 +1582,13 @@ export async function runGate(
     const profile = main.profile;
     rec = { root: rootReal, profile, source: main.source };
     log("debug", `class=${extracted.cls} targets=${targets.length}`);
+    if (command !== undefined) {
+      const v = await runCommandRules(command, profile, rootReal, opts.home);
+      if (v !== undefined) {
+        const r = await ruleVerdict(v);
+        if (r !== undefined) return r;
+      }
+    }
     /** Targets grouped by the root they are judged against (the main root, or a sibling worktree). */
     const groups = new Map<string, ResolvedGateTarget[]>();
     const add = (root: string, r: ResolvedGateTarget) => {
@@ -1416,8 +1635,58 @@ export async function runGate(
       const p = await profileFor(root);
       const verdict =
         (await runGatePredicates(resolved, p)) ?? (await runSteerRequire(resolved, p));
-      if (verdict !== undefined) return recorded(deny(verdict));
+      if (verdict !== undefined) {
+        await noteDeniedCreate(rootReal, extracted.cls, payload.toolName, resolved, root, profile);
+        return recorded(deny(verdict));
+      }
       n += resolved.length;
+    }
+    const sessionTargets = toSessionTargets(groups.get(rootReal) ?? [], payload.toolName);
+    if (profile.sessions !== undefined && extracted.cls === "write") {
+      const v = await checkSessionWrite(
+        {
+          root: rootReal,
+          ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
+          agentId,
+          tool: payload.toolName,
+          targets: sessionTargets,
+        },
+        profile.sessions,
+      );
+      if (v !== undefined) {
+        if (v.decision !== "ask" && !profile.shadow) {
+          await noteDeniedCreate(
+            rootReal,
+            extracted.cls,
+            payload.toolName,
+            groups.get(rootReal) ?? [],
+            rootReal,
+            profile,
+          );
+        }
+        const r = await ruleVerdict(v);
+        if (r !== undefined) return r;
+      }
+    }
+    if (sessionTargets.length > 0) {
+      // Allowed: capture the pre-image for `axiom undo` and remember who is writing what.
+      if (profile.undo) {
+        await captureUndo(rootReal, {
+          ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
+          agentId,
+          tool: payload.toolName,
+          targets: sessionTargets,
+        });
+      }
+      if (profile.sessions !== undefined) {
+        await recordSessionWrite({
+          root: rootReal,
+          ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
+          agentId,
+          tool: payload.toolName,
+          targets: sessionTargets,
+        });
+      }
     }
     let hint: string | undefined;
     if (
@@ -1439,7 +1708,7 @@ export async function runGate(
 // ------------------------------------------------------------------- cli --
 
 export const GATE_USAGE =
-  "usage: axiom gate --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--log-level error|warn|info|debug]";
+  "usage: axiom gate --stdin [--post] [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--track-reads] [--deny-exit 0|2] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--log-level error|warn|info|debug]";
 
 function usageError(why: string, t0: number, format: GateFormat): GateResult {
   return {
@@ -1472,6 +1741,15 @@ export async function gateMain(
   const t0 = performance.now();
   // Scanned before parseArgs so even an argv error answers in the harness's own format.
   const argvFormat = formatFromArgv(argv);
+  if (argv.includes("--post")) {
+    // PostToolUse (S-1205): its own module, always exit 0 — a post hook cannot stop a tool.
+    const read = io.read ?? (await readStdin(io.stdin ?? process.stdin));
+    return postMain(argv, {
+      read,
+      ...(io.cwdFallback === undefined ? {} : { cwdFallback: io.cwdFallback }),
+      ...(io.home === undefined ? {} : { home: io.home }),
+    });
+  }
   let values: {
     stdin?: boolean;
     root?: string;
@@ -1480,6 +1758,7 @@ export async function gateMain(
     "fail-open"?: boolean;
     "no-shell-scan"?: boolean;
     "no-root-discovery"?: boolean;
+    "track-reads"?: boolean;
     "deny-exit"?: string;
     format?: string;
     "log-level"?: string;
@@ -1496,6 +1775,7 @@ export async function gateMain(
         "fail-open": { type: "boolean" },
         "no-shell-scan": { type: "boolean" },
         "no-root-discovery": { type: "boolean" },
+        "track-reads": { type: "boolean" },
         "deny-exit": { type: "string" },
         format: { type: "string" },
         "log-level": { type: "string" },
@@ -1527,6 +1807,7 @@ export async function gateMain(
   if (values["fail-open"] === true) opts.failOpen = true;
   if (values["no-shell-scan"] === true) opts.noShellScan = true;
   if (values["no-root-discovery"] === true) opts.noRootDiscovery = true;
+  if (values["track-reads"] === true) opts.trackReads = true;
   if (io.cwdFallback !== undefined) opts.cwdFallback = io.cwdFallback;
   if (io.home !== undefined) opts.home = io.home;
   if (read.tooLarge) {

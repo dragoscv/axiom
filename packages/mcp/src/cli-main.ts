@@ -50,13 +50,22 @@ const help = (version: string) => `axiom ${version} — transactional write gate
 
 Usage:
   axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
-            [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}]
+            [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}] [--require-human]
+                                         (--require-human: axiom_apply/axiom_write refuse unless a human confirms via MCP elicitation)
   axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
-             [--profile-name <name>] [--force] [--json]
+             [--profile-name <name>] [--force] [--upgrade] [--managed --out <dir>] [--json]
                                          (MCP entry + PreToolUse hook + .axiom/profiles/<name>.json + gate profile + .gitignore; idempotent;
-                                          --daemon: hooks call the native axiom-hook client / Claude HTTP hook of \`axiom serve --hook\`)
-  axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>]
-                                         (resident gate daemon for hooks; loopback only; writes ~/.axiom/daemon.json; Ctrl+C stops)
+                                          --daemon: hooks call the native axiom-hook client / Claude HTTP hook of \`axiom serve --hook\`;
+                                          --upgrade: record+steer, daemon client, global-bin MCP, PostToolUse in existing files;
+                                          --managed: enterprise policy files for Claude/Codex/Cursor/Copilot/VS Code into --out)
+  axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>] [--otel]
+                                         (resident gate daemon for hooks; loopback only; writes ~/.axiom/daemon.json; Ctrl+C stops;
+                                          --otel: GenAI execute_tool spans to $AXIOM_OTEL_ENDPOINT / $OTEL_EXPORTER_OTLP_ENDPOINT)
+  axiom stats [--root <dir>] [--since <iso>|<n>d|<n>h|<n>m] [--json]
+                                         (gate decisions allow/deny/ask, codes, p50/p95 per harness + silent-gate alarms from hook logs)
+  axiom undo --session <agent> [--root <dir>] [--dry-run] [--force] [--since <iso>]
+                                         (restore every file one agent session wrote; needs "undo": true in the gate profile; exit 1 = conflicts skipped)
+  axiom import-guard <guard.ps1> [-o <file>]   (PowerShell guard pattern tables → gate profile "commands" JSON)
   axiom attest decisions --root <dir> [--since <iso>] [--limit <n>] [--sign [--key-file <path>]]
                                          (gate decision journal → in-toto agent-decision Statements, JSON Lines; --sign = DSSE)
   axiom doctor [--root <dir>] [--json]   (bin on PATH, hooks, gate latency, lock, journals, chain, profiles; exit 2 = a check failed)
@@ -69,13 +78,14 @@ Usage:
   axiom verify <bundle.json> --tree <dir> [--pre] [--attest <out.json>]
                                           (tree ≟ manifest: every artifact digest (or --pre: the declared pre-image set);
                                            --attest writes an in-toto Statement ${"https://axiom.dev/attestation/apply/v1"})
-  axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
+  axiom check <bundle.json> --root <dir> [--profile <name>] [--json | --format text|json|sarif] [--allow-guards] [--guard-allowlist <abs>]...
   axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
                                          [--pr [--branch <name>] [--message <text>]]
                                          [--lock-timeout <ms>] [--keep-backups <n>]
                                          [--allow-guards] [--guard-allowlist <abs>]...
 	axiom rollback <digest> --root <dir>
-  axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal]   (CAS garbage collection; CLI only)
+  axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal] [--undo-ttl <n>(ms|s|m|h|d)]
+                                         (CAS garbage collection + expired undo logs; CLI only)
 	axiom diff <a.json> <b.json>
 	axiom schema <${SCHEMA_KINDS.join("|")}>
   axiom emitters [--json]                  (template emitters available to \`compile\`)
@@ -85,10 +95,10 @@ Usage:
                                           (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
   axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
   axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/guides/signing.md)
-  axiom gate --stdin [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--root <dir>] [--profile <file>]
-             [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level ...]
+  axiom gate --stdin [--post] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--root <dir>] [--profile <file>]
+             [--fail-open] [--no-shell-scan] [--no-root-discovery] [--track-reads] [--deny-exit 0|2] [--log-level ...]
                                          (PreToolUse hook; fail-closed; deny = exit 0 + harness JSON, windsurf/--deny-exit 2 = exit 2;
-                                          answered by \`axiom serve --hook\` when it runs, in-process otherwise)
+                                          answered by \`axiom serve --hook\` when it runs, in-process otherwise; --post = PostToolUse check)
     axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
                                            (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
   axiom snapshot --root <dir> [-o <out.json>] [--include <glob>]... [--exclude <glob>]... [--max-files <n>] [--no-gitignore] [--no-digest]
@@ -189,6 +199,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     http: { type: "string" },
     "http-token-env": { type: "string" },
     wire: { type: "string" },
+    "require-human": { type: "boolean" },
     ...GUARD_FLAGS,
   });
   const level = values["log-level"] ?? "warn";
@@ -211,7 +222,13 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // One task store per process: a stop (stdin end / signal) kills every guard tree still running
   // so no orphaned children survive the server (S-406).
   const tasks = new TaskStore();
-  const factory = serverFactory(policy, { log, guards, tasks });
+  const requireHuman = values["require-human"] === true;
+  const factory = serverFactory(policy, {
+    log,
+    guards,
+    tasks,
+    ...(requireHuman ? { requireHuman } : {}),
+  });
   if (values.http !== undefined) {
     const { parseHostPort, startHttp, HTTP_TOKEN_ENV_DEFAULT } = await import("./http-lazy.js");
     const { host, port } = parseHostPort(values.http);
@@ -376,10 +393,14 @@ async function cmdCheck(argv: string[]): Promise<number> {
     root: { type: "string" },
     profile: { type: "string" },
     json: { type: "boolean" },
+    format: { type: "string" },
     ...GUARD_FLAGS,
   });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("check: <bundle.json> is required");
+  const format = values.format ?? (values.json === true ? "json" : "text");
+  if (format !== "text" && format !== "json" && format !== "sarif")
+    throw new UsageError("--format must be text|json|sarif");
   const rootReal = await realRootArg(values.root);
   const bundle = parseBundleFile(await readJson(file));
   const profile = await loadProfileFor(rootReal, values.profile ?? bundle.manifest.profile);
@@ -392,7 +413,16 @@ async function cmdCheck(argv: string[]): Promise<number> {
     ...guardOptions(values),
   });
   await saveReport(rootReal, report);
-  if (values.json) {
+  if (format === "sarif") {
+    const { reportToSarif } = await import("./ops-lazy.js");
+    out(
+      reportToSarif(report, {
+        toolVersion: MIGRATE_VERSION,
+        root: rootReal,
+        bundlePath: path.resolve(file),
+      }),
+    );
+  } else if (format === "json") {
     out(report);
   } else {
     console.log(
@@ -506,6 +536,7 @@ async function cmdGc(argv: string[]): Promise<number> {
     "dry-run": { type: "boolean" },
     "older-than": { type: "string" },
     keep: { type: "string" },
+    "undo-ttl": { type: "string" },
   });
   const rootReal = await realRootArg(values.root);
   const keep = values.keep ?? "all-manifests";
@@ -519,6 +550,11 @@ async function cmdGc(argv: string[]): Promise<number> {
     const ms = parseDuration(values["older-than"]);
     if (ms === undefined) throw new UsageError("--older-than must be <n>(ms|s|m|h|d)");
     gcOpts.olderThanMs = ms;
+  }
+  if (values["undo-ttl"] !== undefined) {
+    const ms = parseDuration(values["undo-ttl"]);
+    if (ms === undefined) throw new UsageError("--undo-ttl must be <n>(ms|s|m|h|d)");
+    gcOpts.undoTtlMs = ms;
   }
   out(await collectGarbage(rootReal, gcOpts));
   return EXIT_OK;
@@ -664,6 +700,9 @@ async function cmdInit(argv: string[]): Promise<number> {
     "profile-name": { type: "string" },
     force: { type: "boolean" },
     daemon: { type: "boolean" },
+    upgrade: { type: "boolean" },
+    managed: { type: "boolean" },
+    out: { type: "string" },
     json: { type: "boolean" },
   });
   const { runInit, isHarnessArg, HARNESSES } = await import("./ops-lazy.js");
@@ -674,6 +713,13 @@ async function cmdInit(argv: string[]): Promise<number> {
   if (values["profile-name"] !== undefined) initOpts.profileName = values["profile-name"];
   if (values.force === true) initOpts.force = true;
   if (values.daemon === true) initOpts.daemon = true;
+  if (values.upgrade === true) initOpts.upgrade = true;
+  if (values.managed === true) {
+    if (values.out === undefined) throw new UsageError("init --managed needs --out <dir>");
+    initOpts.managed = { out: path.resolve(values.out) };
+  } else if (values.out !== undefined) {
+    throw new UsageError("--out is only valid with --managed");
+  }
   const r = await runInit(initOpts);
   if (values.json) {
     out(r);
@@ -812,6 +858,7 @@ async function cmdServe(argv: string[]): Promise<number> {
     host: { type: "string" },
     port: { type: "string" },
     "token-env": { type: "string" },
+    otel: { type: "boolean" },
   });
   if (values.hook !== true) throw new UsageError("serve: only --hook is supported");
   const rootArgs = (values.root ?? []).map((r) => path.resolve(r));
@@ -825,13 +872,23 @@ async function cmdServe(argv: string[]): Promise<number> {
     if (token === undefined || token === "")
       throw new UsageError(`serve --hook: env var ${values["token-env"]} is empty`);
   }
-  const { startDaemon } = await import("./serve-lazy.js");
+  const { startDaemon, createOtelExporter, otelFromEnv } = await import("./serve-lazy.js");
+  let otel: ReturnType<typeof createOtelExporter> | undefined;
+  if (values.otel === true) {
+    const o = otelFromEnv(process.env);
+    if (o === undefined)
+      throw new UsageError(
+        "serve --otel: set AXIOM_OTEL_ENDPOINT or OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT to an http(s) URL",
+      );
+    otel = createOtelExporter(o);
+  }
   const d = await startDaemon({
     roots: [...policy.roots],
     version: MIGRATE_VERSION,
     ...(values.host === undefined ? {} : { host: values.host }),
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),
+    ...(otel === undefined ? {} : { otel }),
   });
   console.error(
     JSON.stringify({
@@ -874,6 +931,76 @@ async function cmdAttest(argv: string[]): Promise<number> {
       : {}),
   });
   for (const r of rows) console.log(JSON.stringify(r));
+  return EXIT_OK;
+}
+
+/** `axiom undo --session <agent>` (S-1210): restore what one agent session wrote. */
+async function cmdUndo(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    session: { type: "string" },
+    "dry-run": { type: "boolean" },
+    force: { type: "boolean" },
+    since: { type: "string" },
+  });
+  if (values.session === undefined) throw new UsageError("undo: --session <agent> is required");
+  const { undoSession } = await import("./ops-lazy.js");
+  const r = await undoSession(await localRoot(values.root), {
+    agent: values.session,
+    ...(values["dry-run"] === true ? { dryRun: true } : {}),
+    ...(values.force === true ? { force: true } : {}),
+    ...(values.since === undefined ? {} : { since: values.since }),
+  });
+  out(r);
+  return r.conflicts > 0 ? EXIT_FAIL : EXIT_OK;
+}
+
+/** `axiom stats` (S-1211): gate decisions + harness hook logs + silent-gate alarms. */
+async function cmdStats(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    root: { type: "string" },
+    since: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const { collectStats, parseSince, renderStats } = await import("./ops-lazy.js");
+  let since: string | undefined;
+  if (values.since !== undefined) {
+    try {
+      since = parseSince(values.since);
+    } catch (err) {
+      throw new UsageError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  const s = await collectStats({
+    root: await localRoot(values.root),
+    ...(since === undefined ? {} : { since }),
+  });
+  if (values.json === true) out(s);
+  else for (const line of renderStats(s)) console.log(line);
+  return EXIT_OK;
+}
+
+/** `axiom import-guard <guard.ps1>` (S-1216): PowerShell guard tables → gate profile `commands`. */
+async function cmdImportGuard(argv: string[]): Promise<number> {
+  const { values, positionals } = opts(argv, { out: { type: "string", short: "o" } });
+  const file = positionals[0];
+  if (file === undefined) throw new UsageError("import-guard: <guard.ps1> is required");
+  const { importGuardProfile } = await import("./ops-lazy.js");
+  const r = importGuardProfile(await readFile(path.resolve(file), "utf8"));
+  for (const s of r.skipped) console.error(`skipped line ${s.line}: ${s.why}`);
+  if (values.out !== undefined) {
+    await writeFile(
+      path.resolve(values.out),
+      `${JSON.stringify({ commands: r.commands }, null, 2)}\n`,
+    );
+    out({
+      written: path.resolve(values.out),
+      rules: r.commands.deny.length,
+      skipped: r.skipped.length,
+    });
+  } else {
+    out({ commands: r.commands, skipped: r.skipped });
+  }
   return EXIT_OK;
 }
 
@@ -1008,6 +1135,9 @@ const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
   serve: cmdServe,
   attest: cmdAttest,
   migrate: cmdMigrate,
+  undo: cmdUndo,
+  stats: cmdStats,
+  "import-guard": cmdImportGuard,
   snapshot: cmdSnapshot,
   "snapshot-diff": cmdSnapshotDiff,
 };

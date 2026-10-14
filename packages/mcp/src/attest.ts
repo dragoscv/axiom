@@ -29,7 +29,8 @@ export function statementFor(rec: DecisionRecord): InTotoAgentDecisionV0_1 {
     tool: rec.tool,
     args_hash: rec.args_hash,
     args_state: rec.args_state,
-    decision: rec.decision,
+    // The v0.1 predicate knows allow|deny; an `ask` did not let the tool run unattended.
+    decision: rec.decision === "allow" ? "allow" : "deny",
     ...(rec.code === undefined ? {} : { code: rec.code }),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     paths: rec.paths,

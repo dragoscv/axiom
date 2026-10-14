@@ -36,6 +36,8 @@ import {
   HEALTH_PATH,
 } from "./daemon-proto.js";
 import { GATE_STDIN_MAX_BYTES, type GateResult, gateMain } from "./gate.js";
+import { TOOL_NAME_KEYS } from "./gate-fast.js";
+import type { OtelExporter } from "./otel.js";
 import { isSameOrInside, realDir } from "./roots.js";
 
 export interface ServeOptions {
@@ -52,6 +54,8 @@ export interface ServeOptions {
   noStateFile?: boolean;
   /** Called for every judged request (tests, metrics). */
   onRequest?: (r: { path: string; status: number; ms: number }) => void;
+  /** S-1217: one `execute_tool` span per judged request (opt-in; flushed on close). */
+  otel?: OtelExporter;
 }
 
 export interface RunningDaemon {
@@ -146,6 +150,32 @@ function payloadCwd(text: string): string | undefined {
   return undefined;
 }
 
+const TOOL_CALL_ID_KEYS = ["tool_use_id", "toolCallId", "tool_call_id"] as const;
+
+/** Tool name + call id from the payload, for the span only (no content leaves the process). */
+function payloadToolInfo(text: string): { tool?: string; toolCallId?: string } {
+  try {
+    const v: unknown = JSON.parse(text);
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
+    const o = v as Record<string, unknown>;
+    const first = (keys: readonly string[]): string | undefined => {
+      for (const k of keys) {
+        const s = o[k];
+        if (typeof s === "string" && s !== "") return s;
+      }
+      return undefined;
+    };
+    const tool = first(TOOL_NAME_KEYS);
+    const toolCallId = first(TOOL_CALL_ID_KEYS);
+    return {
+      ...(tool === undefined ? {} : { tool }),
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
   const host = opts.host ?? DAEMON_DEFAULT_HOST;
   if (!isLoopbackHost(host)) {
@@ -159,6 +189,25 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
   const roots = [...opts.roots];
   const startedAt = new Date().toISOString();
   let requests = 0;
+  const otel = opts.otel;
+
+  const trace = (r: GateResult, text: string, format: string, startMs: number): void => {
+    if (otel === undefined) return;
+    try {
+      otel.record({
+        ...payloadToolInfo(text),
+        decision: r.decision,
+        ...(r.code === undefined ? {} : { code: r.code }),
+        ...(r.toolClass === undefined ? {} : { toolClass: r.toolClass }),
+        ...(r.root === undefined ? {} : { root: r.root }),
+        format,
+        startMs,
+        durationMs: r.durationMs,
+      });
+    } catch {
+      // telemetry never affects the verdict
+    }
+  };
 
   const judge = async (
     argv: string[],
@@ -177,6 +226,7 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const t0 = performance.now();
+    const wallStart = Date.now();
     const url = new URL(req.url ?? "/", "http://localhost");
     const done = (status: number) =>
       opts.onRequest?.({ path: url.pathname, status, ms: performance.now() - t0 });
@@ -232,6 +282,7 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
       }
       const r = await judge(["--stdin", "--format", "claude"], body, "ok", cwd);
       send(res, 200, r.stdout ?? "");
+      trace(r, text, "claude", wallStart);
       done(200);
       return;
     }
@@ -270,6 +321,10 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
       [H_EXIT]: String(r.exitCode),
       [H_STDERR]: encodeHeader(r.stderr.join("\n")),
     });
+    if (otel !== undefined) {
+      const fi = argv.indexOf("--format");
+      trace(r, text, (fi >= 0 ? argv[fi + 1] : undefined) ?? "auto", wallStart);
+    }
     done(200);
   };
 
@@ -314,6 +369,7 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     async close() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections();
+      await otel?.close();
       if (opts.noStateFile !== true) await rm(statePath, { force: true });
     },
   };

@@ -2,14 +2,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  COPILOT_CLI_EVENTS_FILE,
+  copilotCliSessionDir,
+  findCopilotCliEventLogs,
   findHookLogs,
+  GATE_SILENT_MIN_RUNS,
   HOOK_LOG_FILE,
   hookLogRoots,
+  parseCopilotCliHookRuns,
   parseHookLog,
   parseHookRuns,
   readHookLogStats,
   readTail,
   runsForRoot,
+  samePathLoose,
 } from "./hooklog.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -138,5 +144,54 @@ describe("findHookLogs / readTail", () => {
     await writeFile(f, "aaaaaaaaaa\nbbbb\ncccc\n");
     expect(await readTail(f, 8)).toBe("cccc\n");
     expect(await readTail(f)).toBe("aaaaaaaaaa\nbbbb\ncccc\n");
+  });
+});
+
+describe("shared helpers", () => {
+  it("GATE_SILENT_MIN_RUNS matches doctor's threshold", () => {
+    expect(GATE_SILENT_MIN_RUNS).toBe(20);
+  });
+
+  it("samePathLoose ignores case and trailing separators", () => {
+    expect(samePathLoose("/a/B/", "/a/b")).toBe(true);
+    expect(samePathLoose("/a/b", "/a/c")).toBe(false);
+  });
+});
+
+// Real Copilot CLI session-state lines (copilotVersion 1.0.92-4, 2026-10-06), ids shortened.
+const CLI_SAMPLE = [
+  '{"type":"hook.start","data":{"hookInvocationId":"f9","hookType":"preToolUse","input":{"sessionId":"009e","cwd":"E:/gh/codai","toolCalls":[{"id":"toolu_1","name":"rename_session","args":"{}"}]}},"id":"e0","timestamp":"2026-07-29T21:29:27.999Z","parentId":"01"}',
+  '{"type":"hook.end","data":{"hookInvocationId":"f9","hookType":"preToolUse","success":true},"id":"cc","timestamp":"2026-07-29T21:29:28.000Z","parentId":"e0"}',
+  '{"type":"hook.start","data":{"hookInvocationId":"b1","hookType":"preToolUse","input":{"sessionId":"009e","cwd":"E:/gh/codai","toolCalls":[]}},"id":"fc","timestamp":"2026-10-06T15:14:00.993Z","parentId":null}',
+  '{"type":"hook.end","data":{"hookInvocationId":"b1","hookType":"preToolUse","success":false,"output":{"toolu_01":"Denied by preToolUse hook from \\"E:_gh_codai_.github_hooks_axiom-gate.json\\" (hook errored)"},"error":{"message":"Error: spawn axiom ENOENT","source":"E:\\\\gh\\\\codai\\\\.github\\\\hooks\\\\axiom-gate.json"}},"id":"01","timestamp":"2026-10-06T15:14:01.393Z","parentId":"fc"}',
+  '{"type":"hook.end","data":{"hookInvocationId":"x9","hookType":"postToolUse","success":false,"error":{"source":"C:\\\\h\\\\guard.json"}},"timestamp":"2026-10-06T15:15:00.000Z"}',
+  '{"type":"assistant.message","data":{"content":"hook.start"}}',
+  'not json {"hook.',
+].join("\n");
+
+describe("parseCopilotCliHookRuns", () => {
+  it("pairs start/end by invocation id, computes ms and attributes only errored gate runs", () => {
+    const runs = parseCopilotCliHookRuns(CLI_SAMPLE);
+    expect(runs.map((r) => [r.id, r.hookType, r.cwd, r.success, r.ms, r.gate])).toEqual([
+      ["f9", "preToolUse", "E:/gh/codai", true, 1, false],
+      ["b1", "preToolUse", "E:/gh/codai", false, 400, true],
+      ["x9", "postToolUse", undefined, false, undefined, false],
+    ]);
+    expect(runs[1]?.source).toBe("E:\\gh\\codai\\.github\\hooks\\axiom-gate.json");
+    expect(runs[2]?.at).toBe("2026-10-06T15:15:00.000Z");
+  });
+
+  it("finds the newest events files, honouring since and max", async () => {
+    const dir = join(home.root, "ss");
+    for (const s of ["a", "b", "c"]) {
+      await mkdir(join(dir, s), { recursive: true });
+      await writeFile(join(dir, s, COPILOT_CLI_EVENTS_FILE), CLI_SAMPLE);
+    }
+    await mkdir(join(dir, "empty"), { recursive: true });
+    expect(await findCopilotCliEventLogs(dir)).toHaveLength(3);
+    expect(await findCopilotCliEventLogs(dir, { max: 2 })).toHaveLength(2);
+    expect(await findCopilotCliEventLogs(dir, { sinceMs: Date.now() + 60_000 })).toEqual([]);
+    expect(await findCopilotCliEventLogs(join(home.root, "missing"))).toEqual([]);
+    expect(copilotCliSessionDir("/h")).toBe(join("/h", ".copilot", "session-state"));
   });
 });

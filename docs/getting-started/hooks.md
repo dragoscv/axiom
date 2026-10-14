@@ -205,6 +205,77 @@ gate's own bugs; `--strict` (2.1) is accepted and ignored.
 The stdout JSON is what JSON-aware harnesses act on; with `--deny-exit 2` the exit code carries
 the decision too. The stderr line is what the model sees as the reason.
 
+### Fail-closed audit — what each harness does when the hook fails (S-1203, verified 2026-10-14)
+
+The gate fails closed on everything *it* sees. What happens when the hook process itself times
+out, crashes, exits with an unexpected code or prints bad JSON is the **harness's** decision. Read
+from each harness's official hook reference on 2026-10-14; anything the page does not state is
+marked *unverified*.
+
+| Harness | Default timeout | Timeout | Crash / cannot start | Other non-zero exit | Bad JSON on stdout | Result | Knob AXIOM sets |
+|---|---|---|---|---|---|---|---|
+| VS Code Local ([guide](https://code.visualstudio.com/docs/agent-customization/hooks), [reference](https://code.visualstudio.com/docs/agents/reference/hooks-reference)) | 30 s | *unverified* (by the exit-code table: warning) | *unverified* | non-blocking warning, tool runs ("any other value") | *unverified* | **fail-open** | none exists — `timeoutSec: 15`, `axiom.cmd …; exit $LASTEXITCODE`, deny = exit 0 + JSON; doctor `failopen.copilot` |
+| VS Code Agent Host / Copilot CLI ([hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)) | 30 s (`timeoutSec`) | **always fail-open**, even for admin policy hooks | **deny** ("a crash or non-zero exit … denies the tool call") | **deny** | treated as no output → default behaviour | crash **closed**, timeout **open** | none exists for timeouts — same file as above |
+| Copilot cloud agent (same reference) | 30 s | fail-open | deny | deny | no output | as Copilot CLI | only `bash`/`command` honoured — the file has both |
+| Claude Code ([hooks](https://code.claude.com/docs/en/hooks)) | 600 s (`command`, `http`) | tool call proceeds | non-blocking, action goes ahead | non-blocking (JSON fields decide) | non-blocking | **fail-open by default** | `onFailure: "block"` (Claude Code ≥ 2.1.295): timeout, launch failure, exit ≠ 0/2 and invalid output all block; `timeout: 15` |
+| Codex ([hooks](https://developers.openai.com/codex/hooks)) | 600 s | reported as a hook failure, tool continues | same | *unverified* (only exit 2 is documented to block) | plain stdout ignored; unsupported fields → failed run, tool continues | **fail-open** | none documented — `timeout: 10`, `commandWindows` propagates exit; doctor `failopen.codex` |
+| Cursor ([hooks](https://cursor.com/docs/agent/hooks)) | "platform default" (*unverified* number) | allowed through | allowed through | allowed through | **blocks** for permission hooks (`preToolUse`, `beforeShellExecution`) | fail-open unless `failClosed` | `failClosed: true` — crash, timeout, non-zero exit and no output block; doctor `hook.cursor` warns without it |
+| Windsurf / Devin ([hooks](https://docs.windsurf.com/windsurf/cascade/hooks)) | not documented | *unverified* | action proceeds ("Any other" = error, proceeds) | action proceeds — **only exit 2 blocks** | stdout not read | **fail-open** | none exists — `--format windsurf` exits 2; doctor `failopen.windsurf` |
+| Gemini CLI ([reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md)) | 60000 ms | *unverified* | *unverified* | warning, proceeds with original parameters | defaults to allow | **fail-open** | none exists — `timeout: 10000`; doctor `failopen.gemini` |
+| Junie CLI ([hooks](https://junie.jetbrains.com/docs/junie-cli-hooks.html)) | 10 s | force-killed, warning, continues | *unverified* | warning, tool proceeds | raw stdout becomes additionalContext | **fail-open** | none for PreToolUse (`blockOnError` is Stop-only); doctor `failopen.junie` (user config) |
+| Cline ([SDK plugins](https://docs.cline.bot/sdk/plugins)) | 3 s per plugin hook (file-hook timeout: *unverified*) | `hookErrorMode: "ignore"` (default) continues | same | file hooks ignore exit codes (*unverified* on current docs) | — | **fail-open** | init's scripts print `{"cancel":true}` whenever `axiom` cannot run |
+
+So only **Claude Code** (`onFailure: "block"`) and **Cursor** (`failClosed: true`) can be made fully
+fail-closed, and `axiom init` sets both. **Copilot CLI** fails closed on a crash but open on a
+timeout. Everywhere else a slow or dead gate is a skipped gate. The mitigation is speed: keep the
+gate far below the timeout (`axiom init --daemon`, `axiom doctor` → `gate.latency`). `axiom
+doctor` emits `failopen.<harness>` (`warn`) for every wired harness whose failure path is open
+and names the mitigation. It stays silent when the entry already has the harness's knob: Claude
+with `onFailure: "block"`; Cursor with `failClosed` (a Cursor entry without it still warns as
+`hook.cursor`).
+
+### Post-write check — `axiom gate --stdin --post` (2.6.0, S-1205)
+
+The shell scan sees only what a command *says*. After the tool ran, the harness tells us what it
+*did*, so `axiom init` also wires a **PostToolUse** check where the harness has one AXIOM can use:
+
+| Harness | Event / file | What changed is read from | Feedback when a protected path changed |
+|---|---|---|---|
+| Claude Code | `PostToolUse` in `.claude/settings.json`, matcher `Bash\|PowerShell\|Write\|Edit\|MultiEdit` | `tool_response.bashEditDiff.changedFiles[]` / `files[]` (Bash, v2.1.269+, public beta, "best effort"), `tool_response.filePath` (Write/Edit), then the shell scan of `tool_input.command` | `{"decision":"block","reason":…}`, exit 0 — Claude adds the reason next to the tool result |
+| Codex | `PostToolUse` in `.codex/hooks.json`, same matcher as the gate | `tool_input` (`.command` for Bash and `apply_patch`); `tool_response` has no file list | `{"decision":"block","reason":…}` — replaces the tool result with the reason |
+| VS Code / Copilot CLI / cloud agent | `postToolUse` in `.github/hooks/axiom-gate.json` (VS Code maps it to its PostToolUse; runtime payload is the Local schema with `tool_response`) | `tool_input` targets (file path keys, shell scan) | `{"decision":"block","reason":…,"hookSpecificOutput":{"additionalContext":…}}` — VS Code honours `decision`; Copilot CLI has no block and reads only `additionalContext` |
+
+Cursor (`postToolUse` has no block decision), Windsurf (post hooks cannot block), Gemini
+(`AfterTool` could, not wired yet), Junie (no PostToolUse event) and Cline are not wired.
+
+A post hook **cannot undo** the write. The reason says so and tells the agent to restore the file
+and use `axiom_write` for a legitimate change. The checks are the gate's own (`path.deny`,
+`path.allow`, `content.noSecrets`, `content.maxBytes`), and paths outside the root are ignored.
+With `record: true` every post check appends a decision with `"phase": "post"`. Fail-closed is
+meaningless after the fact, so an internal error, a malformed payload or a bad profile → allow
+plus one `AXIOM GATE WARN` line. The post command always calls the global `axiom` bin (≥ 2.6.0),
+never `axiom-hook`. `axiom doctor` reports `hook.post.<harness>`: `ok`; `warn` when missing
+(hint `axiom init --upgrade`) or when the global bin is older than 2.6.0.
+
+### Upgrading an existing wiring — `axiom init --upgrade` (2.6.0, S-1204)
+
+`--upgrade` edits only files that already exist, never removes a user key and needs no
+`--force`; a second run changes nothing. Each change is reported as `updated` with its reason:
+
+- `.axiom/gate-profile.json`: adds `record: true` and `steer: "hint"` when absent — only when the
+  global bin is ≥ 2.5.0 (older gates reject the keys);
+- when a resident daemon answers `/v1/health`: every axiom **gate** command switches from `axiom`
+  to `axiom-hook` (`axiom.cmd` → `axiom-hook.exe`), and a Claude command hook becomes the daemon
+  HTTP hook; foreign hooks and the `--post` entries are left alone;
+- MCP entries running `npx -y @codai/axiom-mcp@2 mcp --root X` (`.vscode/mcp.json`,
+  `.cursor/mcp.json`, `.gemini/settings.json`, `.junie/mcp/mcp.json`, `[mcp_servers.axiom]` in
+  `.codex/config.toml`) become `axiom mcp --root X` when the global bin is on `PATH`; otherwise they
+  stay on `npx` with a note;
+- the exec-only `.github/hooks/axiom-gate.json` of axiom ≤ 2.5.1 is migrated;
+- missing PostToolUse entries are added for Claude, Codex and Copilot (global bin ≥ 2.6.0).
+
+Managed / enterprise policy files (`axiom init --managed --out <dir>`): [guides/managed.md](../guides/managed.md).
+
 ### Verified harness facts (2026-09-18)
 
 - **Claude Code** (`code.claude.com/docs/en/hooks`, via Context7): stdin is
@@ -253,11 +324,11 @@ in a hook file — and `axiom doctor` checks them afterwards:
 
 | Harness | File `axiom init` writes | How |
 |---|---|---|
-| Copilot CLI · VS Code · Copilot cloud agent | `.github/hooks/axiom-gate.json` | whole file, exactly the JSON block below; an existing different file is `skipped (exists)` unless `--force` — except the exec-only file written by axiom ≤ 2.5.1, which is migrated automatically |
-| Claude Code | `.claude/settings.json` | merged: the Claude entry below (matcher incl. `Bash\|PowerShell`, `onFailure: "block"`) is appended to `hooks.PreToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
+| Copilot CLI · VS Code · Copilot cloud agent | `.github/hooks/axiom-gate.json` | whole file, exactly the JSON block below (`preToolUse` + `postToolUse`); an existing different file is `skipped (exists)` unless `--force` — except the exec-only file written by axiom ≤ 2.5.1, which is migrated automatically |
+| Claude Code | `.claude/settings.json` | merged: the Claude entry below (matcher incl. `Bash\|PowerShell`, `onFailure: "block"`) is appended to `hooks.PreToolUse` and the post check to `hooks.PostToolUse`; other keys and hooks are kept; an entry whose command already runs `axiom … gate` counts as present (`--force` replaces it); a file with comments (JSONC) is skipped, never rewritten |
 | Cursor | `.cursor/hooks.json` + `.cursor/mcp.json` | `preToolUse` (`Write\|Delete\|Shell`) + `beforeShellExecution`, `--format cursor`, `failClosed: true` |
 | Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | `pre_write_code` + `pre_run_command`, `--format windsurf` (exit 2); the Windows `powershell` field ends `; exit $LASTEXITCODE` — without it PowerShell turned exit 2 into 1 and no deny blocked |
-| Codex | `.codex/hooks.json` + `.codex/config.toml` | `PreToolUse` matcher `^(Bash\|apply_patch\|Edit\|Write)$`, `--format codex` (`commandWindows` propagates the exit code); TOML `[mcp_servers.axiom]` appended only when absent |
+| Codex | `.codex/hooks.json` + `.codex/config.toml` | `PreToolUse` + `PostToolUse`, matcher `^(Bash\|apply_patch\|Edit\|Write)$` (Codex matches shell commands and unified exec as `Bash` on every OS; no separate PowerShell tool name is documented), `--format codex` (`commandWindows` propagates the exit code); TOML `[mcp_servers.axiom]` appended only when absent |
 | Gemini CLI | `.gemini/settings.json` | `hooks.BeforeTool` (`write_file\|replace\|run_shell_command`, timeout in ms) + `mcpServers.axiom` |
 | Junie | `.junie/mcp/mcp.json` (+ `.junie/guidelines.md` section) | hooks run only from the user's `~/.junie/config.json` — `init` prints the snippet |
 | Cline | `.clinerules/hooks/PreToolUse` (sh, 0755) + `PreToolUse.ps1` | both print a `cancel` document when `axiom` cannot run (Cline has no fail-closed); tick "Enable Hooks" |
@@ -295,6 +366,15 @@ is a `warn` pointing at `gate-profile.json`.
         "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
         "timeoutSec": 15
       }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --post --format auto",
+        "bash": "axiom gate --stdin --post --format auto",
+        "powershell": "axiom.cmd gate --stdin --post --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
+      }
     ]
   }
 }
@@ -313,9 +393,17 @@ Do **not** use `exec`/`args`: only Copilot CLI honours it. `--daemon` writes the
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "axiom gate --stdin", "timeout": 5 }
+          { "type": "command", "command": "axiom gate --stdin --format claude", "timeout": 15, "onFailure": "block" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "axiom gate --stdin --post --format claude", "timeout": 15 }
         ]
       }
     ]
@@ -323,8 +411,9 @@ Do **not** use `exec`/`args`: only Copilot CLI honours it. `--daemon` writes the
 }
 ```
 
-`timeout` is in seconds. The matcher keeps the hook off `Read`/`Bash`; without it the gate still
-answers `allow` for non-write tools in < 1 ms, so either is fine.
+`timeout` is in seconds. On Windows without Git Bash, Claude registers only `PowerShell` (no
+`Bash`), so a matcher without `PowerShell` never sees shell writes there. `onFailure: "block"`
+turns a crashed or timed-out gate into a block.
 
 ### Flags
 

@@ -19,6 +19,12 @@ import * as path from "node:path";
 export const HOOK_LOG_FILE = "GitHub Copilot Chat Hooks.log";
 export const HOOK_LOG_MAX_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Hooks fire for a workspace this many times (PreToolUse) with zero axiom gate runs among them →
+ * the gate is not wired. Shared by `axiom stats`; doctor keeps its own equal constant.
+ */
+export const GATE_SILENT_MIN_RUNS = 20;
+
 /** A Running command that invokes the axiom gate (global bin, thin client or the repo script). */
 export const AXIOM_GATE_RUN_RE = /\baxiom(-hook)?\b.*\bgate\b|axiom-gate/;
 
@@ -125,8 +131,11 @@ export function summarizeRuns(runs: readonly HookRun[]): HookLogStats {
   };
 }
 
-/** Case-insensitive on win32 path equality for `cwd` filtering (`e:\gh\x` vs `E:\gh\x`). */
-function samePathLoose(a: string, b: string): boolean {
+/**
+ * Loose path equality for `cwd` filtering: resolved, trailing separators dropped, compared
+ * case-insensitively (`e:\gh\x` vs `E:/gh/x/`).
+ */
+export function samePathLoose(a: string, b: string): boolean {
   const n = (p: string) => {
     const s = path.resolve(p);
     let end = s.length;
@@ -240,4 +249,116 @@ export async function readHookLogStats(
     }
   }
   return summarizeRuns(root === undefined ? runs : runsForRoot(runs, root));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Copilot CLI: `~/.copilot/session-state/<sessionId>/events.jsonl` (copilotVersion 1.0.92-4,
+// 2026-10). One JSON event per line; hook invocations are a `hook.start`/`hook.end` pair joined
+// by `data.hookInvocationId`:
+//   {"type":"hook.start","data":{"hookInvocationId":"…","hookType":"preToolUse","input":{"sessionId":"…","cwd":"E:/gh/codai","toolCalls":[…]}},"timestamp":"2026-07-29T21:29:27.999Z"}
+//   {"type":"hook.end","data":{"hookInvocationId":"…","hookType":"preToolUse","success":false,"output":{…},"error":{"message":"Error: spawn axiom ENOENT","source":"E:\\gh\\codai\\.github\\hooks\\axiom-gate.json"}},"timestamp":"…"}
+// One invocation covers EVERY configured hook of that event, and a successful end names no hook
+// file — so the axiom gate is attributable only when it errors (`error.source`/output text).
+// ---------------------------------------------------------------------------------------------
+
+export const COPILOT_CLI_EVENTS_FILE = "events.jsonl";
+/** Newest session files read per call (by mtime). */
+export const COPILOT_CLI_MAX_SESSIONS = 100;
+
+export interface CliHookRun {
+  id: string;
+  /** `preToolUse`, `postToolUse`, `sessionStart`, … */
+  hookType: string;
+  cwd?: string;
+  /** ISO timestamp of the start event (or the end event when the start is missing). */
+  at?: string;
+  success?: boolean;
+  /** Wall time of the whole invocation (all hooks of the event), end − start. */
+  ms?: number;
+  /** `error.source` of a failed invocation (the hook config file). */
+  source?: string;
+  /** The invocation is attributable to the axiom gate (it errored and names it). */
+  gate: boolean;
+}
+
+interface CliEvent {
+  type?: unknown;
+  timestamp?: unknown;
+  data?: {
+    hookInvocationId?: unknown;
+    hookType?: unknown;
+    success?: unknown;
+    input?: { cwd?: unknown };
+    output?: unknown;
+    error?: { source?: unknown; message?: unknown };
+  };
+}
+
+/** Every hook invocation of one `events.jsonl` text, in order of first appearance. */
+export function parseCopilotCliHookRuns(text: string): CliHookRun[] {
+  const runs = new Map<string, CliHookRun>();
+  const startMs = new Map<string, number>();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.includes('"hook.')) continue;
+    let ev: CliEvent;
+    try {
+      ev = JSON.parse(line) as CliEvent;
+    } catch {
+      continue;
+    }
+    if (ev.type !== "hook.start" && ev.type !== "hook.end") continue;
+    const d = ev.data;
+    if (typeof d?.hookInvocationId !== "string" || typeof d.hookType !== "string") continue;
+    const at = typeof ev.timestamp === "string" ? ev.timestamp : undefined;
+    let run = runs.get(d.hookInvocationId);
+    if (run === undefined) {
+      run = { id: d.hookInvocationId, hookType: d.hookType, gate: false };
+      if (at !== undefined) run.at = at;
+      runs.set(d.hookInvocationId, run);
+    }
+    const t = at === undefined ? Number.NaN : Date.parse(at);
+    if (ev.type === "hook.start") {
+      if (typeof d.input?.cwd === "string") run.cwd = d.input.cwd;
+      if (at !== undefined) run.at = at;
+      if (!Number.isNaN(t)) startMs.set(run.id, t);
+      continue;
+    }
+    if (typeof d.success === "boolean") run.success = d.success;
+    const t0 = startMs.get(run.id);
+    if (t0 !== undefined && !Number.isNaN(t)) run.ms = t - t0;
+    if (typeof d.error?.source === "string") run.source = d.error.source;
+    const blame = `${run.source ?? ""} ${d.output === undefined ? "" : JSON.stringify(d.output)}`;
+    if (run.success === false && AXIOM_GATE_RUN_RE.test(blame)) run.gate = true;
+  }
+  return [...runs.values()];
+}
+
+/** `<home>/.copilot/session-state`. */
+export function copilotCliSessionDir(home: string = homedir()): string {
+  return path.join(home, ".copilot", "session-state");
+}
+
+/**
+ * The newest `events.jsonl` files (at most `max`, by mtime) under a session-state dir; files not
+ * modified since `sinceMs` are skipped. A missing dir is an empty list.
+ */
+export async function findCopilotCliEventLogs(
+  dir: string,
+  opts: { sinceMs?: number; max?: number } = {},
+): Promise<string[]> {
+  const found: { f: string; m: number }[] = [];
+  for (const d of await dirs(dir)) {
+    const f = path.join(dir, d, COPILOT_CLI_EVENTS_FILE);
+    const m = await stat(f).then(
+      (s) => (s.isFile() ? s.mtimeMs : undefined),
+      () => undefined,
+    );
+    if (m === undefined) continue;
+    if (opts.sinceMs !== undefined && m < opts.sinceMs) continue;
+    found.push({ f, m });
+  }
+  return found
+    .sort((a, b) => b.m - a.m)
+    .slice(0, opts.max ?? COPILOT_CLI_MAX_SESSIONS)
+    .map((x) => x.f);
 }

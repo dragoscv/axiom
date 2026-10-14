@@ -300,6 +300,14 @@ advisories cleared (`pnpm audit` clean).
 `.github/hooks/axiom-gate.json` with `command`/`bash`/`powershell` (VS Code ignored the old
 `exec` form) and migrates the old file, Windows hooks propagate the deny exit code, and
 `axiom doctor` fails when the hook log shows the gate never ran.
+**2.6.0 (Phase 11, D-39)** makes the gate the one fast guard a machine needs: shell-command rules
+with a built-in house pack and `axiom import-guard` (parity-tested against a real PowerShell guard,
+with a shadow mode for the cutover week), cross-session overwrite / blind overwrite / stale-script
+detection, `axiom undo --session`, a file protocol for coordination marks and leases, git-state
+rules read without spawning git, PostToolUse checks (`--post`), human-only confirmation of
+`axiom_apply` / `axiom_write` through MCP elicitation, `axiom stats` with silent-gate alarms,
+`axiom init --upgrade` / `--managed`, a fail-open audit in `doctor`, SARIF for code scanning and
+OpenTelemetry spans from the daemon.
 codai's SWE harness routes every write through the gate by default
 ([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
 [docs/integration/](docs/integration/brivio.md).

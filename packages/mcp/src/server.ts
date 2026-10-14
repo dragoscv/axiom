@@ -5,8 +5,11 @@ import { z } from "zod";
 import {
   CACHE_HINTS,
   type CallToolResult,
+  elicitConfirm,
+  type InputRequiredResult,
   McpServer,
   type McpServerFactory,
+  pendingInputOf,
   ResourceTemplate,
   type WireEra,
 } from "./adapter.js";
@@ -38,6 +41,11 @@ export interface CreateServerOptions {
   tasks?: TaskStore;
   /** Chunked plan sessions (S-406). Shared like `tasks`. */
   planSessions?: PlanSessionStore;
+  /**
+   * `--require-human` (S-1206): refuse the confirm step of `axiom_apply` / `axiom_write` when
+   * the client cannot elicit (ERR_CONFIRM_DIGEST_MISMATCH `{ reason: "elicitation-unsupported" }`).
+   */
+  requireHuman?: boolean;
 }
 
 export interface StructuredError {
@@ -72,17 +80,25 @@ function errorResult(err: unknown): CallToolResult {
   };
 }
 
-/** Wrap a tool handler: never throws; AxiomError → isError result with the closed code. */
-export function wrapHandler(def: AnyToolDef, ctx: ToolContext) {
-  return async (input: unknown): Promise<CallToolResult> => {
+/**
+ * Wrap a tool handler: never throws; AxiomError → isError result with the closed code. With
+ * `server`, each call gets an elicitation seam bound to its request context (S-1206); a pending
+ * human confirmation is returned as the SDK's `input_required` result.
+ */
+export function wrapHandler(def: AnyToolDef, ctx: ToolContext, server?: McpServer) {
+  return async (input: unknown, extra?: unknown): Promise<CallToolResult | InputRequiredResult> => {
+    const callCtx: ToolContext =
+      server === undefined ? ctx : { ...ctx, elicit: (req) => elicitConfirm(server, extra, req) };
     try {
-      const output = await def.handler(ctx, input as never);
+      const output = await def.handler(callCtx, input as never);
       const structured = def.outputSchema.parse(output) as Record<string, unknown>;
       return {
         content: [{ type: "text", text: JSON.stringify(def.summarize(structured)) }],
         structuredContent: structured,
       };
     } catch (err) {
+      const pending = pendingInputOf(err);
+      if (pending !== undefined) return pending;
       ctx.log.warn("tool failed", { tool: def.name, error: toStructuredError(err) });
       return errorResult(err);
     }
@@ -109,6 +125,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
     planSessions: opts.planSessions ?? new PlanSessionStore(),
   };
   if (opts.guards !== undefined) ctx.guards = opts.guards;
+  if (opts.requireHuman === true) ctx.requireHuman = true;
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     // AXIOM's catalogue never changes at runtime: say so (SDK v2 would otherwise advertise
@@ -130,8 +147,9 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
         inputSchema: z.object(def.inputSchema),
         outputSchema: def.outputSchema,
         annotations: { title: def.title, ...def.annotations },
+        ...(def.meta === undefined ? {} : { _meta: { ...def.meta } }),
       },
-      wrapHandler(def, ctx) as never,
+      wrapHandler(def, ctx, server) as never,
     );
   }
 

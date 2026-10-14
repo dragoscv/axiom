@@ -122,6 +122,28 @@ checked, journaled, one-step rollback via `axiom_rollback`.
 
 Errors in the result follow [`axiom_apply` error details](#axiom_apply-error-details).
 
+### Human confirmation (S-1206)
+
+`axiom_apply` and `axiom_write` (the confirm call) add a human step on top of the confirmDigest
+echo. Full guide: [human-confirm.md](../guides/human-confirm.md).
+
+- `tools/list` advertises `_meta: { "anthropic/requiresUserInteraction": true }` on these two tools
+	only, so Claude Code always prompts before calling them.
+- If the client declared `elicitation` (form), the server sends one elicitation before writing.
+	The message holds the digest, root, file count and ≤ 20 `op path` lines. The form has `confirm`
+	(boolean) and `digest12`, the first 12 hex characters of the manifestDigest, typed by the human.
+	This works on both wire eras: an `input_required` round on 2026-07-28, and the SDK legacy shim's
+	`elicitation/create` on 2025.
+- Without elicitation the echo alone applies, unless the server runs with `--require-human`.
+
+| Outcome | `error.code` | `error.details` |
+|---|---|---|
+| human declines, or answers `confirm: false` | `ERR_CONFIRM_DIGEST_MISMATCH` | `{ reason: "declined", manifestDigest }` |
+| human cancels the dialog | `ERR_CONFIRM_DIGEST_MISMATCH` | `{ reason: "cancelled", manifestDigest }` |
+| wrong / missing `digest12` | `ERR_CONFIRM_DIGEST_MISMATCH` | `{ reason: "mismatch", manifestDigest }` |
+| no elicitation capability + `--require-human` | `ERR_CONFIRM_DIGEST_MISMATCH` | `{ reason: "elicitation-unsupported", manifestDigest }` |
+| wrong `confirmDigest` echo (checked first, nobody is asked) | `ERR_CONFIRM_DIGEST_MISMATCH` | `{ confirmDigest, manifestDigest }` (no `reason`) |
+
 ### `axiom_status`
 
 Input `{ root? }` (an allowlisted root; optional when exactly one is allowlisted, else

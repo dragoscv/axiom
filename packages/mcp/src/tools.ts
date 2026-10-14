@@ -22,6 +22,7 @@ import {
   RepoSnapshotSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
+import type { ElicitConfirmRequest, ElicitConfirmResult } from "./adapter.js";
 import { EMITTERS } from "./emitters.js";
 import { advanceTrustState, profileWantsAntiRollback, verifyBundleAgainstRoot } from "./keys.js";
 import type { Logger } from "./log.js";
@@ -66,6 +67,14 @@ export interface ToolContext {
   tasks: TaskStore;
   /** Chunked plan sessions (`axiom_plan_begin` / `add` / `seal`), shared like `tasks`. */
   planSessions: PlanSessionStore;
+  /**
+   * `--require-human` (S-1206): the confirm step of `axiom_apply` / `axiom_write` must be a human
+   * elicitation answer; a client without form elicitation gets ERR_CONFIRM_DIGEST_MISMATCH
+   * `{ reason: "elicitation-unsupported" }` instead of the confirmDigest echo.
+   */
+  requireHuman?: boolean;
+  /** Per-call elicitation seam, set by `wrapHandler`; absent outside an MCP request. */
+  elicit?: (req: ElicitConfirmRequest) => Promise<ElicitConfirmResult>;
 }
 
 export interface ToolDef<I extends z.ZodRawShape = z.ZodRawShape, O extends z.ZodType = z.ZodType> {
@@ -76,6 +85,8 @@ export interface ToolDef<I extends z.ZodRawShape = z.ZodRawShape, O extends z.Zo
   outputSchema: O;
   annotations: ToolAnnotations;
   riskClass: RiskClass;
+  /** Tool-definition `_meta` advertised in tools/list (e.g. `anthropic/requiresUserInteraction`). */
+  meta?: Record<string, unknown>;
   handler: (ctx: ToolContext, input: z.output<z.ZodObject<I>>) => Promise<z.output<O>>;
   /** Small text projection of the output for `content[0].text`. Never the whole bundle. */
   summarize: (output: z.output<O>) => unknown;
@@ -543,6 +554,103 @@ function checksSummary(r: CheckReport | undefined): WriteOutputT["checks"] {
   };
 }
 
+// --- human confirmation (S-1206) ------------------------------------------------
+
+/** Tool `_meta` that makes Claude Code always prompt the user before the call. */
+export const HUMAN_ONLY_META: Readonly<Record<string, unknown>> = Object.freeze({
+  "anthropic/requiresUserInteraction": true,
+});
+/** Paths listed in the elicitation message (the rest is summarised as a count). */
+export const CONFIRM_PATHS_MAX = 20;
+/** Hex characters of the manifestDigest the human must type. */
+export const CONFIRM_DIGEST_CHARS = 12;
+
+export type HumanConfirmReason = "declined" | "cancelled" | "mismatch" | "elicitation-unsupported";
+
+function confirmRefused(reason: HumanConfirmReason, manifestDigest: string): never {
+  throw new AxiomError("ERR_CONFIRM_DIGEST_MISMATCH", `human confirmation refused: ${reason}`, {
+    details: { reason, manifestDigest },
+  });
+}
+
+/** The elicitation sent before a write: digest, root, file count, ≤ 20 `op path` lines. */
+export function humanConfirmRequest(
+  bundle: ManifestBundle,
+  rootReal: string,
+): ElicitConfirmRequest {
+  const hex = bundle.manifestDigest.slice("sha256:".length);
+  const arts = bundle.manifest.artifacts;
+  const lines = arts.slice(0, CONFIRM_PATHS_MAX).map((a) => `  ${a.op} ${a.path}`);
+  if (arts.length > CONFIRM_PATHS_MAX)
+    lines.push(`  … and ${arts.length - CONFIRM_PATHS_MAX} more`);
+  return {
+    binding: bundle.manifestDigest,
+    message: [
+      `AXIOM wants to write ${arts.length} file(s) under ${rootReal}`,
+      `manifest ${bundle.manifestDigest}`,
+      ...lines,
+      `To approve, tick confirm and type the first ${CONFIRM_DIGEST_CHARS} hex characters of the digest: ${hex.slice(0, CONFIRM_DIGEST_CHARS)}`,
+    ].join("\n"),
+    requestedSchema: {
+      type: "object",
+      properties: {
+        confirm: {
+          type: "boolean",
+          title: "Apply this change set",
+          description: "Writes the listed files atomically (rollback with axiom_rollback)",
+        },
+        digest12: {
+          type: "string",
+          title: `First ${CONFIRM_DIGEST_CHARS} hex characters of the manifest digest`,
+          minLength: CONFIRM_DIGEST_CHARS,
+          maxLength: CONFIRM_DIGEST_CHARS,
+        },
+      },
+      required: ["confirm", "digest12"],
+    },
+  };
+}
+
+/**
+ * S-1206 gate in front of every apply: when the client can elicit, a human must accept with
+ * `confirm: true` and the digest's first 12 hex chars; without elicitation the confirmDigest
+ * echo stands alone unless `--require-human`. Refusals are ERR_CONFIRM_DIGEST_MISMATCH with
+ * `details.reason`. An `ElicitPending` from the seam propagates (wrapHandler returns it).
+ */
+async function requireHumanConfirm(
+  ctx: ToolContext,
+  bundle: ManifestBundle,
+  rootReal: string,
+): Promise<void> {
+  const answer =
+    ctx.elicit === undefined
+      ? ({ action: "unsupported" } as const)
+      : await ctx.elicit(humanConfirmRequest(bundle, rootReal));
+  switch (answer.action) {
+    case "unsupported":
+      if (ctx.requireHuman === true)
+        confirmRefused("elicitation-unsupported", bundle.manifestDigest);
+      return;
+    case "decline":
+      confirmRefused("declined", bundle.manifestDigest);
+      break;
+    case "cancel":
+      confirmRefused("cancelled", bundle.manifestDigest);
+      break;
+    case "accept": {
+      const content = answer.content ?? {};
+      if (content.confirm === false) confirmRefused("declined", bundle.manifestDigest);
+      const want = bundle.manifestDigest.slice(7, 7 + CONFIRM_DIGEST_CHARS);
+      const typed =
+        typeof content.digest12 === "string" ? content.digest12.trim().toLowerCase() : "";
+      if (content.confirm !== true || typed !== want)
+        confirmRefused("mismatch", bundle.manifestDigest);
+      ctx.log.info("human confirmed", { manifestDigest: bundle.manifestDigest });
+      return;
+    }
+  }
+}
+
 // --- tool definitions -----------------------------------------------------------
 
 export const TOOL_DEFS: readonly AnyToolDef[] = [
@@ -853,7 +961,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     name: "axiom_apply",
     title: "Apply a bundle to the filesystem (two-phase commit)",
     description:
-      "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run). Idempotent: re-applying an applied digest is a no-op.",
+      "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run); when the client supports elicitation the user must also confirm by typing the digest's first 12 hex characters. Idempotent: re-applying an applied digest is a no-op.",
     inputSchema: {
       bundle: LooseObject.describe("ManifestBundle"),
       root: RootArg,
@@ -890,6 +998,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     },
     outputSchema: ApplyResultSchema,
     annotations: WRITE,
+    meta: HUMAN_ONLY_META,
     async handler(
       ctx,
       {
@@ -918,6 +1027,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         );
       }
       const { rootReal } = await resolveRoot(ctx.policy, root);
+      await requireHumanConfirm(ctx, parsed, rootReal);
       const profileDoc = await profileFor(ctx, parsed, profile, rootReal);
       const result = await apply({
         bundle: parsed,
@@ -954,7 +1064,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     name: "axiom_write",
     title: "Write files through the gate (preview, then confirm)",
     description:
-      "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically: pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
+      "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically (when the client supports elicitation the user confirms first): pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
     inputSchema: {
       root: RootArg,
       files: z
@@ -985,6 +1095,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     },
     outputSchema: WriteOutput,
     annotations: WRITE,
+    meta: HUMAN_ONLY_META,
     async handler(
       ctx,
       { root, files, intent, profile, confirmDigest, lockTimeoutMs, keepBackups },
@@ -1029,6 +1140,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
           { details: { confirmDigest, manifestDigest: fresh.manifestDigest } },
         );
       }
+      await requireHumanConfirm(ctx, bundle, rootReal);
       const profileDoc = await profileFor(ctx, bundle, profile, rootReal);
       const result = await apply({
         bundle,

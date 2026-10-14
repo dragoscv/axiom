@@ -199,7 +199,7 @@ describe("gate: profile", () => {
     await home.cleanup();
   });
 
-  it("schema: strict object, defaults deny=[] noSecrets=true pii=false steer=off record=false", () => {
+  it("schema: strict object, defaults deny=[] noSecrets=true pii=false steer=off record=false undo=false shadow=false", () => {
     expect(GateProfileSchema.parse({})).toStrictEqual({
       deny: [],
       noSecrets: true,
@@ -207,6 +207,8 @@ describe("gate: profile", () => {
       steer: "off",
       steerGlobs: [],
       record: false,
+      undo: false,
+      shadow: false,
     });
     expect(GateProfileSchema.safeParse({ deny: [], extra: 1 }).success).toBe(false);
     expect(GateProfileSchema.safeParse({ maxBytes: 0 }).success).toBe(false);
@@ -241,6 +243,8 @@ describe("gate: profile", () => {
       steer: "off",
       steerGlobs: [],
       record: false,
+      undo: false,
+      shadow: false,
     });
     expect(r.source).toBe(explicit);
   });

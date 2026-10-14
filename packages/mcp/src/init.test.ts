@@ -6,26 +6,36 @@ import { GateProfileSchema } from "./gate.js";
 import {
   CLAUDE_HOOK_ENTRY,
   CLAUDE_HTTP_HOOK_ENTRY,
+  CLAUDE_POST_HOOK_ENTRY,
   CODEX_MCP_TOML,
   COPILOT_HOOK,
   COPILOT_HOOK_DAEMON,
+  COPILOT_POST_ENTRY,
   CURSOR_MCP_ENTRY,
   clineHookPs1,
   clineHookSh,
   codexHookEntry,
+  codexPostHookEntry,
+  codexRequirementsToml,
   cursorHooks,
   detectHarnesses,
   GATE_PROFILE,
   GITIGNORE_LINES,
   geminiHookEntry,
+  gitignoreHidesPolicy,
   type HarnessName,
   HOOK_TIMEOUT_SEC,
   isAxiomGateEntry,
+  isAxiomPostEntry,
   JUNIE_GUIDELINES_MARKER,
+  junieUserHooks,
+  MANAGED_FILES,
   MCP_SERVER_ENTRY,
   PROJECT_MCP_ENTRY,
   profileNameFor,
   runInit,
+  toDaemonCommand,
+  upgradeCodexToml,
   windsurfHooks,
 } from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
@@ -166,6 +176,15 @@ describe("axiom init (S-701)", () => {
     );
   });
 
+  it("notes a directory-level .axiom ignore that would hide the policy files", async () => {
+    await writeFile(join(repo.root, ".gitignore"), "dist/\n.axiom/\n");
+    expect(await gitignoreHidesPolicy(repo.root)).toBe(true);
+    const r = await runInit({ root: repo.root, profileName: "demo" });
+    expect(r.notes.some((n) => n.includes("cannot re-include"))).toBe(true);
+    await writeFile(join(repo.root, ".gitignore"), "dist/\n.axiom/*\n");
+    expect(await gitignoreHidesPolicy(repo.root)).toBe(false);
+  });
+
   it("auto-detects harness marker dirs", async () => {
     for (const d of [".github", ".codex"]) await mkdir(join(repo.root, d));
     expect(await detectHarnesses(repo.root)).toEqual(["copilot", "codex"]);
@@ -260,7 +279,10 @@ describe("axiom init — every harness", () => {
     const toml = 'model = "o5"\r\n[mcp_servers.other]\r\ncommand = "x"';
     await writeFile(join(repo.root, ".codex", "config.toml"), toml);
     const { first, second } = await initTwice("codex");
-    expect((await readJson(".codex/hooks.json")).hooks).toEqual({ PreToolUse: [codexHookEntry()] });
+    expect((await readJson(".codex/hooks.json")).hooks).toEqual({
+      PreToolUse: [codexHookEntry()],
+      PostToolUse: [codexPostHookEntry()],
+    });
     expect(first.files.find((f) => f.path === ".codex/config.toml")?.action).toBe("merged");
     expect(await readFile(join(repo.root, ".codex", "config.toml"), "utf8")).toBe(
       `${toml}\r\n\r\n${CODEX_MCP_TOML.join("\r\n")}\r\n`,
@@ -364,6 +386,7 @@ describe("axiom init — every harness", () => {
     expect(await readJson(".cursor/hooks.json")).toEqual(cursorHooks("axiom-hook"));
     expect((await readJson(".codex/hooks.json")).hooks).toEqual({
       PreToolUse: [codexHookEntry("axiom-hook")],
+      PostToolUse: [codexPostHookEntry()],
     });
     expect((await readJson(".gemini/settings.json")).hooks).toEqual({
       BeforeTool: [geminiHookEntry("axiom-hook")],
@@ -446,3 +469,251 @@ describe("axiom init — every harness", () => {
     expect(CLAUDE_HOOK_ENTRY.hooks[0]?.command).toBe("axiom gate --stdin --format claude");
   });
 });
+
+describe("axiom init — shell matchers and PostToolUse (S-1205)", () => {
+  it("every matcher AXIOM writes covers the harness's shell tool (PowerShell where it exists)", () => {
+    expect(CLAUDE_HOOK_ENTRY.matcher.split("|")).toEqual(
+      expect.arrayContaining(["Bash", "PowerShell"]),
+    );
+    expect(CLAUDE_POST_HOOK_ENTRY.matcher.split("|")).toEqual(
+      expect.arrayContaining(["Bash", "PowerShell", "Write", "Edit", "MultiEdit"]),
+    );
+    // Codex matches shell + unified exec as Bash (no separate PowerShell tool name).
+    expect(String(codexHookEntry().matcher)).toMatch(/\bBash\b/);
+    expect(String(geminiHookEntry().matcher)).toMatch(/run_shell_command/);
+    const junie = junieUserHooks() as { hooks: { PreToolUse: { matcher: string }[] } };
+    expect(junie.hooks.PreToolUse[0]?.matcher).toMatch(/\bBash\b/);
+    const cursor = cursorHooks() as { hooks: { preToolUse: { matcher: string }[] } };
+    expect(cursor.hooks.preToolUse[0]?.matcher).toMatch(/\bShell\b/);
+  });
+
+  it("claude + codex + copilot get the post-write entry; re-run is idempotent", async () => {
+    for (const d of [".github", ".claude", ".codex"]) await mkdir(join(repo.root, d));
+    await runInit({ root: repo.root, profileName: "demo" });
+    const claude = (await readJson(".claude/settings.json")) as {
+      hooks: { PreToolUse: unknown[]; PostToolUse: unknown[] };
+    };
+    expect(claude.hooks.PostToolUse).toEqual([CLAUDE_POST_HOOK_ENTRY]);
+    expect(claude.hooks.PreToolUse.some(isAxiomPostEntry)).toBe(false);
+    expect(CLAUDE_POST_HOOK_ENTRY.hooks[0]?.command).toBe(
+      "axiom gate --stdin --post --format claude",
+    );
+    const copilot = (await readJson(".github/hooks/axiom-gate.json")) as {
+      hooks: { postToolUse: unknown[] };
+    };
+    expect(copilot.hooks.postToolUse).toEqual([COPILOT_POST_ENTRY]);
+    const codex = (await readJson(".codex/hooks.json")) as { hooks: { PostToolUse: unknown[] } };
+    expect(codex.hooks.PostToolUse).toEqual([codexPostHookEntry()]);
+    const again = await runInit({ root: repo.root, profileName: "demo" });
+    expect(again.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+});
+
+const NEW_BIN = async () => ({ path: "/usr/bin/axiom", version: "2.6.0" });
+const up = (over: Partial<Parameters<typeof runInit>[0]> = {}) =>
+  runInit({
+    root: repo.root,
+    profileName: "demo",
+    upgrade: true,
+    locateBin: NEW_BIN,
+    daemonRunning: async () => false,
+    ...over,
+  });
+const actionOf = (r: Awaited<ReturnType<typeof runInit>>, rel: string) =>
+  r.files.find((f) => f.path === rel)?.action;
+
+describe("axiom init --upgrade (S-1204)", () => {
+  it("(a) adds record + steer to the gate profile, keeps user keys; old bin → untouched", async () => {
+    await put(".axiom/gate-profile.json", { deny: ["x/**"], custom: 1 });
+    const old = await up({ locateBin: async () => ({ path: "/a", version: "2.4.1" }) });
+    expect(actionOf(old, ".axiom/gate-profile.json")).toBe("skipped");
+    expect(old.notes.some((n) => n.includes("2.5.0"))).toBe(true);
+    const r = await up();
+    expect(actionOf(r, ".axiom/gate-profile.json")).toBe("updated");
+    expect(await readJson(".axiom/gate-profile.json")).toEqual({
+      deny: ["x/**"],
+      custom: 1,
+      record: true,
+      steer: "hint",
+    });
+    await put(".axiom/gate-profile.json", { deny: [], steer: "off", record: false });
+    expect(actionOf(await up(), ".axiom/gate-profile.json")).toBe("skipped");
+    expect((await readJson(".axiom/gate-profile.json")).steer).toBe("off");
+  });
+
+  it("(b) a running daemon switches gate hooks to axiom-hook and Claude to the http hook", async () => {
+    for (const d of [".github", ".claude", ".cursor", ".codex", ".gemini", ".windsurf"]) {
+      await mkdir(join(repo.root, d));
+    }
+    await runInit({ root: repo.root, profileName: "demo" });
+    const foreign = { matcher: "Bash", hooks: [{ type: "command", command: "guard.ps1" }] };
+    const claudeDoc = (await readJson(".claude/settings.json")) as {
+      hooks: { PreToolUse: unknown[] };
+    };
+    claudeDoc.hooks.PreToolUse.unshift(foreign);
+    await put(".claude/settings.json", claudeDoc);
+    const r = await up({ daemonRunning: async () => true });
+    for (const rel of [
+      ".github/hooks/axiom-gate.json",
+      ".claude/settings.json",
+      ".cursor/hooks.json",
+      ".codex/hooks.json",
+      ".gemini/settings.json",
+      ".windsurf/hooks.json",
+    ]) {
+      expect(actionOf(r, rel), rel).toBe("updated");
+    }
+    const copilot = (await readJson(".github/hooks/axiom-gate.json")) as {
+      hooks: { preToolUse: unknown[]; postToolUse: unknown[] };
+    };
+    expect(copilot.hooks.preToolUse).toEqual(
+      (COPILOT_HOOK_DAEMON.hooks as { preToolUse: unknown[] }).preToolUse,
+    );
+    // The post check stays on the global bin.
+    expect(copilot.hooks.postToolUse).toEqual([COPILOT_POST_ENTRY]);
+    const claude = (await readJson(".claude/settings.json")) as {
+      hooks: { PreToolUse: unknown[]; PostToolUse: unknown[] };
+    };
+    expect(claude.hooks.PreToolUse).toEqual([foreign, CLAUDE_HTTP_HOOK_ENTRY]);
+    expect(claude.hooks.PostToolUse).toEqual([CLAUDE_POST_HOOK_ENTRY]);
+    expect(await readJson(".cursor/hooks.json")).toEqual(cursorHooks("axiom-hook"));
+    expect(
+      ((await readJson(".codex/hooks.json")).hooks as Record<string, unknown>).PreToolUse,
+    ).toEqual([codexHookEntry("axiom-hook")]);
+    expect(await readJson(".windsurf/hooks.json")).toEqual(windsurfHooks("axiom-hook"));
+    expect(toDaemonCommand("axiom gate --stdin --post --format claude")).toBe(
+      "axiom gate --stdin --post --format claude",
+    );
+    expect(toDaemonCommand("guard.ps1 gate")).toBe("guard.ps1 gate");
+    // Idempotent.
+    const again = await up({ daemonRunning: async () => true });
+    expect(again.files.filter((f) => f.action !== "skipped")).toEqual([]);
+  });
+
+  it("(c) npx MCP entries → global bin when present; kept (with a note) when absent", async () => {
+    await mkdir(join(repo.root, ".codex"));
+    await put(".vscode/mcp.json", {
+      servers: { axiom: MCP_SERVER_ENTRY, other: { command: "x" } },
+    });
+    await put(".codex/config.toml", `model = "o5"\n${CODEX_MCP_TOML.join("\n")}\n`);
+    const none = await up({ locateBin: async () => undefined });
+    expect(actionOf(none, ".vscode/mcp.json")).toBe("skipped");
+    expect(none.notes.some((n) => n.includes("kept on npx"))).toBe(true);
+    const r = await up();
+    expect(actionOf(r, ".vscode/mcp.json")).toBe("updated");
+    const servers = (await readJson(".vscode/mcp.json")).servers as Record<string, unknown>;
+    expect(servers.axiom).toEqual({
+      type: "stdio",
+      command: "axiom",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the same VS Code variable is kept.
+      args: ["mcp", "--root", "${workspaceFolder}"],
+    });
+    expect(servers.other).toEqual({ command: "x" });
+    expect(actionOf(r, ".codex/config.toml")).toBe("updated");
+    expect(await readFile(join(repo.root, ".codex", "config.toml"), "utf8")).toBe(
+      'model = "o5"\n[mcp_servers.axiom]\ncommand = "axiom"\nargs = ["mcp", "--root", "."]\n',
+    );
+    expect(upgradeCodexToml('[mcp_servers.axiom]\ncommand = "axiom"\n').reasons).toEqual([]);
+    const again = await up();
+    expect(again.files.filter((f) => f.action !== "skipped")).toEqual([]);
+  });
+
+  it("(d) migrates the legacy exec-only Copilot hook; (e) adds missing PostToolUse wiring", async () => {
+    await put(".github/hooks/axiom-gate.json", {
+      version: 1,
+      hooks: { preToolUse: [{ type: "command", exec: "axiom", args: ["gate", "--stdin"] }] },
+    });
+    const pre = { matcher: CLAUDE_HOOK_ENTRY.matcher, hooks: CLAUDE_HOOK_ENTRY.hooks };
+    await put(".claude/settings.json", { hooks: { PreToolUse: [pre] } });
+    await put(".codex/hooks.json", { hooks: { PreToolUse: [codexHookEntry()] } });
+    const r = await up();
+    expect(r.files.find((f) => f.path === ".github/hooks/axiom-gate.json")).toMatchObject({
+      action: "updated",
+    });
+    expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK);
+    expect(actionOf(r, ".claude/settings.json")).toBe("updated");
+    expect(
+      ((await readJson(".claude/settings.json")).hooks as Record<string, unknown>).PostToolUse,
+    ).toEqual([CLAUDE_POST_HOOK_ENTRY]);
+    expect(
+      ((await readJson(".codex/hooks.json")).hooks as Record<string, unknown>).PostToolUse,
+    ).toEqual([codexPostHookEntry()]);
+    // A bin < 2.6.0 does not get --post wiring.
+    await put(".claude/settings.json", { hooks: { PreToolUse: [pre] } });
+    const old = await up({ locateBin: async () => ({ path: "/a", version: "2.5.2" }) });
+    expect(actionOf(old, ".claude/settings.json")).toBe("skipped");
+  });
+
+  it("never creates files that are not there and changes nothing on an up-to-date root", async () => {
+    const empty = await up({ daemonRunning: async () => true });
+    expect(empty.files).toEqual([]);
+    expect(await readdir(repo.root)).toEqual([]);
+    for (const d of [".github", ".claude", ".codex"]) await mkdir(join(repo.root, d));
+    await runInit({ root: repo.root, profileName: "demo" });
+    // A fresh init only lacks the npx → bin MCP switch; everything else is already current.
+    const first = await up();
+    expect(first.files.filter((f) => f.action !== "skipped").map((f) => f.path)).toEqual([
+      ".vscode/mcp.json",
+      ".codex/config.toml",
+    ]);
+    const second = await up();
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+});
+
+describe("axiom init --managed (S-1207)", () => {
+  it("writes the managed policy layers into --out with install notes; parses", async () => {
+    const out = join(outside.root, "policy");
+    const r = await runInit({ root: repo.root, managed: { out } });
+    expect(r.files.map((f) => [f.path, f.action])).toEqual(
+      Object.values(MANAGED_FILES).map((p) => [p, "created"]),
+    );
+    expect(await readdir(repo.root)).toEqual([]);
+    const claude = JSON.parse(await readFile(join(out, MANAGED_FILES.claude), "utf8")) as {
+      allowManagedHooksOnly: boolean;
+      disableAllHooks?: boolean;
+      hooks: { PreToolUse: { hooks: { onFailure: string }[] }[]; PostToolUse: unknown[] };
+    };
+    expect(claude.allowManagedHooksOnly).toBe(true);
+    expect(claude.disableAllHooks).toBeUndefined();
+    expect(claude.hooks.PreToolUse[0]?.hooks[0]?.onFailure).toBe("block");
+    expect(claude.hooks.PostToolUse).toEqual([CLAUDE_POST_HOOK_ENTRY]);
+    const toml = await readFile(join(out, MANAGED_FILES.codex), "utf8");
+    expect(toml).toBe(codexRequirementsToml());
+    for (const key of [
+      "allow_managed_hooks_only = true",
+      "[features]",
+      "hooks = true",
+      "allowed_approval_policies",
+      "[[hooks.PreToolUse]]",
+      "[[hooks.PostToolUse.hooks]]",
+      "axiom gate --stdin --format codex",
+    ]) {
+      expect(toml, key).toContain(key);
+    }
+    expect(toml).not.toContain('"never"');
+    const cursor = JSON.parse(await readFile(join(out, MANAGED_FILES.cursor), "utf8"));
+    expect(cursor).toEqual(cursorHooks());
+    const copilot = JSON.parse(await readFile(join(out, MANAGED_FILES.copilot), "utf8"));
+    expect(copilot).toEqual(COPILOT_HOOK);
+    const md = await readFile(join(out, MANAGED_FILES.vscode), "utf8");
+    for (const p of ["ChatHooks", "ChatToolsAutoApprove", "ChatAllowManagedHooksOnly"]) {
+      expect(md).toContain(p);
+    }
+    for (const h of ["claude:", "codex:", "cursor:", "copilot:", "vscode:"]) {
+      expect(
+        r.notes.some((n) => n.startsWith(h)),
+        h,
+      ).toBe(true);
+    }
+    expect(r.notes.some((n) => n.includes("C:\\Program Files\\ClaudeCode"))).toBe(true);
+    const again = await runInit({ root: repo.root, managed: { out } });
+    expect(again.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+});
+
+async function put(rel: string, v: unknown): Promise<void> {
+  const abs = join(repo.root, rel);
+  await mkdir(join(abs, ".."), { recursive: true });
+  await writeFile(abs, typeof v === "string" ? v : JSON.stringify(v));
+}

@@ -3,4 +3,8 @@
  * run once per repo/machine, so the eager `cli.js + cli-main.js` budget does not carry them.
  */
 export { type DoctorResult, runDoctor } from "./doctor.js";
+export { importGuardProfile } from "./import-guard.js";
 export { HARNESSES, type InitResult, isHarnessArg, runInit } from "./init.js";
+export { reportToSarif } from "./sarif.js";
+export { collectStats, parseSince, renderStats } from "./stats.js";
+export { undoSession } from "./undo.js";

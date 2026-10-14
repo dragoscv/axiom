@@ -87,7 +87,8 @@ the daemon is down and denies in the harness's format when neither can run.
 | Deny signal read | stdout `hookSpecificOutput.permissionDecision` (exit `0`), or exit `2` | stdout `permissionDecision` (exit `0`); any non-zero / crash = deny | stdout JSON deny on exit `0`, or exit `2`; **exit `1` is only a warning** | — |
 | Hook timeout → | proceeds through normal permission flow (**fail open**) | **fail open** | **fail open** | — |
 | Per-tool auto-approve | `permissions.allow: ["mcp__axiom__axiom_apply"]` | `--allow-tool 'axiom(axiom_apply)'` | `chat.tools.global.autoApprove` / UI | `[mcp_servers.axiom.tools.axiom_apply] approval_mode` |
-| Tool that forces a prompt | `_meta["anthropic/requiresUserInteraction"]` honoured; `destructiveHint` | `destructiveHint` | `destructiveHint` → confirm dialog | approval policy |
+| Tool that forces a prompt | `_meta["anthropic/requiresUserInteraction"]` honoured — set on `axiom_apply` / `axiom_write` since 2.6.0, a hook `allow` cannot skip it; `destructiveHint` | `destructiveHint` | `destructiveHint` → confirm dialog | approval policy |
+| Human confirm step ([S-1206](../guides/human-confirm.md)) | MCP elicitation form (digest + typed `digest12`) — supported (`Elicitation` / `ElicitationResult` hooks exist; `axiom doctor` fails if one is configured) | elicitation form when the client declares the capability, else the confirmDigest echo (`--require-human` refuses) | same rule; `chat.tools.global.autoApprove: true` → `axiom doctor` warns | same rule |
 
 The gate emits **one** deny document that every column reads
 (`hookSpecificOutput{…}` + flat `permissionDecision` + `axiom{ verdict, code, path, toolClass }`),

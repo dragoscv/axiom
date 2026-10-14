@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { casRootDir, collectGarbage, parseDuration } from "./gc.js";
 import { saveManifest } from "./store.js";
 import { makePlan, tmpRepo } from "./test-helpers.js";
+import { captureUndo } from "./undo.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
 beforeEach(async () => {
@@ -122,7 +123,41 @@ describe("collectGarbage", () => {
     const { bundle } = await compilePlan(makePlan({ "b.txt": "never stored" }));
     await saveManifest(repo.root, bundle);
     const r = await collectGarbage(repo.root);
-    expect(r).toMatchObject({ scanned: 0, live: 1, missing: 1, removed: [], freedBytes: 0 });
+    expect(r).toMatchObject({
+      scanned: 0,
+      live: 1,
+      missing: 1,
+      removed: [],
+      freedBytes: 0,
+      undoLive: 0,
+      undoPruned: 0,
+    });
+  });
+
+  it("undo pre-images inside the TTL stay live; expired undo logs are pruned", async () => {
+    const root = repo.root;
+    await writeFile(path.join(root, "keep.txt"), "keep pre-image");
+    await writeFile(path.join(root, "old.txt"), "expired pre-image");
+    const t = (relPath: string) => [{ relPath, op: "write" as const }];
+    await captureUndo(root, { agentId: "a:old", tool: "Edit", targets: t("old.txt"), now: 1000 });
+    await captureUndo(root, {
+      agentId: "a:new",
+      tool: "Edit",
+      targets: t("keep.txt"),
+      now: 99_000,
+    });
+    const opts = { undoTtlMs: 10_000, now: () => 100_000 };
+    const dry = await collectGarbage(root, { ...opts, dryRun: true });
+    expect(dry.undoLive).toBe(1);
+    expect(dry.undoPruned).toBe(0);
+    expect(dry.removed.map((x) => x.sha)).toEqual([sha256Hex("expired pre-image")]);
+    const r = await collectGarbage(root, opts);
+    expect(r.undoPruned).toBe(1);
+    expect(await casHas(root, sha256Hex("keep pre-image"))).toBe(true);
+    expect(await casHas(root, sha256Hex("expired pre-image"))).toBe(false);
+    expect(await readdir(path.join(root, ".axiom", "undo"))).toEqual([
+      `${sha256Hex("a:new").slice(0, 16)}.jsonl`,
+    ]);
   });
 
   it("parseDuration", () => {

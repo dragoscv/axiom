@@ -22,13 +22,24 @@ export interface DecisionRecord {
   tool: string;
   args_hash: `sha256:${string}`;
   args_state: "recorded" | "unavailable";
-  decision: "allow" | "deny";
+  /** `ask` = the gate handed the decision to the human (v2.6 rule verdicts). */
+  decision: "allow" | "deny" | "ask";
   code?: string;
   reason?: string;
   /** Root-relative POSIX paths judged. */
   paths: string[];
   /** Gate profile source (file path or `builtin`). */
   profile: string;
+  /** Gate wall time in ms (v2.6, `axiom stats`). */
+  ms?: number;
+  /** Shadow mode (v2.6): the gate allowed the call; `decision` is what it WOULD have done. */
+  shadow?: true;
+  /** `post` = a PostToolUse check of what a tool actually changed (v2.6, S-1205); absent = pre. */
+  phase?: "pre" | "post";
+  /** Rule id of a v2.6 rule verdict (`command.deny`, …) when it decided. */
+  rule?: string;
+  /** Shadow mode only: the shell command text, for `scripts/guard-parity.mjs --replay`. */
+  command?: string;
 }
 
 /**
@@ -72,7 +83,7 @@ function isDecisionRecord(v: unknown): v is DecisionRecord {
     typeof r.agent_id === "string" &&
     typeof r.tool === "string" &&
     typeof r.args_hash === "string" &&
-    (r.decision === "allow" || r.decision === "deny") &&
+    (r.decision === "allow" || r.decision === "deny" || r.decision === "ask") &&
     Array.isArray(r.paths)
   );
 }

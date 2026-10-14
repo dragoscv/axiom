@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { acquireLock, listJournals } from "@codai/axiom-apply";
 import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
 import { manifestsDir } from "./store.js";
+import { pruneUndo, UNDO_TTL_MS_DEFAULT, undoLiveDigests } from "./undo.js";
 
 export interface GcOptions {
   /**
@@ -16,6 +17,8 @@ export interface GcOptions {
   olderThanMs?: number;
   /** How long to wait for `.axiom/lock` (default 1 s; a live holder → `ERR_LOCKED`). */
   lockTimeoutMs?: number;
+  /** Undo pre-images (`.axiom/undo/*.jsonl`) younger than this stay live; older lines are pruned. */
+  undoTtlMs?: number;
   now?: () => number;
 }
 
@@ -33,6 +36,10 @@ export interface GcResult {
   /** Kept although unreferenced, because younger than `olderThanMs`. */
   skippedYoung: number;
   freedBytes: number;
+  /** Distinct digests kept live by undo logs younger than `undoTtlMs`. */
+  undoLive: number;
+  /** Expired undo log lines removed (0 in a dry run). */
+  undoPruned: number;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -113,6 +120,12 @@ export async function collectGarbage(root: string, opts: GcOptions = {}): Promis
     for (const hex of await liveManifestHexes(root, keep)) {
       for (const d of await loadManifestArtifactDigests(root, hex)) live.add(d);
     }
+    const undoTtlMs = opts.undoTtlMs ?? UNDO_TTL_MS_DEFAULT;
+    const undoLive = await undoLiveDigests(root, { ttlMs: undoTtlMs, now: now() });
+    for (const d of undoLive) live.add(d);
+    const undoPruned = dryRun
+      ? 0
+      : (await pruneUndo(root, { ttlMs: undoTtlMs, now: now() })).removedLines;
 
     const casDir = casRootDir(root);
     const removed: { sha: string; bytes: number }[] = [];
@@ -160,6 +173,8 @@ export async function collectGarbage(root: string, opts: GcOptions = {}): Promis
       removed,
       skippedYoung,
       freedBytes,
+      undoLive: undoLive.size,
+      undoPruned,
     };
   } finally {
     await lock.release();

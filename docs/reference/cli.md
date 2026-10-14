@@ -66,7 +66,7 @@ flowchart LR
 
 ```
 axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level L]
-          [--http <host:port>] [--http-token-env <NAME>] [--wire 2026|2025|2026-only]
+          [--http <host:port>] [--http-token-env <NAME>] [--wire 2026|2025|2026-only] [--require-human]
 ```
 
 Start the MCP server — stdio by default, Streamable HTTP with `--http`. `--root` may repeat; with
@@ -75,7 +75,11 @@ random loopback port and logs the URL at `info`. A non-loopback host **requires*
 the env var named by `--http-token-env` (default `AXIOM_HTTP_TOKEN`, ≥ 16 chars) or the server
 refuses to start. `--wire` selects the protocol era: `2026` (default) and `2025` both serve
 2026-07-28 and 2025-era clients from the same entry; `2026-only` refuses `initialize` openings.
-Tools, resources and transport rules: [mcp-tools.md](mcp-tools.md).
+`--require-human` (2.6.0) makes `axiom_apply` / `axiom_write` refuse a confirm step that a human
+did not approve through MCP elicitation (`ERR_CONFIRM_DIGEST_MISMATCH`, `details.reason:
+"elicitation-unsupported"` for a client without the capability) —
+[human-confirm.md](../guides/human-confirm.md). Tools, resources and transport rules:
+[mcp-tools.md](mcp-tools.md).
 
 ```sh
 axiom mcp --root /abs/repo
@@ -87,7 +91,7 @@ AXIOM_HTTP_TOKEN=$(openssl rand -hex 32) axiom mcp --root /abs/repo --http 0.0.0
 
 ```
 axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
-           [--profile-name <name>] [--force] [--json]
+           [--profile-name <name>] [--force] [--upgrade] [--managed --out <dir>] [--json]
 ```
 
 Wire a repository for AXIOM in one idempotent step. `--root` defaults to the current directory.
@@ -120,6 +124,16 @@ gate daemon instead: Claude gets a `type: "http"` hook to `http://127.0.0.1:4786
 (`onFailure: "block"`) and every command hook runs the native `axiom-hook` client. Output
 (`--json`): `{ root, harnesses[], profile, files: [{ path, action: created|merged|updated|skipped, reason? }], notes[] }`.
 Hooks call the global bin — install it with `npm install -g @codai/axiom-mcp`, never `npx` in a hook.
+
+Since 2.6.0 a fresh gate profile sets `record: true`, and Claude, Codex and Copilot also get a
+PostToolUse entry (`axiom gate --stdin --post`). `--upgrade` brings an existing wiring up to date
+without `--force`: adds `record` + `steer` to the gate profile when the global bin is ≥ 2.5,
+switches gate hooks to `axiom-hook` (Claude: the HTTP hook) when a daemon answers, replaces `npx`
+MCP entries with the global bin, migrates exec-only Copilot hooks and adds the PostToolUse entries
+when the bin is ≥ 2.6; each change is reported `updated` with a reason, a second run changes
+nothing. `--managed --out <dir>` writes enterprise policy files (Claude managed settings, Codex
+`requirements.toml`, Cursor system `hooks.json`, a Copilot policy hook, a VS Code policy note) into
+`<dir>` and prints where each must be installed — [managed.md](../guides/managed.md).
 
 ```sh
 axiom init
@@ -249,7 +263,7 @@ axiom verify --journal --root .                             # journal hash chain
 ## `check`
 
 ```
-axiom check <bundle.json> --root <dir> [--profile <name>] [--json] [--allow-guards] [--guard-allowlist <abs>]...
+axiom check <bundle.json> --root <dir> [--profile <name>] [--json | --format text|json|sarif] [--allow-guards] [--guard-allowlist <abs>]...
 ```
 
 Run the profile's predicates plus the manifest's own `checks[]` over the bundle against the root;
@@ -257,7 +271,8 @@ verify `preImage[]` against the tree. `--profile` defaults to the manifest's own
 `--json` the full `CheckReport` is printed; without it a human summary
 (`PASS sha256:… (default, 34 ms)` followed by one line per finding) — the only verb whose default
 output is not JSON. The report is stored under `<root>/.axiom/reports/` either way. Exit `0` only
-on `verdict: pass`. Predicates: [checks.md](../guides/checks.md).
+on `verdict: pass`. `--format sarif` (2.6.0) prints a SARIF 2.1.0 log for GitHub code scanning
+instead (same exit codes) — [sarif.md](../guides/sarif.md). Predicates: [checks.md](../guides/checks.md).
 
 ```sh
 axiom check bundle.json --root . --profile strict
@@ -320,14 +335,16 @@ axiom rollback sha256:… --root .
 ## `gc`
 
 ```
-axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal]
+axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal] [--undo-ttl <n>(ms|s|m|h|d)]
 ```
 
 CAS garbage collection — **CLI only**, no MCP tool. Removes blobs no live manifest references.
 `--keep all-manifests` (default) pins every stored manifest's digests; `--keep journal` pins only
 manifests named by a journal or an `applied/` record. `--older-than` skips young candidates
 (`skippedYoung`). Takes `.axiom/lock` like apply (`ERR_LOCKED` on a live holder). Report:
-`{ root, keep, dryRun, scanned, live, missing, removed[], skippedYoung, freedBytes }`. Details: [cas.md](../concepts/cas.md).
+`{ root, keep, dryRun, scanned, live, missing, removed[], skippedYoung, freedBytes, undoLive, undoPruned }`.
+Pre-images captured for `axiom undo` stay live for `--undo-ttl` (default 7 d); older undo lines are
+pruned on a non-dry run. Details: [cas.md](../concepts/cas.md), [undo.md](../guides/undo.md).
 
 ```sh
 axiom gc --root . --dry-run
@@ -418,9 +435,9 @@ mismatches; `remove` revokes; `list` prints the store; `root-id` shows, sets or 
 ## `gate`
 
 ```
-axiom gate --stdin [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline]
+axiom gate --stdin [--post] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline]
                    [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan]
-                   [--no-root-discovery] [--deny-exit 0|2] [--log-level L]
+                   [--no-root-discovery] [--track-reads] [--deny-exit 0|2] [--log-level L]
 ```
 
 PreToolUse hook. Reads one harness payload from stdin and exits `0`: allow = no output; deny = one
@@ -438,6 +455,17 @@ at a gate-profile file (default search: `<root>/.axiom/gate-profile.json` → `~
 → built-in). `--strict` is accepted as a 2.1 no-op. Contract, wiring, profile schema and latency:
 [hooks.md](../getting-started/hooks.md).
 
+2.6.0 adds to the gate profile: `commands` (shell command rules + the `house` pack,
+[command-rules.md](../guides/command-rules.md)), `sessions` (cross-session overwrite, blind
+overwrite, stale script — [sessions.md](../guides/sessions.md)), `undo`
+([undo.md](../guides/undo.md)), `coordination` and `git`
+([coordination.md](../guides/coordination.md)) and `shadow` (allow everything, record what would
+have been decided). A rule can answer `ask` instead of deny; Claude, VS Code and Copilot then
+prompt the human, every other format gets a deny. `--post` handles a PostToolUse payload: it
+checks what the tool actually changed and returns the harness's "block" feedback (always exit 0;
+a post hook cannot undo). `--track-reads` lets read tools reach the gate so `sessions.trackReads`
+can record them (slower: the read-only fast path is skipped).
+
 ```sh
 echo '{"cwd":"/repo","tool_name":"Write","tool_input":{"file_path":".env","content":"X=1"}}' | axiom gate --stdin   # {"hookSpecificOutput":{…"permissionDecision":"deny"…}…}
 ```
@@ -445,7 +473,7 @@ echo '{"cwd":"/repo","tool_name":"Write","tool_input":{"file_path":".env","conte
 ## `serve`
 
 ```
-axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>]
+axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>] [--otel]
 ```
 
 Resident gate daemon for hooks (2.5.0). Keeps the gate engine loaded and answers
@@ -456,6 +484,8 @@ with an `Origin` header or a non-loopback `Host` are refused; `--token-env NAME`
 `authorization: Bearer <$NAME>`. Writes `~/.axiom/daemon.json` (removed on SIGINT/SIGTERM) and
 logs one JSON line `{msg, url, pid, roots}` to stderr. Endpoints: `POST /v1/gate`,
 `POST /v1/hook/claude`, `GET /v1/health`. Protocol: `packages/mcp/src/daemon-proto.ts`.
+`--otel` (2.6.0) exports one OpenTelemetry span per judged request (GenAI `execute_tool`
+conventions, OTLP/HTTP JSON) to the endpoint from the environment — [otel.md](../guides/otel.md).
 
 ```sh
 axiom serve --hook --root E:\gh
@@ -479,6 +509,46 @@ current directory.
 ```sh
 axiom attest decisions --since 2026-10-14T00:00:00Z --sign > decisions.intoto.jsonl
 ```
+
+## `stats`
+
+```
+axiom stats [--root <dir>] [--since <iso>|<n>d|<n>h|<n>m] [--json]
+```
+
+Gate activity for a root (2.6.0): decisions from `.axiom/decisions.jsonl` (allow / deny / ask,
+codes, p50/p95 ms, per harness and tool, post-tool checks, shadow-mode diffs) plus the hook logs
+of VS Code and Copilot CLI, with alarms: `gate.silent` (hooks fire, the gate is not among them),
+`gate.nonBlocking`, `gate.slow`, `decisions.empty`. Details: [stats.md](../guides/stats.md).
+
+```sh
+axiom stats --since 7d
+```
+
+## `undo`
+
+```
+axiom undo --session <agent> [--root <dir>] [--dry-run] [--force] [--since <iso>]
+```
+
+Restore every file one agent session wrote through the gate (2.6.0; needs `"undo": true` in the
+gate profile, which captures the pre-image of each allowed write into CAS). `<agent>` is the full
+agent id (`<harness>:<session>`) or just the session id. A path another agent wrote afterwards is
+skipped as a conflict unless `--force`; exit `1` when any conflict was skipped. Prints
+`{ root, agentId, dryRun, items: [{ path, action, reason?, pre }], restored, conflicts }`.
+Unknown agent → `ERR_NOT_FOUND`. Details: [undo.md](../guides/undo.md).
+
+## `import-guard`
+
+```
+axiom import-guard <guard.ps1> [-o <file>]
+```
+
+Convert the `'regex' = "reason"` hashtables of a PowerShell PreToolUse guard into the gate
+profile's `commands.deny` rules (2.6.0); constructs JavaScript cannot express are reported on
+stderr and skipped. Prints `{ commands, skipped[] }`, or with `-o` writes `{ commands }` to the
+file. Cutover procedure (parity test + one week of shadow mode):
+[command-rules.md](../guides/command-rules.md).
 
 ## `migrate v1`
 
@@ -526,6 +596,7 @@ axiom snapshot-diff <a.json> <b.json>
 | `AXIOM_HTTP_TOKEN` (or the name given to `--http-token-env`) | `mcp --http` | bearer token; required for non-loopback binds |
 | the name given to `--token-env` | `serve --hook` | optional bearer token for daemon requests (also written to `~/.axiom/daemon.json`, mode 0600) |
 | `AXIOM_GATE_DAEMON=0` | `gate` | ignore a running daemon; always decide in-process |
+| `AXIOM_OTEL_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` | `serve --hook --otel` | OTLP/HTTP trace export target, headers and service name |
 | `GITHUB_REPOSITORY`, `GITHUB_REF`, `GITHUB_SHA`, `GITHUB_RUN_ID` | `verify --tree --attest` | copied into `predicate.source` when present |
 
 Nothing else is read: there is no root, profile or allowlist environment fallback.

@@ -41,6 +41,19 @@ inputs:
       AXIOM repo's own CI; consumers leave this empty).
     required: false
     default: ""
+  check-profile:
+    description: >-
+      Profile for the SARIF `axiom check` run (`--profile`; builtin default|strict|permissive or
+      a name under <root>/.axiom/profiles). Empty = the manifest's own profile.
+    required: false
+    default: ""
+  sarif:
+    description: >-
+      When set, also run `axiom check <bundle> --root <root> --format sarif` and write the SARIF
+      log to this path, then upload it to GitHub code scanning (needs
+      `permissions: security-events: write`).
+    required: false
+    default: ""
 
 outputs:
   ok:
@@ -55,6 +68,9 @@ outputs:
   attestation-path:
     description: Path of the written in-toto Statement (when `attest` is true).
     value: ${{ steps.verify.outputs.attestation_path }}
+  sarif-path:
+    description: Path of the written SARIF log (when `sarif` is set).
+    value: ${{ steps.sarif.outputs.sarif_path }}
 
 runs:
   using: composite
@@ -113,3 +129,39 @@ runs:
         subject-digest: ${{ steps.verify.outputs.manifest_digest }}
         predicate-type: https://axiom.dev/attestation/apply/v1
         predicate-path: ${{ steps.verify.outputs.predicate_path }}
+
+    - name: axiom check --format sarif
+      id: sarif
+      # Runs even when verify failed: code scanning should see the findings of a bad PR.
+      if: ${{ always() && inputs.sarif != '' }}
+      shell: bash
+      env:
+        AXIOM_BUNDLE: ${{ inputs.bundle }}
+        AXIOM_ROOT: ${{ inputs.root }}
+        AXIOM_CHECK_PROFILE: ${{ inputs.check-profile }}
+        AXIOM_SARIF: ${{ inputs.sarif }}
+        AXIOM_LOCAL_CLI: ${{ inputs.local-cli }}
+      run: |
+        set -uo pipefail
+        if [ -n "$AXIOM_LOCAL_CLI" ]; then axiom() { node "$AXIOM_LOCAL_CLI" "$@"; }; fi
+        args=(check "$AXIOM_BUNDLE" --root "$AXIOM_ROOT" --format sarif)
+        if [ -n "$AXIOM_CHECK_PROFILE" ]; then args+=(--profile "$AXIOM_CHECK_PROFILE"); fi
+        mkdir -p "$(dirname "$AXIOM_SARIF")"
+        set +e
+        axiom "${args[@]}" > "$AXIOM_SARIF"
+        code=$?
+        set -e
+        # Exit 1 = findings (still a valid SARIF log); anything else without a log is a failure.
+        if ! node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(j.version!=="2.1.0")process.exit(1)' "$AXIOM_SARIF"; then
+          echo "::error title=AXIOM check --format sarif::no SARIF log produced (exit ${code})"
+          exit 2
+        fi
+        echo "sarif_path=$AXIOM_SARIF" >> "$GITHUB_OUTPUT"
+        if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then exit "$code"; fi
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.sarif != '' && steps.sarif.outputs.sarif_path != '' }}
+      uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+      with:
+        sarif_file: ${{ steps.sarif.outputs.sarif_path }}
+        category: axiom

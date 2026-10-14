@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --format auto",
+        "bash": "axiom gate --stdin --format auto",
+        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

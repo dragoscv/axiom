@@ -66,6 +66,8 @@ artifact from the job that ran the agent) so the PR carries the manifest it clai
 | `attestation-path` | no | `axiom-attestation.intoto.json` | where the Statement is written when `attest` is true; the bare predicate goes beside it |
 | `version` | no | `2` | `@codai/axiom-mcp` npm dist-tag or exact version to `npm i -g` |
 | `local-cli` | no | `""` | path to a built `cli.js` to use instead of npm — dogfooding inside the AXIOM repo's own CI; consumers leave it empty |
+| `check-profile` | no | `""` | profile for the SARIF `axiom check` run (`--profile`); empty = the manifest's profile |
+| `sarif` | no | `""` | when set, also run `axiom check <bundle> --root <root> --format sarif`, write the log to this path and upload it to code scanning (needs `security-events: write`) |
 
 ## Outputs
 
@@ -75,6 +77,7 @@ artifact from the job that ran the agent) so the PR carries the manifest it clai
 | `manifest-digest` | the `manifestDigest` that was verified (`sha256:…`) |
 | `mismatches` | number of paths that did not match |
 | `attestation-path` | path of the written Statement (empty unless `attest: true` and `ok`) |
+| `sarif-path` | path of the written SARIF log (empty unless `sarif` is set and a log was produced) |
 
 The full `verify --tree` JSON (`{ ok, manifestDigest, canonical, root, tree, paths, mismatches[] }`)
 is printed to the job log. A mismatch fails the step with an `::error` annotation naming the digest
@@ -86,6 +89,34 @@ Only the manifest's own paths are compared: every `create`/`overwrite` artifact 
 with its declared digest, every `delete` must be absent. Files the manifest never mentioned are
 ignored, so the check survives unrelated commits on the branch. A whole-root digest was rejected
 for exactly that reason. With `pre: true` the expected set is `preImage[]` instead.
+
+## SARIF and code scanning
+
+With `sarif: <path>` the action runs `axiom check <bundle> --root <root> --format sarif
+[--profile <check-profile>]` after the verify step — also when verify failed, so code scanning
+sees the findings of a bad PR — and uploads the log with `github/codeql-action/upload-sarif`
+(pinned to a commit SHA, `# v4.38.3`, category `axiom`). Check exit `1` (findings) still uploads;
+no parsable SARIF log fails the step. Mapping details: [SARIF guide](../guides/sarif.md).
+
+```yaml
+permissions:
+  contents: read
+  security-events: write   # required by upload-sarif
+jobs:
+  axiom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dragoscv/axiom/action@v2
+        with:
+          bundle: .axiom/manifests/<hex>.json
+          sarif: axiom.sarif
+          check-profile: strict
+```
+
+Pull requests from forks get a read-only token; `upload-sarif` then fails with `Resource not
+accessible by integration` — run the SARIF job on `pull_request_target` only if you understand
+the security trade-off, or upload from a follow-up `workflow_run`.
 
 ## Attestation (D-21)
 
@@ -130,8 +161,8 @@ pin `version:` to an exact npm version as well:
     version: 2.2.1
 ```
 
-The inner `actions/attest` step is itself pinned to a SHA (`# v4`) and checked by the repository's
-`check-action-pins` guard.
+The inner `actions/attest` and `github/codeql-action/upload-sarif` steps are themselves pinned to
+SHAs (`# v4`, `# v4.38.3`) and checked by the repository's `check-action-pins` guard.
 
 ## Failure modes
 
@@ -143,6 +174,8 @@ The inner `actions/attest` step is itself pinned to a SHA (`# v4`) and checked b
 | `--pre is asked of a manifest that carries no preImage` | the bundle was compiled without a root | compile with `--root` (the MCP tool does when given `root`) |
 | attest step skipped | `ok` was not `true`, or `attest` not `"true"` | the attestation is only ever uploaded for a matching tree |
 | `Resource not accessible by integration` on attest | missing `id-token: write` / `attestations: write` | add the permissions block |
+| `Resource not accessible by integration` on upload-sarif | missing `security-events: write`, or a fork PR token | add the permission; see [SARIF and code scanning](#sarif-and-code-scanning) |
+| `no SARIF log produced` | the CLI predates `--format sarif` or failed structurally | pin `version:` to ≥ 2.6.0; read the step log |
 
 ## Dogfooding in this repository
 

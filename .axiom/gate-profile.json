@@ -1,0 +1,21 @@
+{
+  "deny": [
+    ".git/**",
+    ".axiom/**",
+    ".github/hooks/**",
+    "pnpm-lock.yaml",
+    "**/*.lock",
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/dist/**"
+  ],
+  "noSecrets": true,
+  "pii": false,
+  "maxBytes": 262144,
+  "steer": "hint",
+  "record": true
+}

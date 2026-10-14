@@ -19,7 +19,7 @@ if (verb === "--version" || verb === "-v") {
   // 2.5.0 (D-36): before loading the gate chunk, ask the resident daemon (`axiom serve --hook`);
   // no verdict from it (absent, down, other version, cwd outside its roots) → in-process gate.
   const read = argv.includes("--stdin") ? await readStdin(process.stdin) : undefined;
-  if (read !== undefined && fastAllow(read.text)) {
+  if (read !== undefined && !argv.includes("--track-reads") && fastAllow(read.text)) {
     const allow = allowStdout(formatFromArgv(argv));
     if (allow !== undefined) process.stdout.write(`${allow}\n`);
     process.exitCode = 0;

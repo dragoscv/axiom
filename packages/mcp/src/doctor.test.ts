@@ -13,7 +13,13 @@ import {
   runDoctor,
   stripJsonc,
 } from "./doctor.js";
-import { cursorHooks, runInit } from "./init.js";
+import {
+  CLAUDE_HOOK_ENTRY,
+  CLAUDE_POST_HOOK_ENTRY,
+  codexHookEntry,
+  cursorHooks,
+  runInit,
+} from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
@@ -484,5 +490,71 @@ describe("axiom doctor — copilot hook shape", () => {
     const c = byId(await runDoctor(base()), "hook.copilot");
     expect(c?.status).toBe("fail");
     expect(c?.message).toMatch(/only via exec\/args/);
+  });
+});
+
+describe("axiom doctor — fail-open audit (S-1203) and post-write wiring (S-1205)", () => {
+  const idsWith = (r: Awaited<ReturnType<typeof runDoctor>>, prefix: string) =>
+    r.checks.filter((c) => c.id.startsWith(prefix)).map((c) => [c.id, c.status]);
+  const binAt =
+    (version: string): NonNullable<DoctorOptions["locateBin"]> =>
+    async () => ({
+      path: "/a",
+      version,
+    });
+
+  it("claude with onFailure: block → no failopen.claude; without it → warn", async () => {
+    await runInit({ root: repo.root, harness: "claude", profileName: "demo" });
+    const ok = await runDoctor(base());
+    expect(byId(ok, "failopen.claude")).toBeUndefined();
+    const { onFailure: _o, ...noKnob } = CLAUDE_HOOK_ENTRY.hooks[0] ?? {};
+    await put(".claude/settings.json", {
+      hooks: {
+        PreToolUse: [{ matcher: "Write", hooks: [noKnob] }],
+        PostToolUse: [CLAUDE_POST_HOOK_ENTRY],
+      },
+    });
+    expect(await statusOf("failopen.claude")).toBe("warn");
+  });
+
+  it("cursor with failClosed has no failopen check (hook.cursor warns without it, unchanged)", async () => {
+    await runInit({ root: repo.root, harness: "cursor", profileName: "demo" });
+    expect(idsWith(await runDoctor(base()), "failopen.")).toEqual([]);
+  });
+
+  it("harnesses without a fail-closed knob warn failopen.<harness> when wired", async () => {
+    for (const harness of ["copilot", "codex", "gemini", "windsurf"] as const) {
+      await runInit({ root: repo.root, harness, profileName: "demo", force: true });
+    }
+    const r = await runDoctor(base());
+    expect(idsWith(r, "failopen.")).toEqual([
+      ["failopen.copilot", "warn"],
+      ["failopen.windsurf", "warn"],
+      ["failopen.codex", "warn"],
+      ["failopen.gemini", "warn"],
+    ]);
+    expect(r.ok).toBe(true);
+    // A missing timeout is called out in the hint.
+    await put(".codex/hooks.json", {
+      hooks: { PreToolUse: [{ ...codexHookEntry(), hooks: [{ command: "axiom gate --stdin" }] }] },
+    });
+    expect(byId(await runDoctor(base()), "failopen.codex")?.hint).toMatch(/"timeout"/);
+  });
+
+  it("hook.post.<harness>: ok when wired (bin ≥ 2.6.0), warn when missing or bin too old", async () => {
+    for (const d of [".github", ".claude", ".codex"]) await mkdir(join(repo.root, d));
+    await runInit({ root: repo.root, profileName: "demo" });
+    const ok = await runDoctor(base());
+    expect(idsWith(ok, "hook.post.")).toEqual([
+      ["hook.post.copilot", "ok"],
+      ["hook.post.claude", "ok"],
+      ["hook.post.codex", "ok"],
+    ]);
+    const old = await runDoctor(base({ locateBin: binAt("2.5.2") }));
+    expect(byId(old, "hook.post.claude")?.status).toBe("warn");
+    await put(".claude/settings.json", { hooks: { PreToolUse: [CLAUDE_HOOK_ENTRY] } });
+    const missing = byId(await runDoctor(base()), "hook.post.claude");
+    expect(missing?.status).toBe("warn");
+    expect(missing?.hint).toBe("axiom init --upgrade");
   });
 });

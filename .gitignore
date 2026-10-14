@@ -15,7 +15,6 @@ out/
 out-*/
 test-results/
 tmp_artifacts/
-.axiom/
 **/test-app/
 **/clean-app/
 **/heavy-app/
@@ -35,3 +34,6 @@ packages/conformance/results/
 
 # Rust build output (crates/axiom-hook)
 /crates/*/target/
+.axiom/*
+!.axiom/profiles/
+!.axiom/gate-profile.json

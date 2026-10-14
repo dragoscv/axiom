@@ -15,6 +15,7 @@ import {
 } from "./daemon-proto.js";
 import { readDecisions } from "./decisions.js";
 import { gateMain } from "./gate.js";
+import type { GateSpanInput, OtelExporter } from "./otel.js";
 import { type RunningDaemon, startDaemon } from "./serve.js";
 import { type TmpRepo, tmpRepo } from "./test-helpers.js";
 
@@ -216,6 +217,55 @@ describe("axiom serve --hook (resident gate daemon)", () => {
     expect(results.every((r) => r !== undefined)).toBe(true);
     const denies = results.filter((r) => r?.stdout.includes('"deny"')).length;
     expect(denies).toBe(20);
+  });
+
+  it("records one OTel span per judged request and closes the exporter (S-1217)", async () => {
+    const spans: GateSpanInput[] = [];
+    let closed = 0;
+    const otel: OtelExporter = {
+      record: (s) => {
+        spans.push(s);
+      },
+      flush: async () => {},
+      close: async () => {
+        closed++;
+      },
+    };
+    const dm = await daemon({ otel });
+    const withId = (file: string) =>
+      JSON.stringify({ ...JSON.parse(write(file, "A=1\n")), tool_use_id: "toolu_42" });
+    await callDaemon({
+      argv: ["--stdin", "--format", "codex"],
+      text: withId(".env"),
+      stdin: "ok",
+      cwd: root,
+      version: VERSION,
+      home: home.root,
+      timeoutMs: T,
+    });
+    await callDaemon({
+      argv: ["--stdin"],
+      text: write("src/ok.ts"),
+      stdin: "ok",
+      cwd: root,
+      version: VERSION,
+      home: home.root,
+      timeoutMs: T,
+    });
+    await raw(dm, { path: CLAUDE_HOOK_PATH, body: write(".env", "A=1\n") });
+    // Refused requests (no verdict) record nothing.
+    await raw(dm, { path: GATE_PATH, headers: { origin: "https://evil.example" } });
+    expect(spans.map((s) => s.decision)).toEqual(["deny", "allow", "deny"]);
+    expect(spans.map((s) => s.format)).toEqual(["codex", "auto", "claude"]);
+    expect(spans[0]?.tool).toBe("Write");
+    expect(spans[0]?.toolCallId).toBe("toolu_42");
+    expect(spans[1]?.toolCallId).toBeUndefined();
+    expect(typeof spans[0]?.code).toBe("string");
+    expect(spans[0]?.toolClass).toBe("write");
+    expect(spans.every((s) => s.durationMs >= 0 && s.startMs > 0)).toBe(true);
+    await dm.close();
+    d = undefined;
+    expect(closed).toBe(1);
   });
 });
 

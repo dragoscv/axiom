@@ -2512,7 +2512,7 @@
   },
   {
     "name": "axiom_apply",
-    "description": "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run). Idempotent: re-applying an applied digest is a no-op.",
+    "description": "Transactionally write the bundle into the root: pre-image verification, staging, journal, atomic renames, scoped rollback on failure. Requires `confirmDigest === bundle.manifestDigest` (echo the digest you saw in dry-run); when the client supports elicitation the user must also confirm by typing the digest's first 12 hex characters. Idempotent: re-applying an applied digest is a no-op.",
     "riskClass": "SENSITIVE",
     "annotations": {
       "readOnlyHint": false,
@@ -2812,7 +2812,7 @@
   },
   {
     "name": "axiom_write",
-    "description": "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically: pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
+    "description": "One-tool transactional write: send the files you want written/deleted. Without confirmDigest it compiles them against the current tree, runs the pre-apply checks and returns status `preview` with the manifestDigest and a unified diff (nothing outside .axiom/ touched). Call again with the SAME files, intent and profile plus confirmDigest=<manifestDigest> to apply atomically (when the client supports elicitation the user confirms first): pre-image verification, journal, two-phase commit, one-step rollback via axiom_rollback. If any target changed since the preview the digest changes → ERR_CONFIRM_DIGEST_MISMATCH (re-preview). Prefer it over plain file writes for multi-file or sensitive changes.",
     "riskClass": "SENSITIVE",
     "annotations": {
       "readOnlyHint": false,

@@ -1,0 +1,467 @@
+[
+  {
+    "command": "git add -A",
+    "guard": "deny",
+    "note": "house.gitAddAll"
+  },
+  {
+    "command": "git add .",
+    "guard": "deny",
+    "note": "house.gitAddAll"
+  },
+  {
+    "command": "git add --all",
+    "guard": "deny",
+    "note": "house.gitAddAll"
+  },
+  {
+    "command": "GIT ADD -A",
+    "guard": "deny",
+    "note": "house.gitAddAll (case-insensitive)"
+  },
+  {
+    "command": "git add -- src/a.ts",
+    "guard": "allow",
+    "note": "near-miss gitAddAll"
+  },
+  {
+    "command": "git add ./src/a.ts",
+    "guard": "allow",
+    "note": "near-miss gitAddAll"
+  },
+  {
+    "command": "git commit -am 'msg'",
+    "guard": "deny",
+    "note": "house.gitCommitAll"
+  },
+  {
+    "command": "git commit -a -m wip",
+    "guard": "deny",
+    "note": "house.gitCommitAll"
+  },
+  {
+    "command": "git commit --all -m wip",
+    "guard": "deny",
+    "note": "house.gitCommitAll"
+  },
+  {
+    "command": "git commit -m 'add' -- a.ts",
+    "guard": "allow",
+    "note": "near-miss gitCommitAll (pathspec)"
+  },
+  {
+    "command": "git push --force origin main",
+    "guard": "deny",
+    "note": "house.forcePush"
+  },
+  {
+    "command": "git push origin main -f",
+    "guard": "deny",
+    "note": "house.forcePush"
+  },
+  {
+    "command": "git push --force-with-lease",
+    "guard": "deny",
+    "note": "house.forcePush"
+  },
+  {
+    "command": "git push origin main",
+    "guard": "allow",
+    "note": "near-miss forcePush"
+  },
+  {
+    "command": "git push origin my-feat",
+    "guard": "allow",
+    "note": "near-miss forcePush"
+  },
+  {
+    "command": "git reset --hard HEAD~1",
+    "guard": "deny",
+    "note": "house.resetHard"
+  },
+  {
+    "command": "git reset --soft HEAD~1",
+    "guard": "allow",
+    "note": "near-miss resetHard"
+  },
+  {
+    "command": "git clean -fd",
+    "guard": "deny",
+    "note": "house.cleanForce"
+  },
+  {
+    "command": "git clean -xdf",
+    "guard": "deny",
+    "note": "house.cleanForce"
+  },
+  {
+    "command": "git clean -n",
+    "guard": "allow",
+    "note": "near-miss cleanForce"
+  },
+  {
+    "command": "git checkout -- src/a.ts",
+    "guard": "deny",
+    "note": "house.checkoutDiscard"
+  },
+  {
+    "command": "git checkout .",
+    "guard": "deny",
+    "note": "house.checkoutDiscard"
+  },
+  {
+    "command": "git checkout HEAD -- a.ts",
+    "guard": "deny",
+    "note": "house.checkoutDiscard"
+  },
+  {
+    "command": "git checkout -b feat/x",
+    "guard": "allow",
+    "note": "near-miss checkoutDiscard"
+  },
+  {
+    "command": "git checkout main",
+    "guard": "allow",
+    "note": "near-miss checkoutDiscard"
+  },
+  {
+    "command": "git restore src/a.ts",
+    "guard": "deny",
+    "note": "house.restore"
+  },
+  {
+    "command": "git restore --staged a.ts",
+    "guard": "deny",
+    "note": "house.restore"
+  },
+  {
+    "command": "git log -- restore.ts",
+    "guard": "allow",
+    "note": "near-miss restore"
+  },
+  {
+    "command": "git stash push -- a.ts -m wip",
+    "guard": "deny",
+    "note": "house.stashFlagsAfterDashDash"
+  },
+  {
+    "command": "git -C repo stash push -- a.ts -u",
+    "guard": "deny",
+    "note": "house.stashFlagsAfterDashDash"
+  },
+  {
+    "command": "git stash push -m wip -- a.ts",
+    "guard": "allow",
+    "note": "near-miss stashFlagsAfterDashDash"
+  },
+  {
+    "command": "git stash pop",
+    "guard": "deny",
+    "note": "house.stashBare"
+  },
+  {
+    "command": "git stash drop",
+    "guard": "deny",
+    "note": "house.stashBare"
+  },
+  {
+    "command": "git -C repo stash apply",
+    "guard": "deny",
+    "note": "house.stashBare"
+  },
+  {
+    "command": "git stash pop stash@{2}",
+    "guard": "allow",
+    "note": "near-miss stashBare"
+  },
+  {
+    "command": "git stash list",
+    "guard": "allow",
+    "note": "near-miss stashBare"
+  },
+  {
+    "command": "psql -c \"DROP TABLE users\"",
+    "guard": "deny",
+    "note": "house.sqlDestructive"
+  },
+  {
+    "command": "TRUNCATE TABLE logs",
+    "guard": "deny",
+    "note": "house.sqlDestructive"
+  },
+  {
+    "command": "psql -c \"DROP INDEX idx_users\"",
+    "guard": "allow",
+    "note": "near-miss sqlDestructive"
+  },
+  {
+    "command": "DELETE FROM users;",
+    "guard": "deny",
+    "note": "house.sqlDeleteAll"
+  },
+  {
+    "command": "DELETE FROM users",
+    "guard": "deny",
+    "note": "house.sqlDeleteAll"
+  },
+  {
+    "command": "DELETE FROM users WHERE id = 1;",
+    "guard": "allow",
+    "note": "near-miss sqlDeleteAll"
+  },
+  {
+    "command": "rm -rf /",
+    "guard": "deny",
+    "note": "house.rmRoot"
+  },
+  {
+    "command": "rm -rf ~",
+    "guard": "deny",
+    "note": "house.rmRoot"
+  },
+  {
+    "command": "rm -rf ./dist",
+    "guard": "allow",
+    "note": "near-miss rmRoot"
+  },
+  {
+    "command": "rm -rf /tmp/x",
+    "guard": "allow",
+    "note": "near-miss rmRoot"
+  },
+  {
+    "command": "Remove-Item -Recurse -Force C:\\",
+    "guard": "deny",
+    "note": "house.removeItemRoot"
+  },
+  {
+    "command": "Remove-Item -Recurse -Force .\\dist",
+    "guard": "allow",
+    "note": "near-miss removeItemRoot"
+  },
+  {
+    "command": "git commit -m 'fix: x'",
+    "guard": "deny",
+    "note": "house.commitNoPathspec"
+  },
+  {
+    "command": "cd repo; git commit -m x",
+    "guard": "deny",
+    "note": "house.commitNoPathspec"
+  },
+  {
+    "command": "git -C repo commit -m x",
+    "guard": "deny",
+    "note": "house.commitNoPathspec"
+  },
+  {
+    "command": "git commit -m x -- a.ts",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (pathspec)"
+  },
+  {
+    "command": "git commit --amend --no-edit",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (amend)"
+  },
+  {
+    "command": "git commit --allow-empty -m x",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (allow-empty)"
+  },
+  {
+    "command": "git commit-tree abc123 -m x",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (commit-tree)"
+  },
+  {
+    "command": "pwsh -NoProfile -File C:\\tools\\agentq.ps1 commit -Paths a.ts",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (agentq)"
+  },
+  {
+    "command": "echo 'git commit'",
+    "guard": "allow",
+    "note": "near-miss commitNoPathspec (not at command position)"
+  },
+  {
+    "command": "git worktree remove ../wt",
+    "guard": "deny",
+    "note": "house.worktreeRawRemove"
+  },
+  {
+    "command": "git worktree move a b",
+    "guard": "deny",
+    "note": "house.worktreeRawRemove"
+  },
+  {
+    "command": "git worktree list",
+    "guard": "allow",
+    "note": "near-miss worktree rules"
+  },
+  {
+    "command": "git worktree add ../x main",
+    "guard": "deny",
+    "note": "house.worktreeRawAdd"
+  },
+  {
+    "command": "pwsh -NoProfile -File C:\\tools\\agentq.ps1 lease -Purpose x; git worktree add ../x",
+    "guard": "allow",
+    "note": "near-miss worktreeRawAdd (via tool)"
+  },
+  {
+    "command": "git worktree remove --force ../x",
+    "guard": "deny",
+    "note": "house.worktreeRemoveForce"
+  },
+  {
+    "command": "pwsh -File C:\\tools\\worktree.ps1 x; git worktree remove -f ../x",
+    "guard": "deny",
+    "note": "house.worktreeRemoveForce (tool does not exempt --force)"
+  },
+  {
+    "command": "pwsh -File C:\\tools\\worktree.ps1 remove -Path ../x",
+    "guard": "allow",
+    "note": "near-miss worktreeRawRemove (via tool)"
+  },
+  {
+    "command": "npx playwright test",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "pnpm exec playwright test e2e/a.spec.ts",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "$env:CI=1; npx playwright test",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "pnpm a11y:routes",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "node node_modules/@playwright/test/cli.js test",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "cd apps/web; playwright test --project=chromium",
+    "guard": "deny",
+    "note": "house.playwrightLocal"
+  },
+  {
+    "command": "npx playwright test --list",
+    "guard": "allow",
+    "note": "near-miss playwrightLocal (--list)"
+  },
+  {
+    "command": "PW_ALLOW_LOCAL=1 npx playwright test",
+    "guard": "allow",
+    "note": "near-miss playwrightLocal (escape)"
+  },
+  {
+    "command": "npx playwright install",
+    "guard": "allow",
+    "note": "near-miss playwrightLocal (install)"
+  },
+  {
+    "command": "echo 'npx playwright test'",
+    "guard": "allow",
+    "note": "near-miss playwrightLocal (inside a string)"
+  },
+  {
+    "command": "pnpm playwright test",
+    "guard": "allow",
+    "note": "near-miss playwrightLocal (bare pnpm prefix is not matched by the guard)"
+  },
+  {
+    "command": "pnpm build",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "pnpm --filter @codai/axiom-mcp typecheck",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "npx tsc --noEmit",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "turbo run build",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "next build",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "node --max-old-space-size=8192 node_modules/typescript/lib/tsc.js --noEmit",
+    "guard": "deny",
+    "note": "house.buildUnqueued"
+  },
+  {
+    "command": "cd x; pnpm run build > out.log",
+    "guard": "deny",
+    "note": "house.buildUnqueued (complex: run-build message)"
+  },
+  {
+    "command": "pnpm test",
+    "guard": "allow",
+    "note": "near-miss buildUnqueued"
+  },
+  {
+    "command": "pnpm lint",
+    "guard": "allow",
+    "note": "near-miss buildUnqueued"
+  },
+  {
+    "command": "pwsh -NoProfile -File C:\\tools\\run-build.ps1 -Command 'pnpm build'",
+    "guard": "allow",
+    "note": "near-miss buildUnqueued (wrapper)"
+  },
+  {
+    "command": "gcloud builds submit .",
+    "guard": "allow",
+    "note": "deploy outside git = allowed; HOUSE_DEPLOY_RULE fires only on a dirty tree"
+  },
+  {
+    "command": "docker build -t app .",
+    "guard": "allow",
+    "note": "deploy outside git = allowed; HOUSE_DEPLOY_RULE fires only on a dirty tree"
+  },
+  {
+    "command": "ls",
+    "guard": "allow",
+    "note": "neutral"
+  },
+  {
+    "command": "rg -n foo packages",
+    "guard": "allow",
+    "note": "neutral"
+  },
+  {
+    "command": "pnpm install",
+    "guard": "allow",
+    "note": "neutral (guard only warns)"
+  },
+  {
+    "command": "Stop-Process -Id 4242",
+    "guard": "allow",
+    "note": "neutral (guard only warns)"
+  },
+  {
+    "command": "git status --porcelain",
+    "guard": "allow",
+    "note": "neutral"
+  }
+]

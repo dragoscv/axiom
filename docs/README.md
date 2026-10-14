@@ -44,6 +44,15 @@ flowchart LR
 | [Snapshot](guides/snapshot.md) | `axiom_repo_snapshot`: deterministic inventory of a root, diffing two snapshots |
 | [Emitters](guides/emitters.md) | `template` sources: determinism contract, the `web@2.0.0` catalogue, authoring an emitter |
 | [Migrate](guides/migrate.md) | `axiom migrate v1`: lifting a 1.x manifest into a v2 Plan |
+| [Command rules](guides/command-rules.md) | `commands` in the gate profile, the `house` pack, `axiom import-guard`, shadow-mode cutover |
+| [Sessions](guides/sessions.md) | Cross-session overwrite detection, blind whole-file overwrite, stale-script guard |
+| [Undo](guides/undo.md) | `axiom undo --session`: gate-side pre-images, conflict-aware restore, gc TTL |
+| [Coordination](guides/coordination.md) | File protocol for marks, leases, queue-required commands; git-state facts without spawning git |
+| [Stats](guides/stats.md) | `axiom stats`: decisions, latency, harness hook logs, silent-gate alarms |
+| [Human confirm](guides/human-confirm.md) | `requiresUserInteraction`, MCP elicitation, `--require-human` for `axiom_apply` / `axiom_write` |
+| [Managed policy](guides/managed.md) | `axiom init --managed`: enterprise policy layers per harness |
+| [SARIF](guides/sarif.md) | `axiom check --format sarif` and GitHub code scanning |
+| [OpenTelemetry](guides/otel.md) | `axiom serve --hook --otel`: GenAI `execute_tool` spans |
 
 ## Reference
 

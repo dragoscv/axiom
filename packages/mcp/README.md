@@ -143,21 +143,25 @@ Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{s
 
 ```
 axiom mcp     [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level warn]
-              [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN]
-axiom init    [--root .] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]
-              (.vscode/mcp.json + PreToolUse hook + .axiom/profiles/<name>.json + .axiom/gate-profile.json + .gitignore; idempotent)
+              [--http <host:port>] [--http-token-env AXIOM_HTTP_TOKEN] [--require-human]
+axiom init    [--root .] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
+              [--profile-name <name>] [--force] [--upgrade] [--managed --out <dir>] [--json]
+              (.vscode/mcp.json + Pre/PostToolUse hooks + .axiom/profiles/<name>.json + .axiom/gate-profile.json + .gitignore; idempotent)
 axiom doctor  [--root .] [--json]               (exit 0 = no failing check, 2 = at least one fail; warnings exit 0)
+axiom stats   [--root .] [--since 7d] [--json]  (gate decisions, p50/p95, per harness; silent-gate alarms)
+axiom undo    --session <agent> [--root .] [--dry-run] [--force] [--since <iso>]   (restore one session's writes; exit 1 = conflicts)
+axiom import-guard <guard.ps1> [-o profile.json]   (PowerShell guard tables → gate profile "commands")
 axiom status  [--root .] [--json]               (lock holder/queue/intents, interrupted journals, last applied, chain)
 axiom log     [--root .] [--limit 20] [--json]  (journal chain, newest first)
 axiom compile <plan.json|plan.yaml|plan.axm> [-o out.json] [--store cas --root .] [--allow-net [--net-allow host[,host]]] [--allow-file]
 axiom verify  <bundle.json> [--root .]          (--root: also verify signatures against .axiom/trust/keys.json)
 axiom verify  --journal --root .                (journal hash chain; broken → exit 1 + code ERR_JOURNAL_CHAIN)
 axiom verify  <bundle.json> --tree <root> [--pre] [--attest out.intoto.json]   (tree matches manifest? docs/guides/verify-tree.md)
-axiom check   <bundle.json> --root . [--profile p] [--json] [--allow-guards] [--guard-allowlist <abs>]...
+axiom check   <bundle.json> --root . [--profile p] [--json | --format text|json|sarif] [--allow-guards] [--guard-allowlist <abs>]...
 axiom apply   <bundle.json> --root . [--dry-run] [--profile p] [--confirm <digest>] [--lock-timeout <ms>] [--keep-backups <n>]
               [--pr [--branch b] [--message m]] [--allow-guards] [--guard-allowlist <abs>]...
 axiom rollback <digest> --root .
-axiom gc      --root . [--dry-run] [--older-than 30d] [--keep all-manifests|journal]   (CAS garbage collection; CLI only, no MCP tool)
+axiom gc      --root . [--dry-run] [--older-than 30d] [--keep all-manifests|journal] [--undo-ttl 7d]   (CAS garbage collection; CLI only, no MCP tool)
 axiom diff    <a.json> <b.json>
 axiom schema  <Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot>
 axiom emitters [--json]
@@ -166,7 +170,9 @@ axiom sign    <bundle.json> [--key-file <path>] [-o out.json] [--root-id <id>]  
 axiom sign    <bundle.json> --keyless [--bound --root . | --root-id <id>] [-o out.json]
               (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
 axiom trust   add <pub.json> --root . | remove <keyid> --root . | list --root . | root-id [<id>|--clear] --root .
-axiom gate    --stdin [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery] [--deny-exit 0|2] [--log-level warn]
+axiom gate    --stdin [--post] [--format <harness>] [--root <dir>] [--profile <file>] [--fail-open] [--no-shell-scan] [--no-root-discovery]
+              [--track-reads] [--deny-exit 0|2] [--log-level warn]
+axiom serve   --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>] [--otel]
 axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--overwrite]
                                                (v1 manifest → v2 Plan, lazy chunk; exit 1 = migrated with warnings — docs/guides/migrate.md)
 axiom snapshot --root . [-o snap.json] [--include <glob>]... [--exclude <glob>]... [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]

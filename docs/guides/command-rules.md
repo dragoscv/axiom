@@ -1,0 +1,112 @@
+# Command rules (`command.deny`)
+
+Since v2.6 the gate can refuse shell commands, not only file writes. Rules live in
+`.axiom/gate-profile.json` under `commands`:
+
+```json
+{
+  "commands": {
+    "pack": "house",
+    "deny": [
+      {
+        "id": "team.noCurlPipe",
+        "pattern": "curl[^|]*\\|\\s*(ba)?sh\\b",
+        "reason": "Piping a download into a shell runs unreviewed code.",
+        "fix": "Download the script, read it, then run it."
+      },
+      { "id": "team.kubectlDelete", "argv": ["kubectl", "delete"], "reason": "Deletes cluster objects.", "decision": "ask" }
+    ]
+  }
+}
+```
+
+The gate checks `deny` in order, then the pack. The first match decides. A refusal is reported
+with the rule `id` (default `command.deny`), the `reason` and the `fix`.
+
+## Rule fields
+
+| Field | Meaning |
+|---|---|
+| `id` | Stable id shown in the verdict and in `decisions.jsonl`. Default `command.deny`. |
+| `pattern` | JavaScript regex source, at most 500 characters. Case-insensitive unless `caseSensitive: true`. |
+| `argv` | Word prefix of one command segment (`;`, `&&`, `\|\|`, `\|`, newline split the command). Leading `VAR=x` / `$env:VAR=x` words and `sudo` are skipped; quotes are removed; the first word matches without its directory or `.exe`. `"*"` matches any one word. |
+| `unless` | Regex; when it matches anywhere in the whole command, the rule does not fire. |
+| `reason` | Required. One sentence for the agent. |
+| `fix` | The sanctioned command that does the same thing. |
+| `decision` | `deny` (default) or `ask` (the harness asks the human). |
+| `caseSensitive` | `true` compiles `pattern` and `unless` without the `i` flag. |
+
+A rule needs `pattern`, `argv`, or both (then both must match). An invalid regex fails profile
+validation; it never fails at runtime. If a rule still cannot be evaluated, the gate refuses the
+command (fail closed).
+
+## The house pack
+
+`"pack": "house"` turns on the pure command rules of the PowerShell house guard
+(`guard-tooluse.ps1`). Parity is pinned by `packages/mcp/fixtures/guard-parity.json`: 93 commands
+answered by the real guard, replayed in `command-rules.test.ts`.
+
+| id | Blocks | Fix |
+|---|---|---|
+| `house.gitAddAll` | `git add -A` / `--all` / `.` | stage explicit paths |
+| `house.gitCommitAll` | `git commit -a`, `-am`, `--all` | `agentq.ps1 commit -Paths …` |
+| `house.forcePush` | `git push --force`, `-f`, `--force-with-lease` | ask the user |
+| `house.resetHard` | `git reset --hard` | ask the user |
+| `house.cleanForce` | `git clean -f…` | ask the user |
+| `house.checkoutDiscard` | `git checkout -- <path>`, `git checkout .`, `git checkout <ref> -- <path>` | `git stash push -m … -- <path>` |
+| `house.restore` | `git restore` | fix forward |
+| `house.stashFlagsAfterDashDash` | `git stash push -- <path> -m …` (flags after `--` are paths) | flags before `--` |
+| `house.stashBare` | bare `git stash pop/apply/drop` | name `stash@{N}` |
+| `house.sqlDestructive` | dropping or truncating a table, database or schema | ask the user |
+| `house.sqlDeleteAll` | a delete with no `WHERE` | ask the user |
+| `house.rmRoot` | `rm -rf /` or `~` | — |
+| `house.removeItemRoot` | `Remove-Item -Recurse -Force` at a drive root | — |
+| `house.commitNoPathspec` | `git commit` without `-- <paths>` (allowed: `--amend`, `--allow-empty`, `commit-tree`, via `agentq.ps1`) | `agentq.ps1 commit -Paths …` |
+| `house.worktreeRawRemove` | raw `git worktree remove/move` (allowed via `worktree.ps1`, `agentq.ps1`, `deploy-clean.ps1`) | `worktree.ps1 remove -Path <dir>` |
+| `house.worktreeRawAdd` | raw `git worktree add` (same exemptions) | `agentq.ps1 lease -Purpose …` |
+| `house.worktreeRemoveForce` | `git worktree remove --force` (follows junctions) | `worktree.ps1 remove -Path <dir>` |
+| `house.playwrightLocal` | `playwright test` at a command position (allowed: `--list`, `PW_ALLOW_LOCAL=1`) | `pnpm e2e:cloud …` |
+| `house.buildUnqueued` | `pnpm build`, `typecheck`, `turbo build`, `next build`, `tsc --noEmit` outside `run-build.ps1` / `agentq.ps1` | `run-build.ps1 -Command '<cmd>'` |
+
+`command.deployNeedsCleanTree` (exported as `HOUSE_DEPLOY_RULE`) is not in the pack: the guard
+refuses deploys (`gcloud run deploy`, `docker push`, `terraform apply`, publishing, …) only when
+the git tree is dirty, so the gate adds this rule only when its git-state fact reports a dirty
+tree. Rules that need machine state — slot leases, agentq freezes, stale-script markers,
+session ownership — are separate gate modules, not command rules.
+
+## Importing an existing guard
+
+```sh
+axiom import-guard guard.ps1 -o commands.json
+```
+
+Every `@{ … }` / `[ordered]@{ … }` table of `'regex' = "reason"` entries becomes a list of rules
+with ids `imported.1`, `imported.2`, …. Inline `(?i)` is dropped (rules are case-insensitive by
+default). Constructs JavaScript cannot express — atomic groups, possessive quantifiers, balancing
+groups, `(?x)`, class subtraction — and strings with `$variable` interpolation are listed under
+`skipped` with the line number and the reason, never translated approximately. Paste `commands`
+into `.axiom/gate-profile.json`. Checks outside hashtables (if-blocks) are not imported.
+
+## Shadow mode and cutover
+
+Replace a guard only after it has run beside AXIOM without disagreement (decision D-39):
+
+1. Set `"shadow": true` in the gate profile. Verdicts of the v2.6 rules (`commands`,
+  `coordination`, `git`, `sessions`) are not enforced: the call goes on, and the journal line in
+  `.axiom/decisions.jsonl` records what the gate would have decided (`shadow: true`, `rule`) plus
+  the command text. The path and content predicates (`deny`, `allow`, `noSecrets`, `maxBytes`)
+  keep enforcing, so shadow mode never weakens a profile you already rely on. Keep the old guard
+  registered during the week.
+2. Compare those records with the old guard:
+
+   ```sh
+   node scripts/guard-parity.mjs --replay .axiom/decisions.jsonl --guard guard.ps1
+   ```
+
+   It prints `{total, diffs:[{command, axiom, guard}]}` and exits 1 on any diff.
+3. Cut over (remove `shadow`, unregister the old hook) only after one week of zero diffs.
+
+`node scripts/guard-parity.mjs --check --guard guard.ps1` re-runs the fixture corpus against the
+guard; `--generate --guard guard.ps1 --out <json>` rebuilds it. Both run the guard from a temp
+copy with an empty `AGENTQ_HOME` / `CODAI_WT_ROOT` and a cwd outside git, so lease and freeze logic
+stays inert.

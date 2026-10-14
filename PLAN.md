@@ -269,21 +269,23 @@ Goal: nothing open that the owner did not choose to leave open — every PR, ale
 |---|---|---|
 | S-1201 | **P0 (v2.5.2)**: `.github/hooks/axiom-gate.json` = `command`+`bash`+`powershell` (`axiom.cmd … ; exit $LASTEXITCODE`), 15 s, no `exec`; auto-migrate the exec-only file; Windsurf/Codex Windows exit-code propagation; Claude `onFailure: block` + `Bash\|PowerShell` matcher + `--format claude`; doctor fails exec-only files and the silent gate (hooks run for the workspace, gate never); docs (hooks, harnesses, vscode, cli, quickstart, install); simulated VS Code run (deny + allow) | done |
 | S-1202 | Release v2.5.2 + re-wire codai/brivio/metu (`axiom init`) + live proof: a deny in VS Code's hook log for each consumer after Reload Window | done |
-| S-1203 | Fail-closed audit: per-harness table in hooks.md; doctor warns where a timeout or crash fails open (VS Code Local, Copilot CLI timeout, Codex, Gemini, Windsurf, Cline) | todo |
-| S-1204 | `axiom init --upgrade`: add `record` + `steer` when the bin is ≥ 2.5, switch hooks to `axiom-hook` when a daemon runs, MCP from the global bin instead of `npx` | todo |
-| S-1205 | Shell writes: PowerShell matcher everywhere, post-write check of Claude `bashEditDiff` / Codex PostToolUse into `decisions.jsonl` | todo |
-| S-1206 | Human-only `confirmDigest`: `_meta["anthropic/requiresUserInteraction"]` + MCP elicitation for `axiom_apply` / `axiom_write`; doctor flags auto-answering Elicitation hooks | todo |
-| S-1207 | `axiom init --managed`: Claude managed settings, Codex `requirements.toml`, Cursor enterprise `hooks.json`, VS Code policy note | todo |
-| S-1208 | `command.deny` predicate (pattern / argv shape, reason, fix command) + built-in house pack ported from `guard-tooluse.ps1` | todo |
-| S-1209 | Cross-session overwrite detection: daemon last-writer map (path → agent/session, hash, time), deny/ask when another session wrote the file and the caller has not seen its hash | todo |
-| S-1210 | `axiom undo --session <agent>`: gate-side pre-image capture into CAS for allowed writes, conflict-aware restore, gc TTL | todo |
-| S-1211 | `axiom stats` (allow/deny, codes, p50/p95, per harness) + silent-gate alarm across harness logs | todo |
-| S-1212 | Coordination adapter: generic file protocol for marks (frozen resource classes), leases (slot ownership) and queue-required builds; agentq mapping as example profile | todo |
-| S-1213 | Git-state facts without spawning git: clean tree for deploy-class commands, pathspec commits, branch-is | todo |
-| S-1214 | SARIF export: `axiom check --format sarif` + action input → GitHub code scanning | todo |
-| S-1215 | Blind whole-file overwrite guard (create on an unread existing file) + re-run of a script whose creation was denied | todo |
-| S-1216 | `axiom import-guard` + parity test against the house PowerShell guard suites; one-week shadow mode (record-only) before cutover | todo |
-| S-1217 | OpenTelemetry spans from the daemon (GenAI `execute_tool` conventions), opt-in, lazy-loaded | todo |
+| S-1203 | Fail-closed audit: per-harness table in hooks.md; doctor warns where a timeout or crash fails open (VS Code Local, Copilot CLI timeout, Codex, Gemini, Windsurf, Cline) | done — `docs/getting-started/hooks.md` table for 10 harnesses with source URLs (unverified cells marked); doctor `failopen.<harness>` warns only when the harness's fail-closed knob is missing |
+| S-1204 | `axiom init --upgrade`: add `record` + `steer` when the bin is ≥ 2.5, switch hooks to `axiom-hook` when a daemon runs, MCP from the global bin instead of `npx` | done — in-place, idempotent, reasons per file; fresh gate profiles set `record: true`; shared bin/daemon helpers moved to init.ts |
+| S-1205 | Shell writes: PowerShell matcher everywhere, post-write check of Claude `bashEditDiff` / Codex PostToolUse into `decisions.jsonl` | done — `axiom gate --stdin --post` (`post-write.ts`): Claude `tool_response.bashEditDiff`, Write/Edit `filePath`, else the shell scan; `phase: "post"` decisions; init writes PostToolUse for Claude/Codex/Copilot |
+| S-1206 | Human-only `confirmDigest`: `_meta["anthropic/requiresUserInteraction"]` + MCP elicitation for `axiom_apply` / `axiom_write`; doctor flags auto-answering Elicitation hooks | done — `_meta` on both tools; `input_required` elicitation (form `confirm` + `digest12`, HMAC-bound `requestState`) for 2025 and 2026 eras; `axiom mcp --require-human`; doctor `elicitation.autoAnswer` / `elicitation.autoApprove` |
+| S-1207 | `axiom init --managed`: Claude managed settings, Codex `requirements.toml`, Cursor enterprise `hooks.json`, VS Code policy note | done — `--managed --out <dir>` (+ Copilot policy hook), install paths in notes, `docs/guides/managed.md` |
+| S-1208 | `command.deny` predicate (pattern / argv shape, reason, fix command) + built-in house pack ported from `guard-tooluse.ps1` | done — gate profile `commands` (`command-rules.ts`), 19-rule `house` pack; `ask` verdicts (Claude/VS Code/Copilot prompt, deny elsewhere) |
+| S-1209 | Cross-session overwrite detection: daemon last-writer map (path → agent/session, hash, time), deny/ask when another session wrote the file and the caller has not seen its hash | done — `sessions.foreignWrite` (`session-guard.ts`, state in `.axiom/sessions/`, works in-process and in the daemon) |
+| S-1210 | `axiom undo --session <agent>`: gate-side pre-image capture into CAS for allowed writes, conflict-aware restore, gc TTL | done — `"undo": true`, `axiom undo`, `axiom gc --undo-ttl` (default 7 d) |
+| S-1211 | `axiom stats` (allow/deny, codes, p50/p95, per harness) + silent-gate alarm across harness logs | done — decisions + VS Code `Hooks.log` + Copilot CLI `events.jsonl` (Claude transcripts carry no hook records: documented, not parsed) |
+| S-1212 | Coordination adapter: generic file protocol for marks (frozen resource classes), leases (slot ownership) and queue-required builds; agentq mapping as example profile | done — gate profile `coordination` (`coord.ts`), `docs/integration/agentq.md` |
+| S-1213 | Git-state facts without spawning git: clean tree for deploy-class commands, pathspec commits, branch-is | done — gate profile `git` (`gitfacts.ts`: index v2–v4 reader, packed refs, worktrees; unreadable → fail closed) |
+| S-1214 | SARIF export: `axiom check --format sarif` + action input → GitHub code scanning | done — `sarif.ts`; action inputs `sarif` / `check-profile`, `upload-sarif` pinned v4.38.3 |
+| S-1215 | Blind whole-file overwrite guard (create on an unread existing file) + re-run of a script whose creation was denied | done — `sessions.blindOverwrite` (+ `trackReads` / `--track-reads`), `blind.staleScript` (10 min window) |
+| S-1216 | `axiom import-guard` + parity test against the house PowerShell guard suites; one-week shadow mode (record-only) before cutover | done — `axiom import-guard` (34 rules from the real guard), 93-case corpus generated by running `guard-tooluse.ps1` (0 diffs), `"shadow": true` + `guard-parity.mjs --replay`; the week itself is S-1219 |
+| S-1217 | OpenTelemetry spans from the daemon (GenAI `execute_tool` conventions), opt-in, lazy-loaded | done — `axiom serve --hook --otel`, hand-built OTLP/HTTP JSON (no new dependency), conventions marked Development |
+| S-1218 | Release v2.6.0: npm ×9, MCP Registry, Marketplace, Open VSX, GitHub release + assets, Homebrew; axiom repo wired by `axiom init`; shadow week started in the consumers | todo |
+| S-1219 | PowerShell guard cutover: one week of shadow mode with zero `guard-parity.mjs --replay` diffs, then the house guard's covered rules are retired | todo |
 
 
 ---
