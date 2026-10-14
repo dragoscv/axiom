@@ -13,21 +13,21 @@ export interface PreImageDrift {
 export async function currentPreImage(root: string, relPath: string): Promise<string> {
   const abs = join(root, ...relPath.split("/"));
   try {
-    const st = await lstat(abs);
-    if (!st.isFile()) return "absent";
-    // Read through a handle and check it is the same inode lstat saw: a swap to a symlink or
-    // another file between the two calls is reported as drift, never hashed.
+    // Open first, then confirm via lstat that the path is a regular file (not a symlink) and is
+    // the inode we hold: a swap between the calls reads as drift, never as a hash of other bytes.
     const fh = await open(abs, "r");
     try {
       const now = await fh.stat();
+      const st = await lstat(abs);
       if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) return "absent";
+      if (!st.isFile()) return "absent";
       return sha256Hex(new Uint8Array(await fh.readFile()));
     } finally {
       await fh.close();
     }
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return "absent";
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return "absent";
     throw err;
   }
 }

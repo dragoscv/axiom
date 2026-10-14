@@ -47,3 +47,18 @@ allowBuilds:
   esbuild: true
   "@biomejs/biome": true
   "@vscode/vsce-sign": true
+
+# Transitive dependencies with published advisories (pnpm audit / OSV, 2026-10-14), lifted to the
+# first patched release inside their current major. None ship in the published packages: they come
+# from dev tooling (changesets, stryker, conformance) and the docs site. Drop an entry once the
+# parent depends on the patched range itself.
+overrides:
+  shell-quote: ^1.11.0 # GHSA-pqg4-j6r4-53mv (critical) via @changesets/cli > launch-editor
+  "@modelcontextprotocol/sdk": ^1.31.0 # GHSA-6qxp-vccf-f47h via @modelcontextprotocol/conformance
+  qs: ^6.16.0 # GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g via stryker > typed-rest-client
+  http-cache-semantics: ^4.3.0 # GHSA-ch52-4w7c-c8xp via astro
+  source-map-js: ^1.2.2 # GHSA-68fv-2mgg-jv7q via astro > unifont > css-tree
+  smol-toml: ^1.9.0 # GHSA-r4xh-jqrq-34v2 via astro
+  postcss-selector-parser: ^7.1.6 # GHSA-rj75-hqrm-r3gf via expressive-code > postcss-nested
+  dompurify: ^3.4.16 # GHSA-p98j-92pf-mc4p, GHSA-6688-9rhm-gjv2 via mermaid
+  katex: ^0.18.2 # GHSA-238p-pmpm-9mq7 via mermaid

@@ -1104,25 +1104,30 @@ async function realOrResolved(p: string): Promise<string> {
  */
 export async function gitCommonDir(dir: string): Promise<string | undefined> {
   const dotGit = path.join(dir, ".git");
-  let st: Awaited<ReturnType<typeof lstat>>;
+  // Open first, verify after: the lstat confirms `.git` itself is a regular file (a symlink is
+  // refused, as before) and is the inode we hold, so nothing can be swapped in between.
+  let text: string;
   try {
-    st = await lstat(dotGit);
-  } catch {
-    return undefined;
-  }
-  if (st.isDirectory()) return realOrResolved(dotGit);
-  if (!st.isFile()) return undefined;
-  try {
-    // Same inode as the lstat above, read through one handle (no swap between check and read).
     const fh = await open(dotGit, "r");
-    let text: string;
     try {
-      const now = await fh.stat();
-      if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) return undefined;
+      const held = await fh.stat();
+      const st = await lstat(dotGit);
+      if (held.ino !== st.ino || held.dev !== st.dev) return undefined;
+      if (st.isDirectory()) return realOrResolved(dotGit);
+      if (!st.isFile()) return undefined;
       text = await fh.readFile("utf8");
     } finally {
       await fh.close();
     }
+  } catch (err) {
+    // Windows refuses to open a directory for reading (EISDIR/EPERM): a plain `.git` directory.
+    const st = await lstat(dotGit).catch(() => undefined);
+    if (st?.isDirectory() === true && (err as { code?: string }).code !== "ENOENT") {
+      return realOrResolved(dotGit);
+    }
+    return undefined;
+  }
+  try {
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
     if (m?.[1] === undefined) return undefined;
     const gitdir = path.resolve(dir, m[1]);
