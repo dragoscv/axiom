@@ -268,7 +268,7 @@ Goal: nothing open that the owner did not choose to leave open — every PR, ale
 | ID | Story | Status |
 |---|---|---|
 | S-1201 | **P0 (v2.5.2)**: `.github/hooks/axiom-gate.json` = `command`+`bash`+`powershell` (`axiom.cmd … ; exit $LASTEXITCODE`), 15 s, no `exec`; auto-migrate the exec-only file; Windsurf/Codex Windows exit-code propagation; Claude `onFailure: block` + `Bash\|PowerShell` matcher + `--format claude`; doctor fails exec-only files and the silent gate (hooks run for the workspace, gate never); docs (hooks, harnesses, vscode, cli, quickstart, install); simulated VS Code run (deny + allow) | done |
-| S-1202 | Release v2.5.2 + re-wire codai/brivio/metu (`axiom init`) + live proof: a deny in VS Code's hook log for each consumer after Reload Window | todo |
+| S-1202 | Release v2.5.2 + re-wire codai/brivio/metu (`axiom init`) + live proof: a deny in VS Code's hook log for each consumer after Reload Window | done |
 | S-1203 | Fail-closed audit: per-harness table in hooks.md; doctor warns where a timeout or crash fails open (VS Code Local, Copilot CLI timeout, Codex, Gemini, Windsurf, Cline) | todo |
 | S-1204 | `axiom init --upgrade`: add `record` + `steer` when the bin is ≥ 2.5, switch hooks to `axiom-hook` when a daemon runs, MCP from the global bin instead of `npx` | todo |
 | S-1205 | Shell writes: PowerShell matcher everywhere, post-write check of Claude `bashEditDiff` / Codex PostToolUse into `decisions.jsonl` | todo |
