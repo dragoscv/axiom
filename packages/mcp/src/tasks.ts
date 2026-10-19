@@ -323,7 +323,7 @@ export class PlanSessionStore {
     s.sealed = true;
     this.sessions.delete(sessionId);
     const plan: PlanInput = {
-      apiVersion: "axiom.dev/v2",
+      apiVersion: "axiom.codai.ro/v3",
       kind: "Plan",
       ...s.header,
       artifacts: s.artifacts,

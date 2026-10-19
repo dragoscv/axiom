@@ -1,4 +1,4 @@
-# Undo a session — `axiom undo --session <agent>`
+# Undo a session — `axiom journal undo --session <agent>`
 
 *Revert everything one agent session wrote through the gate, without touching what others wrote since.*
 
@@ -6,7 +6,8 @@ Story S-1210.
 
 ## Enable capture
 
-Add `"undo": true` to `.axiom/gate-profile.json`. For every **allowed** write, the gate then
+Add `"undo": true` to the gate policy (the `gate` section of `.axiom/axiom.json`, or the
+deprecated `.axiom/gate-profile.json`). For every **allowed** write, the gate then
 copies the current bytes of each target (its pre-image) into the CAS
 (`.axiom/cas/sha256/<aa>/<hex>`) and appends one line per target to
 `.axiom/undo/<sha256(agentId)[:16]>.jsonl`:
@@ -21,7 +22,7 @@ captured). Capture never fails the gate.
 ## Restore
 
 ```text
-axiom undo --session <agent> [--dry-run] [--force] [--since <iso>] [--root <dir>]
+axiom journal undo --session <agent> [--dry-run] [--force] [--since <iso>] [--root <dir>]
 ```
 
 `<agent>` is the full agent id (`<harness>:<sessionId>`) or just the session id. For each path

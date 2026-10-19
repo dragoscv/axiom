@@ -2,6 +2,10 @@ import { z } from "zod";
 import { DigestRefSchema } from "./digest.js";
 import { RelPathSchema } from "./path.js";
 
+// Local copy of the accepted apiVersions: plan.ts imports this module, so importing
+// ApiVersionSchema from it here would be a circular import. Kept equal by check.test.ts.
+const CheckReportApiVersionSchema = z.enum(["axiom.codai.ro/v3", "axiom.dev/v2"]);
+
 export const SeveritySchema = z.enum(["error", "warn", "info"]);
 
 /** Reference to a registered predicate with its JSON params (§3.1). */
@@ -37,7 +41,7 @@ export const ProviderStatusSchema = z
 
 export const CheckReportSchema = z
   .object({
-    apiVersion: z.literal("axiom.dev/v2"),
+    apiVersion: CheckReportApiVersionSchema,
     kind: z.literal("CheckReport"),
     manifestDigest: DigestRefSchema,
     profile: z.string(),

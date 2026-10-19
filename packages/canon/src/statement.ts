@@ -6,21 +6,33 @@ export const IN_TOTO_STATEMENT_V1: "https://in-toto.io/Statement/v1" =
 /** SLSA Provenance v1 `predicateType`. */
 export const SLSA_PROVENANCE_V1: "https://slsa.dev/provenance/v1" =
   "https://slsa.dev/provenance/v1";
+/**
+ * Base of every AXIOM spec URI (3.0, D-41): the project's own docs site. 2.x used `axiom.dev`,
+ * a domain the project does not control.
+ */
+export const AXIOM_SPEC_BASE: "https://dragoscv.github.io/axiom/spec" =
+  "https://dragoscv.github.io/axiom/spec";
 /** AXIOM `buildDefinition.buildType`. */
-export const AXIOM_BUILD_TYPE: "https://axiom.dev/build/plan@v2" =
-  "https://axiom.dev/build/plan@v2";
+export const AXIOM_BUILD_TYPE: "https://dragoscv.github.io/axiom/spec/build/plan@v2" =
+  "https://dragoscv.github.io/axiom/spec/build/plan@v2";
 /** AXIOM `runDetails.builder.id`. */
-export const AXIOM_BUILDER_ID: "https://axiom.dev/builder/mcp@v2" =
-  "https://axiom.dev/builder/mcp@v2";
-/** AXIOM apply attestation `predicateType` (D-21, S-403). */
-export const AXIOM_APPLY_ATTESTATION_V1: "https://axiom.dev/attestation/apply/v1" =
+export const AXIOM_BUILDER_ID: "https://dragoscv.github.io/axiom/spec/builder/mcp@v2" =
+  "https://dragoscv.github.io/axiom/spec/builder/mcp@v2";
+/** AXIOM apply attestation `predicateType` (D-21, S-403; moved in 3.0, D-41). */
+export const AXIOM_APPLY_ATTESTATION_V1: "https://dragoscv.github.io/axiom/spec/attestation/apply/v1" =
+  "https://dragoscv.github.io/axiom/spec/attestation/apply/v1";
+/** The 2.x apply `predicateType` — for verifiers that still accept attestations made by 2.x. */
+export const AXIOM_APPLY_ATTESTATION_V1_LEGACY: "https://axiom.dev/attestation/apply/v1" =
   "https://axiom.dev/attestation/apply/v1";
 /**
- * Agent decision attestation `predicateType` (Phase 8, D-36): the URI proposed in
- * in-toto/attestation#554. That proposal intends an `in-toto.io` alias once accepted; this is
- * the SINGLE place to change it — every builder and verifier reads this constant.
+ * Agent decision attestation `predicateType` (Phase 8, D-36; moved to the docs site in 3.0,
+ * D-41). in-toto/attestation#554 intends an `in-toto.io` alias once accepted; this is the
+ * SINGLE place to change it — every builder and verifier reads this constant.
  */
-export const AGENT_DECISION_V0_1: "https://auxidus.dev/attestation/agent-decision/v0.1" =
+export const AGENT_DECISION_V0_1: "https://dragoscv.github.io/axiom/spec/attestation/agent-decision/v0.1" =
+  "https://dragoscv.github.io/axiom/spec/attestation/agent-decision/v0.1";
+/** The 2.x agent-decision `predicateType`. */
+export const AGENT_DECISION_V0_1_LEGACY: "https://auxidus.dev/attestation/agent-decision/v0.1" =
   "https://auxidus.dev/attestation/agent-decision/v0.1";
 
 export interface ResourceDescriptor {

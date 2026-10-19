@@ -40,6 +40,10 @@ catalog:
   starlight-links-validator: 0.27.0
   starlight-github-alerts: 0.5.0
   sharp: 0.35.5
+  # Self-hosted site fonts (no Google Fonts request → no visitor IP sent to a third party).
+  "@fontsource/instrument-serif": 5.3.0
+  "@fontsource/inter": 5.3.0
+  "@fontsource/jetbrains-mono": 5.3.0
 
 allowBuilds:
   esbuild: true

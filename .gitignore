@@ -37,3 +37,5 @@ packages/conformance/results/
 .axiom/*
 !.axiom/profiles/
 !.axiom/gate-profile.json
+
+packages/*/THIRD_PARTY_NOTICES.md

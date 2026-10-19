@@ -10,6 +10,8 @@ CI when it is weakened.
 
 ```mermaid
 flowchart TB
+  accTitle: Invariant groups
+  accDescr: The invariants grouped by what they protect, from manifest identity to apply safety and the MCP surface.
   subgraph identity [What a manifest is]
     I1[1 · JCS-canonical, sha256, no clocks]
     I2[2 · content never inside the hash]

@@ -4,6 +4,7 @@ import { join, relative, sep } from "node:path";
 import { isValidRelPath } from "@codai/axiom-schema";
 import picomatch from "picomatch";
 import type { RepoFacts } from "../types.js";
+import { CASE_INSENSITIVE_FS, realRoot, resolveForRead } from "./contained.js";
 
 export interface RepoFactsOptions {
   /** Directory names never indexed (in addition to .gitignore lines). */
@@ -77,11 +78,18 @@ async function readPackageJson(root: string): Promise<Record<string, unknown> | 
  * Offline repo facts rooted at `rootReal` (caller has already realpath'd and
  * authorised it). Nothing here spawns a process or touches the network.
  * `gitDirty` is intentionally `undefined` in v2.0.
+ *
+ * Containment: `exists`/`read` resolve the realpath of the target (links inside the root
+ * are followed) and THROW `ERR_CONTAINMENT` when it lies outside the root — a symlink or
+ * junction escape. The throw is deliberate: the runner turns a throwing predicate into an
+ * `ERR_PROVIDER_FAILED` finding, so the verdict is `error` (invariant 7, fail closed)
+ * instead of `false`/`undefined`, which a predicate could read as "absent → pass".
  */
 export async function createRepoFacts(
-  rootReal: string,
+  rootInput: string,
   opts: RepoFactsOptions = {},
 ): Promise<RepoFacts> {
+  const rootReal = await realRoot(rootInput);
   const skip = new Set<string>([...DEFAULT_SKIP, ...(opts.skipDirs ?? [])]);
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   const [packageJson, gitHead, ignorePatterns] = await Promise.all([
@@ -120,13 +128,13 @@ export async function createRepoFacts(
     return out;
   };
 
-  const resolve = (path: string): string | undefined =>
-    isValidRelPath(path) ? join(rootReal, ...path.split("/")) : undefined;
+  const resolve = async (path: string): Promise<string | undefined> =>
+    isValidRelPath(path) ? resolveForRead(rootReal, path) : undefined;
 
   const facts: RepoFacts = {
     packageJson,
     async exists(path) {
-      const abs = resolve(path);
+      const abs = await resolve(path);
       if (abs === undefined) return false;
       try {
         await stat(abs);
@@ -136,7 +144,7 @@ export async function createRepoFacts(
       }
     },
     async read(path, max) {
-      const abs = resolve(path);
+      const abs = await resolve(path);
       if (abs === undefined) return undefined;
       try {
         // One handle for the type check and the read: no window between stat and read.
@@ -158,7 +166,7 @@ export async function createRepoFacts(
     async glob(pattern) {
       index ??= buildIndex();
       const files = await index;
-      const match = picomatch(pattern, { dot: true });
+      const match = picomatch(pattern, { dot: true, nocase: CASE_INSENSITIVE_FS });
       return files.filter((f) => match(f));
     },
   };

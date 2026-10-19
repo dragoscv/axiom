@@ -1,5 +1,12 @@
 # @codai/axiom-axm-lsp
 
+> [!WARNING]
+> **Deprecated since 3.0 (D-45).** The language server now ships inside
+> [`@codai/axiom-axm`](../axm/README.md): import `@codai/axiom-axm/lsp`, run the `axm-lsp` bin
+> (`npx -p @codai/axiom-axm axm-lsp --stdio`). This package is a thin re-export kept so existing
+> installs work through 3.x; it will not be published for 4.0. The source moved to
+> `packages/axm/src/lsp/`. Everything below still describes the server.
+
 Language server for AXIOM `.axm` plans (docs/reference/axm-syntax.md). Diagnostics, completion, hover,
 document symbols, formatting and semantic tokens over LSP 3.18 — built on the **same**
 Chevrotain parser that compiles `.axm` to a `Plan` (`@codai/axiom-axm`), so the editor and the

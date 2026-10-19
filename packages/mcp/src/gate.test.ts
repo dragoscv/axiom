@@ -91,7 +91,10 @@ describe("gate: payload normalisation", () => {
     ["edit", true],
     ["Read", false],
     ["read_file", false],
-    ["create_directory", false],
+    // 3.0: creating a directory (e.g. .git/hooks) is a write.
+    ["create_directory", true],
+    ["rename_file", true],
+    ["move_file", true],
     ["list_dir", false],
     ["Bash", false],
     ["grep_search", false],
@@ -200,7 +203,7 @@ describe("gate: profile", () => {
     await home.cleanup();
   });
 
-  it("schema: strict object, defaults deny=[] noSecrets=true pii=false steer=off record=false undo=false shadow=false", () => {
+  it("schema: tolerant object (unknown keys stripped), defaults deny=[] noSecrets=true pii=false steer=off record=false undo=false shadow=false", () => {
     expect(GateProfileSchema.parse({})).toStrictEqual({
       deny: [],
       ask: [],
@@ -216,7 +219,8 @@ describe("gate: profile", () => {
       override: false,
       outside: "deny",
     });
-    expect(GateProfileSchema.safeParse({ deny: [], extra: 1 }).success).toBe(false);
+    // 3.0 (D-42): unknown keys are ignored (the gate warns about them), never a deny-all.
+    expect(GateProfileSchema.parse({ deny: [], extra: 1 })).not.toHaveProperty("extra");
     expect(GateProfileSchema.safeParse({ maxBytes: 0 }).success).toBe(false);
     expect(GateProfileSchema.safeParse({ steer: "always" }).success).toBe(false);
     expect(GateProfileSchema.safeParse(DEFAULT_GATE_PROFILE).success).toBe(true);
@@ -449,17 +453,17 @@ describe("gate: decisions", () => {
     expect(strict.decision).toBe("deny");
   });
 
-  it("missing payload (stdin timeout) → deny by default, allow with --fail-open", async () => {
+  it("missing payload (stdin timeout) → allow with a warning (3.0); oversize stays fail-closed", async () => {
     const r = await runGate(undefined, opts());
-    expect(r.decision).toBe("deny");
-    expect(r.code).toBe("ERR_INTERNAL");
+    expect(r.decision).toBe("allow");
     expect(r.stderr.some((l) => /timeout or empty/.test(l))).toBe(true);
-    const open = await runGate(undefined, { ...opts(), failOpen: true });
-    expect(open.decision).toBe("allow");
+    const big = await runGate(undefined, { ...opts(), stdinTooLarge: true });
+    expect(big.decision).toBe("deny");
+    expect(big.code).toBe("ERR_INTERNAL");
   });
 
   it("D-18: a write-class tool with no recognised path key is denied ERR_UNSUPPORTED_OP (unknown write → deny), allowed with --fail-open", async () => {
-    const payload = claude("Write", { destination: "src/a.ts", content: "x" }, repo.root);
+    const payload = claude("Write", { output_location: "src/a.ts", content: "x" }, repo.root);
     const r = await runGate(payload, opts());
     expect(r.decision).toBe("deny");
     expect(r.code).toBe("ERR_UNSUPPORTED_OP");
@@ -782,7 +786,7 @@ describe("gate: fast path exactness", () => {
     ["Read", true],
     ["read_file", true],
     ["grep_search", true],
-    ["create_directory", true],
+    ["create_directory", false],
     ["Write", false],
     ["create_file", false],
     ["apply_patch", false],
@@ -1231,7 +1235,15 @@ describe("gate: --format output contracts (Phase 8)", () => {
     expect(l.errorMessage).toMatch(/^AXIOM GATE DENY path\.deny/);
   });
 
-  it.each<GateFormat>(["auto", "claude", "copilot", "vscode"])(
+  it("deny in claude format → hookSpecificOutput only (Claude validates the document)", async () => {
+    const r = await runGate(envWrite(), { home: home.root, format: "claude" });
+    expect(r.exitCode).toBe(0);
+    const doc = JSON.parse(r.stdout ?? "{}") as Record<string, unknown>;
+    expect(Object.keys(doc)).toStrictEqual(["hookSpecificOutput"]);
+    expect(doc.hookSpecificOutput).toMatchObject({ permissionDecision: "deny" });
+  });
+
+  it.each<GateFormat>(["auto", "copilot", "vscode"])(
     "deny in %s format → combined document with the axiom block",
     async (format) => {
       const r = await runGate(envWrite(), { home: home.root, format });
@@ -1408,11 +1420,11 @@ describe("gate: ask globs (human confirms instead of a deny)", () => {
     claude("Write", { file_path: file, content }, repo.root);
   const wf = ".github/workflows/x.yml";
 
-  it("schema: accepts `ask`, defaults it to [], still strict", () => {
+  it("schema: accepts `ask`, defaults it to [], strips unknown keys", () => {
     expect(GateProfileSchema.parse({ ask: [".github/**"] }).ask).toStrictEqual([".github/**"]);
     expect(GateProfileSchema.parse({}).ask).toStrictEqual([]);
     expect(GateProfileSchema.safeParse({ ask: [""] }).success).toBe(false);
-    expect(GateProfileSchema.safeParse({ ask: [".github/**"], asks: [] }).success).toBe(false);
+    expect(GateProfileSchema.parse({ ask: [".github/**"], asks: [] })).not.toHaveProperty("asks");
   });
 
   it.each(["vscode", "copilot", "claude", "auto"] as const)(
@@ -1425,11 +1437,12 @@ describe("gate: ask globs (human confirms instead of a deny)", () => {
       expect(r.path).toBe(wf);
       expect(r.exitCode).toBe(GATE_DENY_EXIT_DEFAULT);
       const doc = JSON.parse(r.stdout ?? "{}");
-      expect(doc.permissionDecision).toBe("ask");
       expect(doc.hookSpecificOutput.permissionDecision).toBe("ask");
-      expect(doc.permissionDecisionReason).toContain("AXIOM GATE ASK path.ask");
-      expect(doc.permissionDecisionReason).toContain('gate profile "ask"');
-      expect(doc.axiom.verdict).toBe("ask");
+      expect(doc.hookSpecificOutput.permissionDecisionReason).toContain("AXIOM GATE ASK path.ask");
+      if (format !== "claude") {
+        expect(doc.permissionDecision).toBe("ask");
+        expect(doc.axiom.verdict).toBe("ask");
+      }
     },
   );
 

@@ -25,6 +25,7 @@ export const RULE_IDS = [
   "session.foreignWrite",
   "blind.overwrite",
   "blind.staleScript",
+  "sessions.budget",
   "coord.frozen",
   "coord.leased",
   "coord.queueRequired",

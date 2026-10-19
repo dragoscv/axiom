@@ -4,15 +4,18 @@
 //!   axiom-hook gate <axiom gate flags…>     # e.g. gate --stdin --format claude
 //!
 //! Flow: read stdin (≤ 4 MiB, ≤ 2 s) → `~/.axiom/daemon.json` → `POST /v1/gate` on loopback →
-//! verdict. No verdict (daemon absent, refused, timed out, non-200) → run the installed `axiom
-//! gate` with the same args and bytes → if that is impossible too, deny in the harness format
-//! (fail-closed). Wire protocol: packages/mcp/src/daemon-proto.ts — change both together.
+//! verdict authenticated by `x-axiom-mac` (protocol 2). No verdict (daemon absent, refused, timed
+//! out, non-200, unframed, bad MAC) → run the installed `axiom gate` with the same args and bytes
+//! (deadline `AXIOM_HOOK_FALLBACK_TIMEOUT_MS`, default 10 s) → if that is impossible too, deny in
+//! the harness format (fail-closed). A bad MAC under `AXIOM_GATE_DAEMON_STRICT=1` denies at once
+//! with ERR_DAEMON_AUTH. Wire protocol: packages/mcp/src/daemon-proto.ts — change both together.
 
 mod deny;
 mod fallback;
 mod http;
 mod json;
 mod pct;
+mod sha;
 mod state;
 
 use std::io::{Read, Write};
@@ -80,15 +83,32 @@ fn gate(args: Vec<String>) -> ExitCode {
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(v) = http::round_trip(&st, &args, &cwd, input.status, &input.bytes) {
-            let mut out = std::io::stdout().lock();
-            let _ = out.write_all(&v.stdout);
-            let _ = out.flush();
-            if !v.stderr.is_empty() {
-                let mut err = std::io::stderr().lock();
-                let _ = writeln!(err, "{}", v.stderr);
+        match http::round_trip(&st, &args, &cwd, input.status, &input.bytes) {
+            http::Outcome::Verdict(v) => {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(&v.stdout);
+                let _ = out.flush();
+                if !v.stderr.is_empty() {
+                    let mut err = std::io::stderr().lock();
+                    let _ = writeln!(err, "{}", v.stderr);
+                }
+                return exit_code(v.exit);
             }
-            return exit_code(v.exit);
+            http::Outcome::Untrusted => {
+                if std::env::var("AXIOM_GATE_DAEMON_STRICT").as_deref() == Ok("1") {
+                    return emit(&deny::render_code(
+                        &flags,
+                        deny::AUTH_CODE,
+                        deny::AUTH_REASON,
+                    ));
+                }
+                eprintln!(
+                    "AXIOM GATE WARN {}: {}; falling back to axiom gate",
+                    deny::AUTH_CODE,
+                    deny::AUTH_REASON
+                );
+            }
+            http::Outcome::NoVerdict => {}
         }
     }
 
@@ -96,15 +116,20 @@ fn gate(args: Vec<String>) -> ExitCode {
         std::env::var_os(fallback::ENV_OVERRIDE),
         std::env::var_os("PATH"),
     );
-    if let Some(code) = launcher.and_then(|l| fallback::run(&l, &args, input.bytes)) {
+    if let Some(code) =
+        launcher.and_then(|l| fallback::run(&l, &args, input.bytes, fallback::timeout()))
+    {
         return exit_code(code);
     }
 
     // Deliberately fail closed even under --fail-open: that flag relaxes the gate's own
     // judgement of a payload, not the absence of any gate at all.
-    let d = deny::render(&flags, deny::REASON);
+    emit(&deny::render(&flags, deny::REASON))
+}
+
+fn emit(d: &deny::DenyOutput) -> ExitCode {
     eprintln!("{}", d.stderr);
-    if let Some(doc) = d.stdout {
+    if let Some(doc) = &d.stdout {
         println!("{doc}");
     }
     exit_code(d.exit)

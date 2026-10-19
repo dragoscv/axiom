@@ -1,11 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
+import { isAxiomError } from "@codai/axiom-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { makeBundle } from "../test-helpers.test-helpers.js";
+import { runChecks } from "../run.js";
+import { makeBundle, profileWith } from "../test-helpers.test-helpers.js";
 import { contentReader } from "./content.js";
 import { deriveManifestFacts, extOf } from "./manifest.js";
+import { currentPreImage } from "./preimage.js";
 import { createRepoFacts } from "./repo.js";
 
 describe("manifest facts", () => {
@@ -120,5 +123,68 @@ describe("repo facts", () => {
     expect(r.packageJson).toBeUndefined();
     expect(await r.glob("**")).toEqual([]);
     await rm(empty, { recursive: true, force: true });
+  });
+});
+
+const LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
+
+describe("repo facts / pre-image never cross a symlink or junction out of the root", () => {
+  let outside: string;
+  let root: string;
+  beforeAll(async () => {
+    outside = await mkdtemp(join(tmpdir(), "axiom-out-"));
+    root = await mkdtemp(join(tmpdir(), "axiom-in-"));
+    await writeFile(join(outside, "secret.txt"), "TOPSECRET\n");
+    await mkdir(join(root, "real"), { recursive: true });
+    await writeFile(join(root, "real", "ok.txt"), "ok");
+    await symlink(outside, join(root, "link"), LINK_TYPE);
+    await symlink(join(root, "real"), join(root, "inlink"), LINK_TYPE);
+  });
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("read / exists through an escaping junction throw ERR_CONTAINMENT (fail closed)", async () => {
+    const r = await createRepoFacts(root);
+    const codeOf = async (p: Promise<unknown>) => {
+      try {
+        await p;
+        return "resolved";
+      } catch (e) {
+        return isAxiomError(e) ? e.code : "plain";
+      }
+    };
+    expect(await codeOf(r.read("link/secret.txt"))).toBe("ERR_CONTAINMENT");
+    expect(await codeOf(r.exists("link/secret.txt"))).toBe("ERR_CONTAINMENT");
+    expect(await codeOf(r.exists("link/missing.txt"))).toBe("ERR_CONTAINMENT");
+    // An in-root link is fine.
+    expect(new TextDecoder().decode(await r.read("inlink/ok.txt"))).toBe("ok");
+  });
+
+  it("repo.noOverwriteOf over an escaping junction → verdict error, not pass", async () => {
+    const report = await runChecks({
+      bundle: makeBundle([{ path: "link/secret.txt", op: "overwrite", content: "x" }]),
+      profile: profileWith([
+        {
+          id: "protect",
+          predicate: "repo.noOverwriteOf",
+          params: { globs: ["**/secret.txt"] },
+          severity: "error",
+        },
+      ]),
+      root,
+    });
+    expect(report.verdict).toBe("error");
+    expect(report.findings.some((f) => f.facts.code === "ERR_PROVIDER_FAILED")).toBe(true);
+  });
+
+  it("currentPreImage: a symlink/junction segment is non-file:symlink (apply parity)", async () => {
+    expect(await currentPreImage(root, "link/secret.txt")).toBe("non-file:symlink");
+    expect(await currentPreImage(root, "link")).toBe("non-file:symlink");
+    expect(await currentPreImage(root, "real")).toBe("non-file:dir");
+    expect(await currentPreImage(root, "real/ok.txt")).toBe(sha256Hex("ok"));
+    expect(await currentPreImage(root, "real/none.txt")).toBe("absent");
+    expect(await currentPreImage(root, "real/ok.txt/below")).toBe("absent");
   });
 });

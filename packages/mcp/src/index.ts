@@ -1,3 +1,4 @@
+export { EMITTER_HINT, loadEmitters, NO_EMITTERS } from "./emitters.js";
 export { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS, type SchemaKind } from "./jsonschema.js";
 export { createLogger, isLogLevel, LOG_LEVELS, type Logger, type LogLevel } from "./log.js";
 export {
@@ -42,4 +43,13 @@ export {
   type ToolContext,
   type ToolDef,
   toolByName,
+  toolsFor,
 } from "./tools.js";
+export {
+  CORE_TOOL_NAMES,
+  DEFAULT_TOOLSET,
+  parseToolset,
+  TOOLSETS,
+  type Toolset,
+  toolsetOf,
+} from "./toolset.js";

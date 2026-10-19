@@ -1,13 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { HEX_A, REF_A, validPlan } from "./fixtures.test-helpers.js";
 import {
+  API_VERSION,
+  API_VERSION_V2,
   INLINE_CONTENT_MAX,
+  isLegacyApiVersion,
   PlanArtifactSchema,
   PlanArtifactSourceSchema,
   PlanSchema,
 } from "./plan.js";
 
 describe("PlanSchema", () => {
+  it("D-41: canonical apiVersion is axiom.codai.ro/v3 and axiom.dev/v2 still parses", () => {
+    expect(API_VERSION).toBe("axiom.codai.ro/v3");
+    expect(validPlan().apiVersion).toBe(API_VERSION);
+    expect(PlanSchema.parse(validPlan()).apiVersion).toBe("axiom.codai.ro/v3");
+    const legacy = PlanSchema.parse({ ...validPlan(), apiVersion: API_VERSION_V2 });
+    expect(legacy.apiVersion).toBe("axiom.dev/v2");
+    expect(isLegacyApiVersion(legacy.apiVersion)).toBe(true);
+    expect(isLegacyApiVersion(API_VERSION)).toBe(false);
+  });
+
   it("accepts a minimal plan and applies defaults", () => {
     const r = PlanSchema.parse(validPlan());
     expect(r.profile).toBe("default");

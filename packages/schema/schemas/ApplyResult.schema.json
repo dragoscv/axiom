@@ -1,12 +1,15 @@
 {
-  "$id": "https://axiom.dev/schemas/v2/ApplyResult.schema.json",
+  "$id": "https://dragoscv.github.io/axiom/schemas/v3/ApplyResult.schema.json",
   "title": "ApplyResult",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
     "apiVersion": {
       "type": "string",
-      "const": "axiom.dev/v2"
+      "enum": [
+        "axiom.codai.ro/v3",
+        "axiom.dev/v2"
+      ]
     },
     "kind": {
       "type": "string",
@@ -137,6 +140,7 @@
             "ERR_PATH_RESERVED_NAME",
             "ERR_PATH_INVALID_CHAR",
             "ERR_PATH_CASE_COLLISION",
+            "ERR_PATH_RESERVED_DIR",
             "ERR_SYMLINK_IN_PATH",
             "ERR_CONTAINMENT",
             "ERR_TARGET_TYPE",
@@ -162,6 +166,7 @@
             "ERR_INVALID_PLAN",
             "ERR_INVALID_MANIFEST",
             "ERR_INVALID_PROFILE",
+            "ERR_PROFILE_VERSION",
             "ERR_PREDICATE_UNKNOWN",
             "ERR_PREDICATE_PARAMS",
             "ERR_PROVIDER_FAILED",
@@ -193,6 +198,8 @@
             "ERR_NET_DENIED",
             "ERR_NET_FAILED",
             "ERR_NOT_CANONICAL",
+            "ERR_DAEMON_AUTH",
+            "ERR_USAGE",
             "ERR_UNSUPPORTED_OP",
             "ERR_INTERNAL"
           ]

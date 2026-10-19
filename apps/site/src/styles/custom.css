@@ -3,8 +3,10 @@
  * Warm paper and ink, one accent: seal red (a notary stamp on a record). Light-first; dark mode
  * is deep slate, not black. Display type is a serif (the record), UI is a grotesque, digests are
  * mono. Hairline rules and a faint blueprint grid instead of glows.
+ *
+ * Fonts are self-hosted via @fontsource (loaded from astro.config.mjs `customCss`): no request
+ * to Google Fonts, so no visitor IP is sent to a third party.
  */
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
   --ax-font-display: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
@@ -22,6 +24,7 @@
   --ax-seal: #c2410c;
   --ax-seal-deep: #9a3412;
   --ax-seal-tint: #fde8dc;
+  --ax-on-seal: #fff;
   --ax-grid: rgb(28 25 23 / 0.06);
   --ax-shadow: rgb(28 25 23 / 0.12);
 
@@ -31,7 +34,8 @@
   --sl-color-white: var(--ax-ink);
   --sl-color-gray-1: #292524;
   --sl-color-gray-2: #44403c;
-  --sl-color-gray-3: #78716c;
+  /* ≥ 4.5:1 on paper (5.05) and on paper-2 cards (4.63) — WCAG 2.2 AA body text. */
+  --sl-color-gray-3: #706963;
   --sl-color-gray-4: #a8a29e;
   --sl-color-gray-5: #d6d3d1;
   --sl-color-gray-6: #ece6d9;
@@ -53,6 +57,8 @@
   --ax-seal: #f0703d;
   --ax-seal-deep: #ffa07a;
   --ax-seal-tint: #3a2117;
+  /* White on the bright dark-mode seal is 2.96:1; dark ink is 5.99 (hover on seal-deep 8.92). */
+  --ax-on-seal: #17181c;
   --ax-grid: rgb(243 239 230 / 0.05);
   --ax-shadow: rgb(0 0 0 / 0.4);
 
@@ -136,14 +142,16 @@
 [data-has-hero] .hero .sl-link-button.primary {
   background: var(--ax-seal);
   border-color: var(--ax-seal);
-  color: #fff;
+  color: var(--ax-on-seal);
 }
 [data-has-hero] .hero .sl-link-button.primary:hover {
   background: var(--ax-seal-deep);
   border-color: var(--ax-seal-deep);
+  color: var(--ax-on-seal);
 }
 [data-has-hero] .hero .sl-link-button.secondary {
-  border-color: var(--ax-rule);
+  /* The border is the button's only boundary: gray-3 keeps it ≥ 3:1 (non-text contrast). */
+  border-color: var(--sl-color-gray-3);
   color: var(--sl-color-white);
   background: transparent;
 }
@@ -181,6 +189,14 @@
   color: var(--ax-seal);
   word-break: break-all;
 }
+/* Light mode: seal on cards (4.44) and on inline-code bg (4.16) misses 4.5:1 — use seal-deep. */
+:root[data-theme="light"] .card a,
+:root[data-theme="light"] .sl-markdown-content .card a:not(:where(.not-content *)),
+:root[data-theme="light"] code .ax-digest,
+:root[data-theme="light"] .ax-digest:is(code),
+:root[data-theme="light"] .sl-markdown-content a code:not(:where(.not-content *)) {
+  color: var(--ax-seal-deep);
+}
 .ax-stamp {
   display: inline-block;
   padding: 0.15em 0.6em;
@@ -209,6 +225,17 @@ pre.mermaid,
 .mermaid svg {
   max-width: 100%;
   height: auto;
+}
+/* Edge labels: mermaid's theme paints them low-contrast on our paper (axe color-contrast). */
+:root[data-theme="light"] .starlight-aside a {
+  color: var(--ax-seal-deep);
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .labelBkg {
+  color: var(--sl-color-white) !important;
+  background-color: var(--ax-paper-2) !important;
+  fill: var(--sl-color-white) !important;
 }
 
 /* ---- Content polish -------------------------------------------------------------- */

@@ -79,26 +79,36 @@ in CI with an expected-failures baseline (`packages/conformance/baseline.yml`).
 
 ## Tools
 
+### Toolsets (3.0, D-43)
+
+`axiom mcp` serves the **core** toolset by default — the six tools an agent needs to write
+through the gate: `axiom_write`, `axiom_status`, `axiom_rollback`, `axiom_check`,
+`axiom_apply`, `axiom_apply_dry_run`. Start the server with `--tools full` to also expose the
+plan / manifest / task plumbing below (every row not marked **core**). `spec/tools.json` and
+`spec/codai-tools.json` list every tool with `"toolset": "core" | "full"`. Library users pass
+`createServer(policy, { toolset: "full" })` / `serverFactory(policy, { toolset })`;
+`parseToolset(value)` maps the flag value (`ERR_USAGE` otherwise).
+
 | tool | risk | input | output |
 |---|---|---|---|
 | `axiom_plan_validate` | READ | `{ plan }` | `{ ok, planDigest?, errors[] }` |
 | `axiom_plan_compile` | ACT | `{ plan, store?: inline\|cas, root? }` | `ManifestBundle` (writes only under `<root>/.axiom/` — CAS blobs and the stored manifest — when a root is given) |
 | `axiom_manifest_verify` | READ | `{ bundle, root? }` | `{ ok, manifestDigest, canonical, signed, missing[], errors[], signatures?: { trustFile, keyids[], findings[], ok, code? } }` — `signatures` only when `root` has `.axiom/trust/keys.json`; `code` is `ERR_SIGNATURE_MISSING` \| `ERR_SIGNATURE_INVALID` when not `ok` |
-| `axiom_check` | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`, `preImage: verified\|drifted\|unverified`) |
+| `axiom_check` **core** | READ | `{ bundle, profile?, root? }` | `CheckReport` (`verdict: pass\|fail\|error`, `preImage: verified\|drifted\|unverified`) |
 | `axiom_check_start` | READ | `{ bundle, profile?, root? }` | `{ taskId, tool, status: "working", pollIntervalMs, ttlMs, elapsedMs }` — same evaluation as `axiom_check`, returned immediately as a **task** so long `guard.external` suites (up to 15 min per guard) outlive the client's per-call timeout (S-406 / D-24) |
 | `axiom_task_get` | READ | `{ taskId }` | descriptor + `result: CheckReport` once `completed`, or `error: { code, message }` once `failed`/`cancelled`; unknown/expired id → `ERR_TASK_NOT_FOUND` |
 | `axiom_task_cancel` | ACT | `{ taskId }` | descriptor; kills every running guard tree, task ends `cancelled` with `ERR_TASK_CANCELLED` (idempotent on terminal tasks) |
 | `axiom_plan_begin` | ACT | Plan header: `{ name, intent, profile?, capabilities?, checks?, counter?, metadata? }` | `{ sessionId, artifacts: 0, bytes: 0, limits: { maxArtifacts, maxBytes }, ttlMs }` — opens a **chunked plan session** for Plans whose JSON would exceed the 4 MiB call cap |
 | `axiom_plan_add` | ACT | `{ sessionId, artifacts[] }` (each call ≤ 4 MiB) | session descriptor; duplicate path across chunks → `ERR_INVALID_PLAN`, over budget (2000 artifacts / 64 MiB) or sealed → `ERR_PLAN_SESSION_STATE` |
 | `axiom_plan_seal` | ACT | `{ sessionId, store?: inline\|cas, root? }` | `ManifestBundle` — compiled by the same code path as `axiom_plan_compile`, so the digest equals a one-shot compile of the assembled Plan (property-tested); the session is consumed |
-| `axiom_apply_dry_run` | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
-| `axiom_apply` | SENSITIVE | `{ bundle, root, profile?, confirmDigest, mode?, branch?, commitMessage?, lockTimeoutMs? (0..600000), keepBackups? (0..1000) }` | `ApplyResult` — `error.details` carries `{ otherDigest, paths }` for `ERR_CONFLICT` and `{ holder, waitedMs, queuePosition }` for `ERR_LOCKED` |
-| `axiom_write` | SENSITIVE | `{ root, files[]: { path, content?, encoding?: utf8\|base64, op?: write\|delete, mode? }, intent?, profile?, confirmDigest?, lockTimeoutMs?, keepBackups? }` | One-tool write (2.5.0): without `confirmDigest` → `status: "preview"` (dry-run + checks, `diff`, `manifestDigest`, `next`; nothing outside `.axiom/` touched); the same files + `confirmDigest` → atomic apply like `axiom_apply` (journal, one-step `axiom_rollback`). A target changed since the preview → `ERR_CONFIRM_DIGEST_MISMATCH`. Prefer it for multi-file or sensitive changes |
-| `axiom_rollback` | SENSITIVE | `{ root, manifestDigest }` | `{ status:"rolled-back", phase, steps }` |
+| `axiom_apply_dry_run` **core** | READ | `{ bundle, root, profile? }` | `ApplyResult{mode:"dry-run", diff}` |
+| `axiom_apply` **core** | SENSITIVE | `{ bundle, root, profile?, confirmDigest, mode?, branch?, commitMessage?, lockTimeoutMs? (0..600000), keepBackups? (0..1000) }` | `ApplyResult` — `error.details` carries `{ otherDigest, paths }` for `ERR_CONFLICT` and `{ holder, waitedMs, queuePosition }` for `ERR_LOCKED` |
+| `axiom_write` **core** | SENSITIVE | `{ root, files[]: { path, content?, encoding?: utf8\|base64, op?: write\|delete, mode? }, intent?, profile?, confirmDigest?, lockTimeoutMs?, keepBackups? }` | One-tool write (2.5.0): without `confirmDigest` → `status: "preview"` (dry-run + checks, `diff`, `manifestDigest`, `next`; nothing outside `.axiom/` touched); the same files + `confirmDigest` → atomic apply like `axiom_apply` (journal, one-step `axiom_rollback`). A target changed since the preview → `ERR_CONFIRM_DIGEST_MISMATCH`. Prefer it for multi-file or sensitive changes |
+| `axiom_rollback` **core** | SENSITIVE | `{ root, manifestDigest }` | `{ status:"rolled-back", phase, steps }` |
 | `axiom_manifest_diff` | READ | `{ a: bundle\|"sha256:…", b }` | `{ added[], removed[], changed[] }` |
 | `axiom_axm_parse` | READ | `{ source }` (`.axm` text) | `{ plan?, diagnostics: [{ severity, code, message, range: { start: {line, column}, end } }] }` |
 | `axiom_roots_list` | READ | `{}` | `{ roots: [{ path, writable, hasGit }] }` |
-| `axiom_status` | READ | `{ root? }` | `{ root, lock: { held, holder?: { pid, host?, digest?, since?, stale }, queue[], intents[] }, interrupted[], corrupt[], lastApplied?, chain: { ok, entries, head, firstBad?, missingJournals } }` — same as `axiom status --json`; never takes the lock |
+| `axiom_status` **core** | READ | `{ root? }` | `{ root, lock: { held, holder?: { pid, host?, digest?, since?, stale }, queue[], intents[] }, interrupted[], corrupt[], lastApplied?, chain: { ok, entries, head, firstBad?, missingJournals } }` — same as `axiom status --json`; never takes the lock |
 | `axiom_repo_snapshot` | READ | `{ root?, include?[], exclude?[], maxFiles? (20000, cap 50000), maxBytes? (64 MiB), respectGitignore? (true), withContentDigest? (true) }` | `RepoSnapshot { snapshotDigest, body: { files: [{ path, bytes, sha256?, mode, kind }], truncated, counts } }` — sorted, no timestamps/absolute paths; `.git/`, `.axiom/` always skipped; symlinks recorded, never followed (`docs/guides/snapshot.md`) |
 
 Every tool carries MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
@@ -106,12 +116,13 @@ and an `outputSchema`; `structuredContent` is the full result, `content[0].text`
 verdict, counts, first 20 findings). Errors come back as `isError: true` with `{ code, message, path? }`
 from the closed `ERROR_CODES` enum — a handler never throws. `spec/tools.json` is generated from the same
 registry (`pnpm build:spec`) and guarded by a parity test. `spec/codai-tools.json` is the same registry in
-codai's `packages/agent-core/spec/tools-v2.json` entry shape (`{ name, risk, description, parameters }`) —
+codai's `packages/agent-core/spec/tools-v2.json` entry shape (`{ name, risk, toolset, description, parameters }`) —
 see `docs/integration/codai.md`.
 
 Resources: `axiom://manifest/{sha}`, `axiom://report/{sha}`, `axiom://applied/{sha}`,
 `axiom://profile/{name}`, `axiom://schema/{Plan|Manifest|ManifestBundle|CheckReport|ApplyResult|Profile|Journal|RepoSnapshot}`,
-`axiom://emitters` (template emitters available to `axiom_plan_compile` — `web@2.0.0`, see `docs/guides/emitters.md`),
+`axiom://emitters` (template emitters loaded with `--emitter <pkg>` — empty by default since 3.0; install
+`@codai/axiom-emitters-web` next to the repo and pass `--emitter @codai/axiom-emitters-web`, see `docs/guides/emitters.md`),
 `axiom://lock` (`{ roots: [{ root, held, holder?, queue[], intents[] }] }` for every allowlisted root; read-only).
 
 ## Trust model

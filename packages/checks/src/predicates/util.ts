@@ -1,5 +1,6 @@
 import type { Finding, Severity } from "@codai/axiom-schema";
 import picomatch from "picomatch";
+import { CASE_INSENSITIVE_FS } from "../facts/contained.js";
 import type { PredicateId } from "../types.js";
 
 export type Matcher = (path: string) => boolean;
@@ -17,9 +18,40 @@ export function escapeRouteGroups(glob: string): string {
   });
 }
 
-export function globMatcher(globs: readonly string[] | undefined, whenEmpty: boolean): Matcher {
+export interface GlobMatcherOptions {
+  /**
+   * Case-insensitive matching. Defaults to `true` on win32/darwin, whose default filesystems
+   * are case-insensitive: there `.ENV` IS `.env`, so a `.env` deny glob must catch it.
+   */
+  nocase?: boolean;
+  /** Platform whose filesystem default applies when `nocase` is absent (default: this one). */
+  platform?: NodeJS.Platform;
+}
+
+/** win32 and darwin default filesystems are case-insensitive. */
+export function caseInsensitivePlatform(platform: NodeJS.Platform): boolean {
+  return platform === "win32" || platform === "darwin";
+}
+
+/** Default `nocase` for path globs on this platform. */
+export const DEFAULT_GLOB_NOCASE: boolean = CASE_INSENSITIVE_FS;
+
+/**
+ * Path-glob matcher used by every path predicate (`dot: true`, Next route groups literal).
+ * Empty / absent `globs` → constant `whenEmpty`.
+ */
+export function globMatcher(
+  globs: readonly string[] | undefined,
+  whenEmpty: boolean,
+  opts: GlobMatcherOptions = {},
+): Matcher {
   if (globs === undefined || globs.length === 0) return () => whenEmpty;
-  const m = picomatch(globs.map(escapeRouteGroups), { dot: true });
+  const m = picomatch(globs.map(escapeRouteGroups), {
+    dot: true,
+    nocase:
+      opts.nocase ??
+      (opts.platform === undefined ? DEFAULT_GLOB_NOCASE : caseInsensitivePlatform(opts.platform)),
+  });
   return (p) => m(p);
 }
 

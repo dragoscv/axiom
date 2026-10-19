@@ -1,5 +1,83 @@
 # @codai/axiom-mcp
 
+## 3.0.0
+
+### Major Changes
+
+- 9122967: v3 wire identity and one policy file (D-41, D-42).
+  
+  - New canonical `apiVersion: "axiom.codai.ro/v3"` for every document AXIOM creates (Plan, Manifest,
+    CheckReport, ApplyResult, Profile, RepoSnapshot); `"axiom.dev/v2"` keeps parsing through 3.x and a
+    2.x plan still compiles to its 2.x digest. New plans therefore have new `planDigest`/`manifestDigest`
+    values (golden fixtures re-pinned; `plan-basic-v2` pins the 2.x digest). Schema exports
+    `API_VERSION_V2`, `API_VERSIONS`, `isLegacyApiVersion`. JSON Schema `$id`s move to
+    `https://dragoscv.github.io/axiom/schemas/v3/`.
+  - Attestation predicate URIs move to `https://dragoscv.github.io/axiom/spec/...`
+    (`AXIOM_APPLY_ATTESTATION_V1`, `AGENT_DECISION_V0_1`, build type, builder id); the 2.x URIs stay
+    exported as `*_LEGACY`.
+  - `.axiom/axiom.json` (`version: 3`, `gate`, `checks`, `extends`): `loadAxiomConfig` with
+    relative-file, `axiom:<pack>` and installed `@codai/axiom-pack-*` extends, union of
+    deny/ask/hard/allow, cycle/depth → `ERR_INVALID_PROFILE`, version > 3 → `ERR_PROFILE_VERSION`,
+    unknown keys warn. `loadProfile(name, { config })` reads its `checks` section. `migrateProfile`
+    folds `.axiom/gate-profile.json` + `.axiom/profiles/<name>.json` into it without deleting them.
+    New `AxiomConfig` JSON Schema.
+- 9122967: 3.0 CLI and features (D-43, D-45, S-1309..S-1316):
+  
+  - Noun command groups from one command table (`plan`, `journal`, `keys`, `hook`, `setup`) with the old verbs as hidden aliases until 4.0; per-command `--help`; usage errors print only the command's usage (`ERR_USAGE`); missing files are `ERR_NOT_FOUND`, malformed plans `ERR_INVALID_PLAN` with line/column; ASCII-only human output; `axgate` second bin.
+  - New commands: `axiom explain`, `axiom setup suggest-profile`, `axiom setup doctor --fleet`, `axiom journal replay`, `axiom report` (self-contained HTML), `axiom pin [--check]` (MCP config pinning), `axiom acp-proxy`, `axiom setup migrate --profile`, `axiom setup init --dry-run`, `axiom gc --decisions-older-than`.
+  - Decision journal: stable `id`, `enforced`, `profile_decided`; secrets in `command` / `override_reason` / `reason` redacted; the username is hashed unless `AXIOM_JOURNAL_USERNAME=1`.
+  - Session budget rule (`sessions.budget`), outside-root writes captured for `axiom undo`, doctor reads the real hook timeout, checks node on PATH and flags protocol-1 daemons.
+- 9122967: Harness wiring for 3.0: `axiom init --harness kiro` (`.kiro/hooks/axiom-gate.json`, PreToolUse
+  `write|shell|@mcp`, `--format kiro`) and `--harness opencode` (`.opencode/plugins/axiom-gate.js`,
+  fail-closed `tool.execute.before` plugin), both picked by `--harness auto`; `axiom init --dry-run`
+  (I-19) prints the unified diff of every write and writes nothing; the ACP adapter
+  (`acpPermissionDecision`, `runAcpProxy`) for Agent Client Protocol clients. Hook commands that run
+  through `powershell -Command` / `bash -c` on exit-2-only harnesses (VS Code Local, Windsurf/Devin)
+  now map a crash or missing node to exit 2; Codex `commandWindows` is the bare `axiom.cmd gate …`;
+  Windsurf/Devin also gate `pre_mcp_tool_use`; the Junie user-level snippet pins `--root`.
+- 9122967: Security hardening from the 2026-10-19 reality check (D-41, S-1301..S-1308, S-1313):
+  
+  - **Gate.** One shell lexer (`shell-lex.ts`) splits on newlines, strips quotes and PowerShell backticks, folds git global options and decodes `-EncodedCommand`. Force push, reset --hard, clean -f and worktree remove --force are detected semantically (`-uf`, `+refspec`, `--mirror`, `git -C . push -f`, ...). New `house.pushDelete`, `house.stashDrop`, `house.undecodable`. Every command rule is evaluated: a hard code wins regardless of order. Whole-tree `git clean` / `reset --hard` is `git.destructiveTree` (hard when reset/clean are) and is judged before containment. Globs are case-insensitive on Windows/macOS, 8.3 short names are refused, `\\?\` system paths are recognised.
+  - **Overrides.** `axiom-override: <reason>` is read only from explanation/goal/description/reason or a trailing shell comment outside quotes and heredocs; never from file content or an apply_patch body; the reason needs ≥ 3 words and ≥ 12 letters. Every relaxed decision is journaled.
+  - **Profiles.** Unknown keys warn instead of denying; `version` newer than the binary → `ERR_PROFILE_VERSION`; broken profiles → `ERR_INVALID_PROFILE`; profile errors are never covered by `--fail-open`. A linked worktree inherits the main clone's profile when its own is missing or older. `axiom init` writes enforce + the house pack + four hard codes.
+  - **Daemon protocol 2.** Mandatory per-start key, HMAC-signed responses, nonce, no bearer, argv allowlist, payload roots checked after normalisation, bounded body; protocol-1 clients get 426 and spawn.
+  - **Apply.** `.axiom/` is reserved under any case / NFC / 8.3 / junction alias (`ERR_PATH_RESERVED_DIR`); journal backup paths are contained (`ERR_JOURNAL_CORRUPT`); rollback is a no-op on an already rolled-back digest, refuses drift (`ERR_PREIMAGE_CHANGED`, `force`) and missing backups (`ERR_ROLLBACK`); dry-run writes nothing.
+  - **Plan / checks.** A `ref` CAS hit is re-hashed (`casGetUnverified` is the raw reader); pre-image and repo-fact reads no longer follow junctions out of the root.
+  - **Misc.** Empty stdin allows with a warning (oversize stays fail-closed); JSON parse errors never echo the payload; `noSecretsExclude` for PII-class findings; `create_and_run_task` is scanned; rename/move/mkdir tools are writes; Claude denies emit only `hookSpecificOutput`; Junie gets `ask`; new `kiro` format.
+- 9122967: 3.0 (D-43 / D-45, S-1312 / S-1319):
+  
+  - **mcp — core toolset by default.** `createServer` / `serverFactory` take `toolset: "core" | "full"`;
+    `core` (default) serves `axiom_write`, `axiom_status`, `axiom_rollback`, `axiom_check`,
+    `axiom_apply`, `axiom_apply_dry_run`; `full` serves every tool. `parseToolset(value)` parses the
+    `--tools core|full` flag (`ERR_USAGE` otherwise). `spec/tools.json` and `spec/codai-tools.json`
+    mark each tool `"toolset": "core" | "full"` (codai spec format version 3.0.0).
+  - **mcp — emitters-web is no longer bundled.** `template` sources need an emitter loaded with
+    `--emitter <pkg>` (`loadEmitters(specs, root)`: package name resolved from the root's
+    `node_modules`, or a path). Without one they fail `ERR_EMITTER_UNKNOWN` with
+    `details.hint` "install @codai/axiom-emitters-web and pass --emitter @codai/axiom-emitters-web".
+    `axiom://emitters` is empty by default.
+  - **axm — language server merged in.** `@codai/axiom-axm/lsp` (+ bin `axm-lsp`) is the `.axm`
+    language server; the main entry stays LSP-free. Fixed: a plan named `meta` (or any keyword) no
+    longer mis-lexes its body as a JSON block; `KEYWORD_IMAGES` is exported.
+  - **axm-lsp — deprecated.** Thin re-export of `@codai/axiom-axm/lsp` for 3.x; not published for 4.0.
+  - **emitters-web** — banners derive from `WEB_EMITTER_VERSION` (`generatedBanner`); exports
+    `emitters` for `--emitter` loading.
+
+### Patch Changes
+
+- 72f61e3: Close CodeQL `js/file-system-race` findings: `gitDirs`, the index stat check, session-guard
+  `hashFile`, undo pre-images and the fleet profile probe now open the file first and verify /
+  read through the held descriptor, so the checked file is the file that is read.
+- Updated dependencies [9122967]
+- Updated dependencies [9122967]
+- Updated dependencies [9122967]
+  - @codai/axiom-schema@3.0.0
+  - @codai/axiom-canon@3.0.0
+  - @codai/axiom-checks@3.0.0
+  - @codai/axiom-axm@3.0.0
+  - @codai/axiom-apply@3.0.0
+  - @codai/axiom-plan@3.0.0
+
 ## 2.7.0
 
 ### Minor Changes

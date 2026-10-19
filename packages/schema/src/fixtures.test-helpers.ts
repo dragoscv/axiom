@@ -1,5 +1,10 @@
 import type { z } from "zod";
-import type { ManifestBodySchema, ManifestBundleSchema, PlanSchema } from "./index.js";
+import {
+  API_VERSION,
+  type ManifestBodySchema,
+  type ManifestBundleSchema,
+  type PlanSchema,
+} from "./index.js";
 
 export const HEX_A = "a".repeat(64);
 export const HEX_B = "b".repeat(64);
@@ -8,7 +13,7 @@ export const REF_B = `sha256:${HEX_B}` as const;
 
 export function validPlan(): z.input<typeof PlanSchema> {
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: API_VERSION,
     kind: "Plan",
     name: "hello-world",
     intent: "Create a greeting module",
@@ -21,7 +26,7 @@ export function validPlan(): z.input<typeof PlanSchema> {
 
 export function validManifest(): z.input<typeof ManifestBodySchema> {
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: API_VERSION,
     kind: "Manifest",
     name: "hello-world",
     profile: "default",

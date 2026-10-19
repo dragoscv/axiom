@@ -2,7 +2,8 @@
 
 *The design document AXIOM v2 was built from — package graph, data model, checks engine, apply engine, MCP surface, `.axm`, quality gates, roadmap.*
 
-**Status:** as built, 2.2.x (2026-09-21). Written 2026-09-18 as a design; the sections below were
+**Status:** annotated as built (package graph, counts and package names current for 3.x; the
+narrative is the 2026-09-18 design). The sections below were
 updated where the shipped code diverged (§1 build layout, §2.2 signature payload type, §3 expression
 predicates, §5.1 SDK v2, §6 LSP). Every external claim marked **[V]** was verified on 2026-09-18
 against npm registry / spec pages; v1 facts marked **[src]** were read from `E:\gh\axiom` source.
@@ -12,6 +13,8 @@ and [concepts/trust-model.md](../concepts/trust-model.md).
 
 ```mermaid
 flowchart TB
+  accTitle: Package graph
+  accDescr: The AXIOM packages from dependency-free leaves up to the MCP server, CLI and editor tooling that consume them.
   subgraph leaves [Leaves — no @codai deps]
     schema["@codai/axiom-schema<br/>Zod v4 · ERROR_CODES · JSON Schema"]
     canon["@codai/axiom-canon<br/>JCS · sha256 · in-toto · DSSE"]
@@ -22,11 +25,11 @@ flowchart TB
     apply["@codai/axiom-apply<br/>containment · 2PC · journal · git PR · verifyTree"]
   end
   subgraph dsl [DSL]
-    axm["@codai/axiom-axm<br/>Chevrotain parser · formatAxm"]
-    lsp["@codai/axiom-axm-lsp<br/>vscode-languageserver"]
-    vsx["vscode-axm (private)<br/>.vsix"]
+    axm["@codai/axiom-axm<br/>Chevrotain parser · formatAxm · /lsp server"]
+    lsp["@codai/axiom-axm-lsp<br/>deprecated re-export"]
+    vsx["vscode-axm (private)<br/>dragoscv.axiom-axm"]
   end
-  web["@codai/axiom-emitters-web<br/>web@2.0.0 templates"]
+  web["@codai/axiom-emitters-web<br/>opt-in via --emitter"]
   subgraph bin [The published bin]
     mcp["@codai/axiom-mcp<br/>cli.js → cli-main.js + lazy chunks<br/>mcp-lazy · http-lazy · gate-lazy · axm-lazy · migrate-lazy"]
     adapter["adapter.ts — the only SDK import"]
@@ -37,9 +40,10 @@ flowchart TB
   checks --> schema & canon
   apply --> schema & canon
   axm --> schema
-  lsp --> axm & schema
-  vsx --> lsp
-  mcp --> plan & checks & apply & axm & web & canon & schema
+  lsp --> axm
+  vsx --> axm
+  mcp --> plan & checks & apply & axm & canon & schema
+  mcp -.->|"loaded at runtime with &#8209;&#8209;emitter"| web
   mcp --> adapter --> sdk
   priv -.-> schema & canon & plan
 ```
@@ -69,9 +73,9 @@ axiom/
     apply/         @codai/axiom-apply       Containment, staging, 2PC, journal, dry-run/diff, git PR (spawn args). deps: schema, canon, diff
     mcp/           @codai/axiom-mcp         MCP server (stdio + streamable HTTP) + CLI + `gate` hook mode. THE ONLY PUBLISHED BIN. deps: all above + @modelcontextprotocol/sdk
     axm/           @codai/axiom-axm         Chevrotain lexer/parser .axm → Plan. deps: chevrotain 13.2
-    axm-lsp/       @codai/axiom-axm-lsp     Hand-written LSP over `vscode-languageserver` reusing parseAxm (D-14, not Langium). deps: axm, vscode-languageserver
-    vscode-axm/    private                  VS Code extension bundling axm-lsp (S-412: Marketplace)
-    emitters-web/  @codai/axiom-emitters-web Optional Next.js/Hono templates as a separate plugin
+    axm-lsp/       @codai/axiom-axm-lsp     As built 3.0: deprecated thin re-export; the hand-written LSP (D-14, not Langium) lives in axm as `@codai/axiom-axm/lsp` + bin `axm-lsp`
+    vscode-axm/    private                  VS Code extension `dragoscv.axiom-axm` (gate status bar + .axm, bundles the axm LSP)
+    emitters-web/  @codai/axiom-emitters-web Optional Next.js/Hono templates as a separate plugin; as built 3.0 not bundled in the CLI, loaded with `--emitter`
     conformance/   private                  MCP conformance harness (spawns HTTP server, runs @modelcontextprotocol/conformance)
     testkit/       private                  golden fixtures, fast-check arbitraries, tmp-repo helpers
 ```
@@ -340,9 +344,10 @@ Long paths: prefix `\\?\` via `path.toNamespacedPath` for every fs call when `le
 
 ### 5.1 Tools (MCP SDK v2 — `@modelcontextprotocol/server` 2.0.0 behind `adapter.ts`; every tool has `annotations`, `inputSchema`, `outputSchema`, handler returns `structuredContent`)
 
-The table below is the v2.0 design set. As built (2.4.x) there are **18 tools** — the ten here plus
+The table below is the v2.0 design set. As built (3.x) there are **19 tools** — the ten here plus
 `axiom_check_start` / `axiom_task_get` / `axiom_task_cancel` and `axiom_plan_begin` / `axiom_plan_add` /
-`axiom_plan_seal` (D-24), `axiom_repo_snapshot` (S-304) and `axiom_status` (S-706); the authoritative registry is
+`axiom_plan_seal` (D-24), `axiom_repo_snapshot` (S-304), `axiom_status` (S-706) and `axiom_write`; 6 of them
+form the default `core` set and `--tools full` serves all (D-43). The authoritative registry is
 `packages/mcp/spec/tools.json` and the user-facing table is [reference/mcp-tools.md](../reference/mcp-tools.md).
 
 | tool | annotations (RO/D/I/OW) | input | output |
@@ -402,7 +407,7 @@ HereDoc     = "<<", Ident, NEWLINE, { ANY }, NEWLINE, Ident ;
 QualIdent   = Ident, { ".", Ident } ;          Digest = '"sha256:' 64*HEXDIG '"' ;
 Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" … "*/" ;
 ```
-`@codai/axiom-axm`: Chevrotain 13.2 **[V]** lexer + CST parser + visitor → `Plan`, diagnostics with `{line,col}`. `@codai/axiom-axm-lsp`: **as built (D-14, 2026-09-18)** a hand-written `vscode-languageserver` 10 server that reuses `parseAxm` for diagnostics, completions and hover — *not* Langium: every Langium service is derived from a `.langium` grammar AST, so adopting it would have meant a second grammar that drifts from `packages/axm` (see `packages/axm-lsp/README.md`). The VS Code extension (`packages/vscode-axm`) bundles the server and replaces the 5-line `vscode-bridge` **[src]**. `expr.cel` uses `@marcbachmann/cel-js` 8 (zero deps), so the chevrotain-major concern below is moot.
+`@codai/axiom-axm`: Chevrotain 13.2 **[V]** lexer + CST parser + visitor → `Plan`, diagnostics with `{line,col}`. `@codai/axiom-axm-lsp`: **as built (D-14, 2026-09-18)** a hand-written `vscode-languageserver` 10 server that reuses `parseAxm` for diagnostics, completions and hover — *not* Langium: every Langium service is derived from a `.langium` grammar AST, so adopting it would have meant a second grammar that drifts from `packages/axm` (see `packages/axm-lsp/README.md`). The VS Code extension (`packages/vscode-axm`) bundles the server and replaces the 5-line `vscode-bridge` **[src]**. *(As built 3.0, D-43: the server moved into `@codai/axiom-axm` as `@codai/axiom-axm/lsp` with the `axm-lsp` bin; `@codai/axiom-axm-lsp` is a deprecated re-export through 3.x.)* `expr.cel` uses `@marcbachmann/cel-js` 8 (zero deps), so the chevrotain-major concern below is moot.
 
 ---
 
@@ -414,7 +419,7 @@ Json        = ? RFC 8259 value ? ;             Comment = "//" … EOL | "/*" …
 - **Conformance:** `@modelcontextprotocol/conformance` 0.1.16 tests servers over an HTTP URL only **[V]**, so `packages/conformance` starts `axiom mcp --http 127.0.0.1:0 --root <tmp>` and runs `npx @modelcontextprotocol/conformance server --url … --expected-failures baseline.yml`; the stdio path is covered by an in-process `Client` + `StdioClientTransport` smoke test (`initialize`, `tools/list`, every tool with a bad input → structured error).
 - **CI matrix** (GitHub Actions): `os: [ubuntu-24.04, windows-2025, macos-15] × node: [22, 24]`; jobs: `lint → typecheck (tsgo) → test → build → guards → conformance (ubuntu only) → cold-start+size`. Actions pinned to SHAs (brivio `check-action-pins` guard reused **[src]**).
 - **Release:** `@changesets/cli` 3.0.3 **[V]**, `changeset-bot`, fixed group for all `@codai/axiom-*`. Publish via **npm trusted publishing** (OIDC, `permissions: id-token: write`, npm ≥ 11.5.1; provenance automatic — no `--provenance` flag needed **[V]**); `npm stage publish` is the default for configs created after 2026-09-03 **[V]** → workflow runs `npm stage publish` then `npm publish --tag latest` after a manual approval environment.
-- **Repo guards** `scripts/check-*.mjs` + `scripts/run-guards.mjs` (brivio contract **[src]**: exit code, `OK    `/`FAIL  ` prefix, worker pool) plus `--json` and 60 s per-guard timeout — **18 as built**: `check-package-deps` (boundary graph §1), `check-bundle-size`, `check-cold-start`, `check-gate-latency`, `check-error-codes` (every thrown code is in `errors.ts` and asserted by a test), `check-tool-parity` (tools.json ↔ registry ↔ `packages/mcp/README.md` + `docs/mcp_api.md`), `check-schema-json-fresh` (`z.toJSONSchema` output committed and current), `check-no-stdout` (grep `console.log` outside `cli.ts`), `check-no-shell-spawn` (`shell:\s*true` banned), `check-vacuous-assertions` (ported), `check-golden-digests`, `check-action-pins`, `check-changeset-present`, `check-sdk-adapter` (only `mcp/src/adapter.ts` imports `@modelcontextprotocol/*`; `dist/cli-main.js` carries no SDK code), `check-no-v1-imports` (nothing imports `packages/_v1`), `check-tracker-sync` (`PLAN.md` ↔ `TRACKER.csv` ids), `check-stale-markers` (no "planned for vX.Y" once X.Y shipped), `check-release-complete` (every package of a tagged version is on the registry — runs after publish).
+- **Repo guards** `scripts/check-*.mjs` + `scripts/run-guards.mjs` (brivio contract **[src]**: exit code, `OK    `/`FAIL  ` prefix, worker pool) plus `--json` and 60 s per-guard timeout — **19 as built**: `check-package-deps` (boundary graph §1), `check-bundle-size`, `check-cold-start`, `check-gate-latency`, `check-error-codes` (every thrown code is in `errors.ts` and asserted by a test), `check-tool-parity` (tools.json ↔ registry ↔ `packages/mcp/README.md` + `docs/mcp_api.md`), `check-schema-json-fresh` (`z.toJSONSchema` output committed and current), `check-no-stdout` (grep `console.log` outside `cli.ts`), `check-no-shell-spawn` (`shell:\s*true` banned), `check-vacuous-assertions` (ported), `check-golden-digests`, `check-action-pins`, `check-changeset-present`, `check-sdk-adapter` (only `mcp/src/adapter.ts` imports `@modelcontextprotocol/*`; `dist/cli-main.js` carries no SDK code), `check-no-v1-imports` (nothing imports `packages/_v1`), `check-tracker-sync` (`PLAN.md` ↔ `TRACKER.csv` ids), `check-stale-markers` (no "planned for vX.Y" once X.Y shipped), `check-cli-doc` (3.0: `docs/reference/cli.md` matches the command table), `check-release-complete` (every package of a tagged version is on the registry — runs after publish).
 - **`.github/instructions/`**: `schema.instructions.md` (applyTo `packages/schema/**` — additive-only, strict objects, error codes closed enum), `apply.instructions.md` (`packages/apply/**` — no fs call without containment, no `shell`, journal before mutate), `mcp.instructions.md` (`packages/mcp/**` — annotations mandatory, stderr only, roots), `tests.instructions.md`. **Skills** (`.github/skills/*/SKILL.md`, metu `name`/`description` + numbered steps **[src]**): `add-predicate`, `add-mcp-tool`, `add-golden-fixture`, `release-axiom`, `debug-apply-journal`. Root `.copilot-ripple.json`: `publicApi: "packages/mcp/src/tools/"` → expect `docs/reference/mcp-tools.md`, `spec/tools.json`, `packages/conformance/baseline.yml`.
 
 ---

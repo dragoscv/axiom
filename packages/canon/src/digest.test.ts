@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CanonError,
   canonicalDigestRef,
   digestRef,
   parseDigestRef,
@@ -22,6 +23,19 @@ describe("digest refs", () => {
     expect(() => parseDigestRef(`sha512:${ABC}`)).toThrow(TypeError);
     expect(() => parseDigestRef(`sha256:${ABC}0`)).toThrow(TypeError);
     expect(() => parseDigestRef("")).toThrow(TypeError);
+  });
+
+  it("malformed digests throw CanonError with code ERR_DIGEST_FORMAT", () => {
+    for (const bad of [() => digestRef("abc"), () => parseDigestRef("sha256:XYZ")]) {
+      let err: unknown;
+      try {
+        bad();
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(CanonError);
+      expect((err as CanonError).code).toBe("ERR_DIGEST_FORMAT");
+    }
   });
 
   it("sha256Digest returns an in-toto DigestSet", () => {

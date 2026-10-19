@@ -1,5 +1,7 @@
 # Coordination and git-state rules
 
+*Let the gate honour an external coordinator's freezes, worktree leases and queue-only commands, and git-state rules (clean tree, pathspec commits, branches) read straight from `.git`.*
+
 Several agents often share one clone. Two gate rule modules let `axiom gate` honour that:
 
 - **Coordination** (`packages/mcp/src/coord.ts`, S-1212) — a generic **file protocol** through
@@ -8,7 +10,9 @@ Several agents often share one clone. Two gate rule modules let `axiom gate` hon
 - **Git-state facts** (`packages/mcp/src/gitfacts.ts`, S-1213) — clean tree, pathspec-only
   commits and branch rules, read straight from `.git` without spawning `git`.
 
-Both are configured in `.axiom/gate-profile.json` under the keys `"coordination"` and `"git"`.
+Both are configured in the gate policy under the keys `"coordination"` and `"git"` — the `gate`
+section of `.axiom/axiom.json` since 3.0, or the deprecated `.axiom/gate-profile.json`
+([profiles.md](../reference/profiles.md)).
 For a concrete mapping see [agentq](../integration/agentq.md).
 
 ## Rule ids

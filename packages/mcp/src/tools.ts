@@ -2,7 +2,7 @@ import { access, constants, lstat, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { appliedPath, apply, rollback } from "@codai/axiom-apply";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
-import { compilePlan, diffManifests, verifyBundle } from "@codai/axiom-plan";
+import { compilePlan, diffManifests, type EmitterRegistry, verifyBundle } from "@codai/axiom-plan";
 import {
   API_VERSION,
   ApplyResultSchema,
@@ -23,7 +23,7 @@ import {
 } from "@codai/axiom-schema";
 import { z } from "zod";
 import type { ElicitConfirmRequest, ElicitConfirmResult } from "./adapter.js";
-import { EMITTERS } from "./emitters.js";
+import { NO_EMITTERS, withEmitterHint } from "./emitters.js";
 import { advanceTrustState, profileWantsAntiRollback, verifyBundleAgainstRoot } from "./keys.js";
 import type { Logger } from "./log.js";
 import { type RootsPolicy, resolveRoot } from "./roots.js";
@@ -41,6 +41,16 @@ import {
   TaskStatusSchema,
   type TaskStore,
 } from "./tasks.js";
+import { CORE_TOOL_NAMES, type Toolset } from "./toolset.js";
+
+export {
+  CORE_TOOL_NAMES,
+  DEFAULT_TOOLSET,
+  parseToolset,
+  TOOLSETS,
+  type Toolset,
+  toolsetOf,
+} from "./toolset.js";
 
 /** Hard cap on any single `bundle`/`plan` argument, measured as UTF-8 JSON bytes (§(f) payload size). */
 export const BUNDLE_BYTES_MAX = 4 * 1024 * 1024;
@@ -67,6 +77,8 @@ export interface ToolContext {
   tasks: TaskStore;
   /** Chunked plan sessions (`axiom_plan_begin` / `add` / `seal`), shared like `tasks`. */
   planSessions: PlanSessionStore;
+  /** Template emitters loaded via `--emitter <pkg>`; absent → `template` sources fail with a hint. */
+  emitters?: EmitterRegistry;
   /**
    * `--require-human` (S-1206): the confirm step of `axiom_apply` / `axiom_write` must be a human
    * elicitation answer; a client without form elicitation gets ERR_CONFIRM_DIGEST_MISMATCH
@@ -502,7 +514,7 @@ async function compileWrite(
   };
   const { bundle } = await compilePlan(plan, {
     store: "inline",
-    emitters: EMITTERS,
+    emitters: NO_EMITTERS,
     root: rootReal,
   });
   return bundle;
@@ -660,11 +672,13 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     description:
       "Validate a Plan against PlanSchema and, when all sources are inline, compute its planDigest. Read-only; touches no files.",
     inputSchema: {
-      plan: LooseObject.describe("Plan document (apiVersion axiom.dev/v2, kind Plan)"),
+      plan: LooseObject.describe(
+        "Plan document (apiVersion axiom.codai.ro/v3 or axiom.dev/v2, kind Plan)",
+      ),
     },
     outputSchema: PlanValidateOutput,
     annotations: READ,
-    async handler(_ctx, { plan }) {
+    async handler(ctx, { plan }) {
       guardPayloadSize("plan", plan);
       const parsed = PlanSchema.safeParse(plan);
       if (!parsed.success) {
@@ -682,10 +696,9 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         };
       }
       try {
-        const { bundle } = await compilePlan(parsed.data, {
-          store: "inline",
-          emitters: EMITTERS,
-        });
+        const { bundle } = await withEmitterHint(
+          compilePlan(parsed.data, { store: "inline", emitters: ctx.emitters ?? NO_EMITTERS }),
+        );
         return { ok: true, planDigest: bundle.manifest.planDigest, errors: [] };
       } catch (err) {
         if (err instanceof AxiomError && err.code === "ERR_BLOB_MISSING")
@@ -704,7 +717,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     name: "axiom_plan_compile",
     title: "Compile a Plan into a ManifestBundle",
     description:
-      "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest. `template` sources are rendered by the built-in `web` emitter (see `axiom emitters`); its version is recorded in toolchain.emitters.",
+      "Compile a Plan into a content-addressed ManifestBundle (sorted artifacts, sha256 digests, in-toto planDigest). `store: cas` writes blobs under <root>/.axiom/cas instead of inlining them. When a root is given the bundle is stored under <root>/.axiom/manifests/<hex>.json so later tools can reference it by digest. `template` sources need an emitter package loaded with `axiom mcp --emitter <pkg>` (e.g. @codai/axiom-emitters-web); its version is recorded in toolchain.emitters.",
     inputSchema: {
       plan: LooseObject.describe("Plan document"),
       store: z.enum(["inline", "cas"]).optional().describe("Blob transport; default inline"),
@@ -1394,10 +1407,10 @@ async function compileToBundle(
   const rootReal = wantsRoot ? (await resolveRoot(ctx.policy, root)).rootReal : undefined;
   const opts: Parameters<typeof compilePlan>[1] = {
     store: store ?? "inline",
-    emitters: EMITTERS,
+    emitters: ctx.emitters ?? NO_EMITTERS,
   };
   if (rootReal !== undefined) opts.root = rootReal;
-  const { bundle } = await compilePlan(plan, opts);
+  const { bundle } = await withEmitterHint(compilePlan(plan, opts));
   if (rootReal !== undefined) {
     await saveManifest(rootReal, bundle);
     ctx.seenRoots.add(rootReal);
@@ -1465,4 +1478,9 @@ function summarizeApply(r: z.output<typeof ApplyResultSchema>): unknown {
 
 export function toolByName(name: string): AnyToolDef | undefined {
   return TOOL_DEFS.find((t) => t.name === name);
+}
+
+/** Registry slice served for a toolset, in registry order. */
+export function toolsFor(toolset: Toolset): readonly AnyToolDef[] {
+  return toolset === "full" ? TOOL_DEFS : TOOL_DEFS.filter((t) => CORE_TOOL_NAMES.includes(t.name));
 }

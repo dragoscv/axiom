@@ -238,7 +238,9 @@ describe("PredicateRegistry", () => {
     expect(list).toContain("expr.cedar");
     expect(list).toContain("repo.requireReference");
     expect(list.length).toBe(18);
-    expect(() => reg.register(reg.get("path.deny"))).toThrow(/already registered/);
+    expect(() => reg.register(reg.get("path.deny"))).toThrow(
+      expect.objectContaining({ code: "ERR_INTERNAL" }),
+    );
     expect(() =>
       new PredicateRegistry().register(
         definePredicate({

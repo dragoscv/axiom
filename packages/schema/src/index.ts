@@ -1,5 +1,6 @@
 export * from "./apply.js";
 export * from "./check.js";
+export * from "./config.js";
 export * from "./digest.js";
 export * from "./errors.js";
 export * from "./manifest.js";

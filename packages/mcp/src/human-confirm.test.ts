@@ -66,7 +66,7 @@ async function connectLegacy(
   serverOpts: Omit<CreateServerOptions, "log"> = {},
 ): Promise<Conn> {
   const policy = await createRootsPolicy([repo.root]);
-  const server = createServer(policy, { ...serverOpts, log: silentLogger });
+  const server = createServer(policy, { toolset: "full", ...serverOpts, log: silentLogger });
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const { client, asked } = makeClient(human);
   await Promise.all([server.connect(st), client.connect(ct)]);
@@ -89,11 +89,14 @@ async function connectModern(
   serverOpts: { requireHuman?: boolean } = {},
 ): Promise<Conn> {
   const policy = await createRootsPolicy([repo.root]);
-  http = await startHttp(serverFactory(policy, { log: silentLogger, ...serverOpts }), {
-    host: "127.0.0.1",
-    port: 0,
-    log: silentLogger,
-  });
+  http = await startHttp(
+    serverFactory(policy, { log: silentLogger, toolset: "full", ...serverOpts }),
+    {
+      host: "127.0.0.1",
+      port: 0,
+      log: silentLogger,
+    },
+  );
   const { client, asked } = makeClient(human, {
     versionNegotiation: { mode: { pin: "2026-07-28" } },
   });

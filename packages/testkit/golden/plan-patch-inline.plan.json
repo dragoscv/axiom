@@ -1,5 +1,5 @@
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "Plan",
   "name": "golden-patch",
   "intent": "One patch source per format (unified, v4a, search-replace) plus a v4a Add File against an absent pre-image. Pins D-17 exact-match semantics and that the planDigest equals the inline-equivalent plan (see plan-patch-inline).",

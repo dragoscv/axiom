@@ -1,5 +1,7 @@
 # agentq
 
+*How the gate honours agentq's build/install/commit/deploy queue, incident freezes and leased worktree slots through the generic coordination file protocol.*
+
 agentq (`~/.copilot/bin/agentq.ps1`) is the house coordinator for agents sharing one clone: a
 FIFO queue for builds, installs, commits and deploys, incident freezes ("marks") and leased
 worktree slots. Its state is plain JSON files, so `axiom gate` honours it through the generic
@@ -25,7 +27,11 @@ A mark's repo is the leaf of the parent of the git common dir, lowercased — th
 uses (`build:codai` also covers `E:\gh\.wt\codai\task-1`, a linked worktree of `E:\gh\codai`).
 `deploy:<repo>:<target>` refuses only commands naming `<target>` unless the target is `any`.
 
-## Example `.axiom/gate-profile.json`
+## Example gate policy
+
+The object below is the gate policy — since 3.0 the `gate` section of `.axiom/axiom.json`
+(`{ "version": 3, "gate": { … } }`); a legacy `.axiom/gate-profile.json` with the same body is
+still read, with a deprecation warning ([profiles.md](../reference/profiles.md)).
 
 ```json
 {

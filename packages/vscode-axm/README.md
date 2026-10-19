@@ -1,9 +1,39 @@
-# AXIOM .axm for VS Code
+# AXIOM — agent write gate + .axm
 
-Language support for **`.axm` plans** — the authoring format of [AXIOM](https://dragoscv.github.io/axiom/),
-the transactional write gate for coding agents. A plan describes a change set (files, sources,
-checks); AXIOM compiles it into a content-addressed manifest, runs set-level checks and applies it
-atomically with a journal and one-step rollback.
+[AXIOM](https://dragoscv.github.io/axiom/) is the transactional write gate for coding agents:
+every agent write is checked before it lands, applied atomically with a journal, and undone in
+one step. This extension shows the gate state of your workspace, runs the AXIOM commands, and
+gives you full language support for **`.axm` plans**.
+
+<!-- screenshots -->
+
+## Features
+
+### Gate status in the status bar
+
+- **`AXIOM ok` / `AXIOM warn` / `AXIOM fail`** for the open workspace, from `axiom setup doctor --json`
+  (falls back to `axiom doctor --json` on 2.x). Refreshed on startup, every 10 minutes and on demand;
+  the tooltip lists the failing and warning check ids; warning / error theme colours.
+- Click it to open the full doctor report.
+
+### Commands (Command Palette → "AXIOM")
+
+| Command | Runs |
+|---|---|
+| **AXIOM: Doctor** | `axiom setup doctor --json` → report in the "AXIOM" output channel |
+| **AXIOM: Init** | `axiom init --root <workspace>` after a confirmation dialog |
+| **AXIOM: Stats** | `axiom stats --json` → output channel |
+| **AXIOM: Explain last decision** | `axiom explain last --root <workspace>` (needs axiom ≥ 3.0) |
+| **AXIOM: Refresh gate status** | re-runs the doctor for the status bar |
+
+### `.axm` language support
+
+- **Diagnostics** as you type — the same parser and error codes (`ERR_*`) as `axiom compile`
+- **Completion** for keywords, predicate ids after `using`, capabilities, `mode` / `op` / `profile` values
+- **Hover** documentation for keywords and predicates
+- **Outline** (document symbols) for plans, files and checks
+- **Format Document** — idempotent, only on a clean parse
+- **Semantic highlighting** on top of a TextMate grammar (heredocs, digests, `patch` sources, embedded JSON in `check` / `meta` blocks)
 
 ```axm
 axiom "2"
@@ -23,17 +53,16 @@ MD
 }
 ```
 
-## Features
+The language server (`@codai/axiom-axm/lsp`) is bundled — nothing else to install. In a **trusted**
+workspace that has `@codai/axiom-axm` ≥ the bundled version in `node_modules`, that copy is used.
 
-- **Diagnostics** as you type — the same parser and error codes (`ERR_*`) as `axiom compile`
-- **Completion** for keywords, predicate ids after `using`, capabilities, `mode` / `op` / `profile` values
-- **Hover** documentation for keywords and predicates
-- **Outline** (document symbols) for plans, files and checks
-- **Format Document** — idempotent, only on a clean parse
-- **Semantic highlighting** on top of a TextMate grammar (heredocs, digests, embedded JSON in `check` / `meta` blocks)
+## Settings and trust
 
-The language server (`@codai/axiom-axm-lsp`) is bundled — nothing else to install. In a workspace
-that has `@codai/axiom-axm-lsp` in `node_modules`, the extension uses that version instead.
+- `axiom.path` (default `axiom`) — the CLI to run. On Windows `axiom.exe` and the npm `axiom.cmd`
+  shim are found on PATH; the shim is run as `node <cli.js>`. Every call is `execFile` with an
+  argument array — never a shell.
+- **Untrusted workspaces** (limited support): nothing is spawned (no doctor / init / stats /
+  explain), `axiom.path` from the workspace is ignored, and only the bundled language server runs.
 
 ## Use it with the gate
 
@@ -63,8 +92,9 @@ MIT licensed.
 ## Development
 
 ```sh
-pnpm build                              # builds @codai/axiom-axm-lsp
+pnpm build                              # builds @codai/axiom-axm (parser + LSP)
 pnpm --filter axiom-axm run build       # this package
+pnpm --filter axiom-axm run test        # status-bar mapping, CLI resolution, grammar coverage
 pnpm --filter axiom-axm run package     # → <repo>/.copilot-tmp/axiom-axm-<version>.vsix
 ```
 

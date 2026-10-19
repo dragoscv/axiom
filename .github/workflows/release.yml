@@ -7,14 +7,19 @@ name: Release
 # publishing → GitHub Actions → repo dragoscv/axiom, workflow release.yml.
 #
 # Jobs (Phase 5, D-27/D-29/D-31):
-#   publish          build → guards → changeset publish → registry verification
+#   preflight        workflow_dispatch only from main or a v* tag (S-1322)
 #   binaries         Node 26 single executables, one native runner per target
 #                    + the native `axiom-hook` gate client (Rust, std only) on the same runner
-#   release-assets   SHA256SUMS + Sigstore build provenance, attached to the GitHub release
+#   publish          build → guards → stage axiom-hook binaries into packages/axiom-hook-<os>-<cpu>
+#                    → changeset publish → registry verification. Runs AFTER binaries: the five
+#                    @codai/axiom-hook-* packages (optionalDependencies of @codai/axiom-mcp, S-1318)
+#                    must never reach npm without their binary — npm refuses to re-publish a version.
+#   release-assets   SHA256SUMS + CycloneDX SBOM + Sigstore build provenance → the GitHub release,
+#                    created as a DRAFT and published + marked latest only after SHA256SUMS is attached
 #   vscode-extension .vsix attached to the release (+ Marketplace when VSCE_PAT is set)
 #                    (+ Open VSX when OVSX_PAT is set — Cursor, VSCodium, Windsurf, Gitpod)
 #   mcp-registry     server.json → registry.modelcontextprotocol.io via GitHub OIDC
-#   action-tag       moves the `v2` tag of dragoscv/axiom/action to this release
+#   action-tag       moves the floating `v<major>` tag of dragoscv/axiom/action forward (never back)
 #   homebrew-tap     renders Formula/axiom.rb from SHA256SUMS → dragoscv/homebrew-tap
 #                    (when HOMEBREW_TAP_DEPLOY_KEY is set)
 
@@ -37,8 +42,24 @@ env:
   COREPACK_ENABLE_STRICT: "0"
 
 jobs:
+  preflight:
+    # S-1322: a manual run may only publish from main (re-run of the current version) or a tag.
+    # A dispatch from a feature branch would publish whatever that branch's package.json says.
+    name: preflight (ref allowed to publish)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Refuse workflow_dispatch from any other ref
+        run: |
+          echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF"
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/v*) echo "ok" ;;
+            *) echo "::error title=release::publishing is allowed only from main or a v* tag (got $GITHUB_REF)"; exit 1 ;;
+          esac
+
   publish:
     name: build → guards → changeset publish
+    needs: binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -85,6 +106,41 @@ jobs:
         # Publish instead, as the live verification that all 9 packages actually landed.
         run: node scripts/run-guards.mjs --strict --skip=release-complete
 
+      - name: Release surfaces carry the npm version (fail before anything is published)
+        # CITATION.cff, server.json, crates/axiom-hook Cargo.toml/.lock, vscode-axm — written by
+        # `node scripts/sync-release-versions.mjs` after `changeset version`.
+        run: node scripts/sync-release-versions.mjs --check
+
+      - name: Download the axiom-hook binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: axiom-*
+          path: ${{ runner.temp }}/bin
+          merge-multiple: true
+
+      - name: Stage axiom-hook into packages/axiom-hook-<os>-<cpu>/bin (S-1318)
+        # Release asset target → npm package (process.platform-process.arch). Every package must
+        # carry its binary before `changeset publish`, or the version is burnt on npm empty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="${{ runner.temp }}/bin"
+          for pair in win-x64:win32-x64 linux-x64:linux-x64 linux-arm64:linux-arm64 darwin-x64:darwin-x64 darwin-arm64:darwin-arm64; do
+            asset="${pair%%:*}"; pkg="${pair##*:}"; ext=""
+            case "$asset" in win-*) ext=".exe" ;; esac
+            dir="packages/axiom-hook-$pkg"
+            test -f "$dir/package.json" || { echo "::error::missing $dir/package.json"; exit 1; }
+            test -f "$src/axiom-hook-$asset$ext" || { echo "::error::missing binary axiom-hook-$asset$ext"; exit 1; }
+            mkdir -p "$dir/bin"
+            cp "$src/axiom-hook-$asset$ext" "$dir/bin/axiom-hook$ext"
+            chmod 0755 "$dir/bin/axiom-hook$ext"
+            npm_v=$(node -p "require('./$dir/package.json').version")
+            mcp_v=$(node -p "require('./packages/mcp/package.json').version")
+            [ "$npm_v" = "$mcp_v" ] || { echo "::error::$dir is $npm_v, @codai/axiom-mcp is $mcp_v"; exit 1; }
+            (cd "$dir" && npm pack --dry-run --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const f=JSON.parse(s)[0].files.map(x=>x.path);if(!f.some(p=>p.startsWith("bin/axiom-hook"))){console.error("tarball has no bin/axiom-hook: "+f.join(","));process.exit(1)}console.log(f.join(" "))})')
+          done
+          ls -la packages/axiom-hook-*/bin
+
       - name: Publish
         run: pnpm exec changeset publish
         env:
@@ -123,7 +179,7 @@ jobs:
     # marker, so every target is built natively on its own runner (never cross-injected).
     # Node 26 (LTS from 2026-10-28) is pinned for all five so the binaries share one runtime.
     name: binary ${{ matrix.target }}
-    needs: publish
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +247,8 @@ jobs:
           cargo +stable build --release --locked
           npm_v=$(node -p 'require("../../packages/mcp/package.json").version')
           hook_v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          if [ "$npm_v" != "$hook_v" ]; then echo "::warning::axiom-hook $hook_v != @codai/axiom-mcp $npm_v"; fi
+          # S-1322: an error, not a warning — the npm hook packages ship this binary as $npm_v.
+          if [ "$npm_v" != "$hook_v" ]; then echo "::error::axiom-hook $hook_v != @codai/axiom-mcp $npm_v (run node scripts/sync-release-versions.mjs)"; exit 1; fi
           ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
           out="${{ runner.temp }}/axiom-bin/axiom-hook-${{ matrix.target }}${ext}"
           cp "target/release/axiom-hook${ext}" "$out"
@@ -212,11 +269,35 @@ jobs:
           path: ${{ runner.temp }}/axiom-bin/axiom-*
           if-no-files-found: error
 
+      - name: Legal notices (AXIOM LICENSE + bundled deps + embedded Node.js runtime)
+        # The SEA binaries inline every runtime dependency of @codai/axiom-mcp and embed Node
+        # itself, so their notices ship next to them. Node is pinned to 26 on every runner; the
+        # LICENSE is taken from the exact runtime that was embedded here.
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          legal="${{ runner.temp }}/axiom-legal"; mkdir -p "$legal"
+          cp LICENSE "$legal/LICENSE"
+          node scripts/gen-third-party-notices.mjs --package packages/mcp --out "$legal/THIRD_PARTY_NOTICES.md"
+          node_license="$(dirname "$(which node)")/../LICENSE"
+          test -f "$node_license" || curl -fsSL "https://raw.githubusercontent.com/nodejs/node/$(node -v)/LICENSE" -o "$node_license"
+          { echo "Node.js $(node -v) — runtime embedded in the axiom-<target> executables"; echo; cat "$node_license"; } > "$legal/LICENSE-node.txt"
+          ls -la "$legal"
+
+      - name: Upload legal notices
+        if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: axiom-legal
+          path: ${{ runner.temp }}/axiom-legal/*
+          if-no-files-found: error
+
   release-assets:
     name: SHA256SUMS + provenance → GitHub release
     # Covers the ten binaries (axiom + axiom-hook × 5 targets) AND the .vsix (same checksum
     # file, same Sigstore attestation).
-    needs: [binaries, vscode-extension]
+    needs: [publish, binaries, vscode-extension]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -225,12 +306,32 @@ jobs:
       id-token: write # Sigstore signing
       attestations: write # actions/attest-build-provenance
     steps:
+      - name: Setup Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
       - name: Download every binary
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: axiom-*
           path: bin
           merge-multiple: true
+
+      - name: CycloneDX SBOM of @codai/axiom-mcp (S-1322)
+        # cyclonedx-npm reads an npm-shaped node_modules, so the just-published tarball (publish
+        # polled the registry until it was live) is installed into a scratch npm project —
+        # exactly what a consumer resolves, runtime deps only — and described from there.
+        # Version pinned; bump deliberately.
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          sb="$RUNNER_TEMP/sbom"; mkdir -p "$sb"; cd "$sb"
+          npm init -y >/dev/null
+          npm install "@codai/axiom-mcp@$v" --omit dev --no-audit --no-fund --ignore-scripts
+          npx -y @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --output-format JSON --output-file "$GITHUB_WORKSPACE/bin/axiom-mcp-$v.cdx.json"
+          node -e 'const j=require(process.argv[1]);if(j.bomFormat!=="CycloneDX"||!(j.components||[]).length){console.error("empty SBOM");process.exit(1)}console.log(j.specVersion, j.components.length+" components")' "$GITHUB_WORKSPACE/bin/axiom-mcp-$v.cdx.json"
 
       - name: Checksums
         run: |
@@ -244,7 +345,12 @@ jobs:
               test -f "$p-$a" || { echo "::error::missing release asset $p-$a"; exit 1; }
             done
           done
-          sha256sum axiom-* | tee SHA256SUMS
+          for f in LICENSE THIRD_PARTY_NOTICES.md LICENSE-node.txt; do
+            test -f "$f" || { echo "::error::missing release asset $f"; exit 1; }
+          done
+          # axiom-* also matches axiom-mcp-<v>.cdx.json (SBOM) and axiom-axm-<v>.vsix.
+          sha256sum axiom-* LICENSE THIRD_PARTY_NOTICES.md LICENSE-node.txt | tee SHA256SUMS
+          grep -q '\.cdx\.json$' SHA256SUMS || { echo "::error::SBOM missing from SHA256SUMS"; exit 1; }
 
       - name: Sigstore build provenance (binaries + .vsix + checksums)
         # `gh attestation verify bin/axiom-linux-x64 --owner dragoscv` proves this workflow, at
@@ -259,12 +365,20 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          # Created as a DRAFT (here or by vscode-extension, whichever runs first): a published
+          # release without SHA256SUMS would be what install.sh/install.ps1 resolve as latest.
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes --draft --verify-tag
           gh release upload "$tag" bin/* --repo "$GITHUB_REPOSITORY" --clobber
-          # A cancelled earlier run can leave the release as a DRAFT, which `releases/latest`
-          # (and therefore install.sh / install.ps1) never resolves. Publish + mark latest.
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          # Undraft + mark latest only once SHA256SUMS is really on the release (this also
+          # repairs a draft left behind by a cancelled earlier run).
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS \
+            || { echo "::error::SHA256SUMS is not attached; leaving the release as a draft"; exit 1; }
+          latest=true
+          # Never mark an older line latest (e.g. a 2.7.x patch released after 3.0.0).
+          git_tags=$(gh api "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ -n "$git_tags" ] && [ "$(printf '%s\n%s\n' "$git_tags" "$tag" | sort -V | tail -n 1)" != "$tag" ]; then latest=false; fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft --jq '.isDraft, .assets[].name'
 
   mcp-registry:
@@ -338,30 +452,46 @@ jobs:
           node -e 'const r = JSON.parse(require("fs").readFileSync("registry.json","utf8")); const got = r.server?.version ?? r.version; if (got !== process.argv[1]) { console.error(`registry has ${got}, expected ${process.argv[1]}`); process.exit(1); }' "$v"
 
   action-tag:
-    # D-31: consumers pin `uses: dragoscv/axiom/action@v2`. Move that tag to every v2.* release
-    # (a plain tag, no Release attached, so immutable-releases can be enabled later without
-    # locking it). Skipped for any other major.
-    name: move action tag v2
+    # D-31 / S-1322: consumers pin `uses: dragoscv/axiom/action@v<major>`. Move that floating
+    # tag to this release only when it is the HIGHEST v<major>.x.y tag — a late 3.0.2 hotfix
+    # tagged after 3.1.0 must not drag `v3` backwards. Each major has its own tag, so a 3.x
+    # release never touches `v2` (and a 2.7.x patch still moves `v2`). A plain tag, no Release
+    # attached, so immutable releases can be enabled later without locking it.
+    name: move floating action tag
     needs: [publish, release-assets]
-    if: startsWith(github.ref, 'refs/tags/v2.')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: write # force-push the v2 tag
+      contents: write # force-push the v<major> tag
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Force-move v2 → ${{ github.ref_name }}
+      - name: Move v<major> → ${{ github.ref_name }} (forward only)
         run: |
           set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::unexpected tag $tag"; exit 1 ;;
+          esac
+          case "$tag" in *-*) echo "::notice::prerelease $tag - floating tag not moved"; exit 0 ;; esac
+          major="${tag%%.*}"   # v3
+          git fetch --tags --force origin
+          highest=$(git tag -l "${major}.*" --sort=-v:refname | grep -E "^${major}\.[0-9]+\.[0-9]+$" | head -n 1)
+          if [ "$highest" != "$tag" ]; then
+            echo "::notice::$tag is not the highest ${major}.x tag ($highest) - ${major} stays where it is"
+            git ls-remote --tags origin "$major"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa v2 -m "dragoscv/axiom/action v2 → ${GITHUB_REF_NAME}" "${GITHUB_SHA}"
-          git push origin v2 --force
-          git ls-remote --tags origin v2
+          git tag -fa "$major" -m "dragoscv/axiom/action $major → $tag" "${GITHUB_SHA}"
+          git push origin "refs/tags/$major" --force
+          git ls-remote --tags origin "$major"
 
   homebrew-tap:
     # S-602: `brew install dragoscv/tap/axiom` installs the SEA binaries of this release. The
@@ -467,7 +597,7 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes --draft --verify-tag
           gh release upload "$tag" .copilot-tmp/axiom-axm-*.vsix --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Azure login (OIDC, managed identity)

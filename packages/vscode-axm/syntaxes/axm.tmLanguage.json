@@ -85,7 +85,17 @@
             "2": { "name": "variable.other.constant.profile.axm" }
           }
         },
-        { "match": "\\b(inline|template|cas|ref)\\b", "name": "keyword.other.source.axm" },
+        {
+          "match": "\\b(patch)\\s+(unified|v4a|search-replace)\\b",
+          "captures": {
+            "1": { "name": "keyword.other.source.axm" },
+            "2": { "name": "constant.language.patch-format.axm" }
+          }
+        },
+        { "match": "\\b(absent)\\b", "name": "constant.language.absent.axm" },
+        { "match": "\\b(inline|template|patch|cas|ref)\\b", "name": "keyword.other.source.axm" },
+        { "match": "\\b(using)\\b", "name": "keyword.other.using.axm" },
+        { "match": "\\b(create|overwrite|delete)\\b", "name": "constant.language.op.axm" },
         {
           "match": "\\b(fs|net|secret|ai|compute|git)\\b",
           "name": "constant.language.capability.axm"

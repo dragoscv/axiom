@@ -5,16 +5,20 @@
  *
  * Security: loopback only (a non-loopback `--host` is refused at startup), requests with an
  * `Origin` header or a non-loopback `Host` are refused (DNS rebinding / browser pages), an
- * optional bearer token (`--token-env`), and an explicit root allowlist (`--root`, invariant 8):
- * a hook whose cwd is outside every root gets 421 and decides in-process instead. The daemon
- * never writes to the working tree — it only answers `gateMain`.
+ * explicit root allowlist (`--root`, invariant 8): a hook whose cwd, payload root (any harness
+ * key, via `normalizePayload`) or resolved gate root is outside every root gets 421 and decides
+ * in-process instead. Protocol 2: a per-start random key in the owner-only state file MACs every
+ * verdict (see daemon-proto.ts), so a port squatter cannot forge an allow. The query-string argv
+ * is allowlisted (no `--profile`/`--root` from a request). The daemon never writes to the
+ * working tree — it only answers `gateMain`.
  *
  * Never writes to stdout itself (`check-no-stdout`): the CLI prints the startup line.
  */
-import { timingSafeEqual } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import * as path from "node:path";
 import { AxiomError } from "@codai/axiom-schema";
 import {
@@ -23,20 +27,30 @@ import {
   DAEMON_DEFAULT_PORT,
   DAEMON_PROTOCOL,
   type DaemonState,
+  daemonMac,
   daemonStatePath,
   decodeHeader,
   encodeHeader,
   GATE_PATH,
   H_CWD,
   H_EXIT,
+  H_MAC,
+  H_NONCE,
   H_PROTOCOL,
   H_STDERR,
   H_STDIN,
   H_VERSION,
   HEALTH_PATH,
+  NONCE_RE,
 } from "./daemon-proto.js";
-import { GATE_STDIN_MAX_BYTES, type GateResult, gateMain } from "./gate.js";
-import { TOOL_NAME_KEYS } from "./gate-fast.js";
+import {
+  GATE_LOG_LEVELS,
+  GATE_STDIN_MAX_BYTES,
+  type GateResult,
+  gateMain,
+  normalizePayload,
+} from "./gate.js";
+import { isGateFormat, TOOL_NAME_KEYS } from "./gate-fast.js";
 import type { OtelExporter } from "./otel.js";
 import { isSameOrInside, realDir } from "./roots.js";
 
@@ -47,6 +61,7 @@ export interface ServeOptions {
   /** 0 = random free port. */
   port?: number;
   version: string;
+  /** Legacy `--token-env`: a request that sends a bearer must send this one (none is required). */
   token?: string;
   /** Directory holding `.axiom/daemon.json` (default: the home directory). */
   home?: string;
@@ -83,27 +98,66 @@ function hostOf(header: string | undefined): string | undefined {
   return i < 0 ? header : header.slice(0, i);
 }
 
+/** Protocol 2 does not need a bearer; a request that sends one must send the right one. */
 function tokenOk(expected: string | undefined, auth: string | undefined): boolean {
-  if (expected === undefined) return true;
-  if (auth === undefined || !auth.startsWith("Bearer ")) return false;
+  if (expected === undefined || auth === undefined) return true;
+  if (!auth.startsWith("Bearer ")) return false;
   const a = Buffer.from(auth.slice("Bearer ".length));
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Stops reading (and stops buffering) the moment the body exceeds `max`. */
 function readBody(req: http.IncomingMessage, max: number): Promise<Buffer | "toolarge"> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    let over = false;
-    req.on("data", (c: Buffer) => {
+    const onData = (c: Buffer) => {
       size += c.length;
-      if (size > max) over = true;
-      else chunks.push(c);
-    });
-    req.on("end", () => resolve(over ? "toolarge" : Buffer.concat(chunks)));
+      if (size > max) {
+        req.off("data", onData);
+        req.pause();
+        chunks.length = 0;
+        resolve("toolarge");
+        return;
+      }
+      chunks.push(c);
+    };
+    req.on("data", onData);
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+const BOOL_ARGS: ReadonlySet<string> = new Set([
+  "--stdin",
+  "--fail-open",
+  "--post",
+  "--track-reads",
+  "--no-shell-scan",
+]);
+const VALUE_ARGS: Readonly<Record<string, (v: string) => boolean>> = {
+  "--format": isGateFormat,
+  "--deny-exit": (v) => v === "0" || v === "2",
+  "--log-level": (v) => (GATE_LOG_LEVELS as readonly string[]).includes(v),
+};
+
+/**
+ * The argv a request may carry. Root and profile are the daemon's own business: a request that
+ * names a `--profile` file would make the daemon read (and echo the parse error of) any file.
+ */
+export function argvAllowed(argv: readonly string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? "";
+    if (BOOL_ARGS.has(a)) continue;
+    const eq = a.indexOf("=");
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const check = Object.hasOwn(VALUE_ARGS, name) ? VALUE_ARGS[name] : undefined;
+    if (check === undefined) return false;
+    const value = eq > 0 ? a.slice(eq + 1) : argv[++i];
+    if (value === undefined || !check(value)) return false;
+  }
+  return true;
 }
 
 function send(
@@ -112,13 +166,15 @@ function send(
   body: string,
   headers: Record<string, string> = {},
 ): void {
+  const buf = Buffer.from(body, "utf8");
   res.writeHead(status, {
     "content-type":
       status === 200 ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
     "cache-control": "no-store",
+    "content-length": String(buf.length),
     ...headers,
   });
-  res.end(body);
+  res.end(buf);
 }
 
 /** The cwd the hook ran in decides the root fallback; it must lie inside an allowlisted root. */
@@ -134,20 +190,56 @@ async function cwdAllowed(roots: readonly string[], cwd: string): Promise<boolea
   return roots.some((r) => isSameOrInside(r, real) || isSameOrInside(r, cwd));
 }
 
-/** Payload `cwd` (any harness key) when present — also must be inside a root. */
+/**
+ * The directory the gate will resolve a root from, per the gate's own normaliser (every harness
+ * key: `cwd`, `workspace_roots`, `workspaceRoots`, Windsurf `tool_info.cwd`, …).
+ */
 function payloadCwd(text: string): string | undefined {
+  let v: unknown;
   try {
-    const v: unknown = JSON.parse(text);
-    if (typeof v !== "object" || v === null) return undefined;
-    const o = v as Record<string, unknown>;
-    for (const k of ["cwd", "workingDirectory", "working_directory"]) {
-      const s = o[k];
-      if (typeof s === "string" && s !== "") return s;
-    }
+    v = JSON.parse(text);
   } catch {
-    // not JSON: gateMain decides (fail-closed)
+    return undefined; // not JSON: gateMain decides (fail-closed)
   }
-  return undefined;
+  const cwd = normalizePayload(v)?.cwd;
+  return typeof cwd === "string" && cwd !== "" ? cwd : undefined;
+}
+
+/** Owner-only state file: fresh file, mode 0600, and on Windows an ACL for the current user only. */
+async function writeStateFile(file: string, state: DaemonState): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  // Never reuse a pre-created file (it could carry someone else's ACL).
+  await rm(file, { force: true });
+  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  if (process.platform !== "win32") {
+    await chmod(file, 0o600);
+    return;
+  }
+  let user = process.env.USERNAME ?? "";
+  if (user === "") {
+    try {
+      user = userInfo().username;
+    } catch {
+      user = "";
+    }
+  }
+  if (user === "") {
+    console.warn("AXIOM serve WARN: cannot restrict daemon.json ACL (no user name)");
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    execFile(
+      "icacls",
+      [file, "/inheritance:r", "/grant:r", `${user}:F`],
+      { windowsHide: true, timeout: 10_000 },
+      (err) => {
+        if (err !== null) {
+          console.warn(`AXIOM serve WARN: icacls on daemon.json failed: ${err.message}`);
+        }
+        resolve();
+      },
+    );
+  });
 }
 
 const TOOL_CALL_ID_KEYS = ["tool_use_id", "toolCallId", "tool_call_id"] as const;
@@ -188,8 +280,13 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
   }
   const roots = [...opts.roots];
   const startedAt = new Date().toISOString();
+  const key = randomBytes(32).toString("hex");
   let requests = 0;
   const otel = opts.otel;
+
+  /** A verdict whose resolved root is outside the allowlist is discarded (the client decides). */
+  const rootOk = async (r: GateResult): Promise<boolean> =>
+    r.root === undefined || (await cwdAllowed(roots, r.root));
 
   const trace = (r: GateResult, text: string, format: string, startMs: number): void => {
     if (otel === undefined) return;
@@ -267,13 +364,19 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
       return;
     }
     const body = await readBody(req, GATE_STDIN_MAX_BYTES);
+    if (body === "toolarge") {
+      res.on("finish", () => req.destroy());
+      send(res, 413, "payload too large", { connection: "close" });
+      done(413);
+      return;
+    }
     requests++;
 
     if (url.pathname === CLAUDE_HOOK_PATH) {
       // Claude `type: "http"` hook: no headers of ours; the payload carries `cwd`.
-      const text = body === "toolarge" ? "" : body.toString("utf8");
+      const text = body.toString("utf8");
       const cwd = payloadCwd(text) ?? "";
-      if (body !== "toolarge" && !(await cwdAllowed(roots, cwd))) {
+      if (!(await cwdAllowed(roots, cwd))) {
         // Outside every root: no verdict from this daemon. Claude only blocks on a JSON deny or
         // `onFailure: "block"` (non-2xx counts as a failure) — 421 makes it fail closed.
         send(res, 421, "cwd outside the daemon roots");
@@ -281,15 +384,29 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
         return;
       }
       const r = await judge(["--stdin", "--format", "claude"], body, "ok", cwd);
+      if (!(await rootOk(r))) {
+        send(res, 421, "gate root outside the daemon roots");
+        done(421);
+        return;
+      }
       send(res, 200, r.stdout ?? "");
       trace(r, text, "claude", wallStart);
       done(200);
       return;
     }
 
-    if (req.headers[H_PROTOCOL] !== String(DAEMON_PROTOCOL)) {
-      send(res, 409, "protocol mismatch");
-      done(409);
+    const proto = req.headers[H_PROTOCOL];
+    if (proto !== String(DAEMON_PROTOCOL)) {
+      // Protocol 1 clients cannot authenticate the answer: make them fall back (spawn) safely.
+      const status = proto === "1" ? 426 : 409;
+      send(res, status, status === 426 ? "upgrade required: protocol 2" : "protocol mismatch");
+      done(status);
+      return;
+    }
+    const nonce = req.headers[H_NONCE];
+    if (typeof nonce !== "string" || !NONCE_RE.test(nonce)) {
+      send(res, 400, "missing or malformed nonce");
+      done(400);
       return;
     }
     const clientVersion = req.headers[H_VERSION];
@@ -302,13 +419,16 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     const cwd = decodeHeader(
       typeof req.headers[H_CWD] === "string" ? (req.headers[H_CWD] as string) : undefined,
     );
-    const text = body === "toolarge" ? "" : body.toString("utf8");
-    const pcwd = payloadCwd(text);
     const argv = url.searchParams.getAll("a");
-    const rootArg = argv.indexOf("--root");
-    const explicitRoot = rootArg >= 0 ? argv[rootArg + 1] : undefined;
+    if (!argvAllowed(argv)) {
+      send(res, 400, "argument not allowed over the daemon protocol");
+      done(400);
+      return;
+    }
+    const text = body.toString("utf8");
+    const pcwd = payloadCwd(text);
     // Every directory the gate may resolve a root from must be inside an allowlisted root.
-    const dirs = [cwd, pcwd, explicitRoot].filter((d): d is string => d !== undefined);
+    const dirs = [cwd, pcwd].filter((d): d is string => d !== undefined && d !== "");
     const allowed = await Promise.all(dirs.map((d) => cwdAllowed(roots, d)));
     if (dirs.length === 0 || !allowed.every(Boolean)) {
       send(res, 421, "cwd outside the daemon roots");
@@ -317,9 +437,16 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     }
     const stdinHeader = req.headers[H_STDIN];
     const r = await judge(argv, body, typeof stdinHeader === "string" ? stdinHeader : "ok", cwd);
-    send(res, 200, r.stdout ?? "", {
+    if (!(await rootOk(r))) {
+      send(res, 421, "gate root outside the daemon roots");
+      done(421);
+      return;
+    }
+    const out = r.stdout ?? "";
+    send(res, 200, out, {
       [H_EXIT]: String(r.exitCode),
       [H_STDERR]: encodeHeader(r.stderr.join("\n")),
+      [H_MAC]: daemonMac(key, nonce, r.exitCode, Buffer.from(out, "utf8")),
     });
     if (otel !== undefined) {
       const fi = argv.indexOf("--format");
@@ -353,13 +480,10 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     version: opts.version,
     roots,
     startedAt,
-    ...(opts.token === undefined ? {} : { token: opts.token }),
+    key,
   };
   const statePath = daemonStatePath(opts.home ?? homedir());
-  if (opts.noStateFile !== true) {
-    await mkdir(path.dirname(statePath), { recursive: true });
-    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  }
+  if (opts.noStateFile !== true) await writeStateFile(statePath, state);
   const urlHost = host.includes(":") ? `[${host}]` : host;
   return {
     host,

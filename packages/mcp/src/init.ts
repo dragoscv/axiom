@@ -13,7 +13,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { request } from "node:http";
 import * as path from "node:path";
-import { resolveContained, writeAtomic } from "@codai/axiom-apply";
+import { resolveContained, unifiedDiff, writeAtomic } from "@codai/axiom-apply";
 import { AxiomError, ProfileNameSchema } from "@codai/axiom-schema";
 import {
   CLAUDE_HOOK_PATH,
@@ -26,6 +26,7 @@ import {
   isLoopbackHost,
   readDaemonState,
 } from "./daemon-proto.js";
+import { OPENCODE_PLUGIN_JS } from "./opencode-plugin.js";
 import { realDir } from "./roots.js";
 
 export const HARNESSES = [
@@ -38,6 +39,8 @@ export const HARNESSES = [
   "gemini",
   "junie",
   "cline",
+  "kiro",
+  "opencode",
 ] as const;
 export type HarnessName = (typeof HARNESSES)[number];
 export type HarnessArg = HarnessName | "auto";
@@ -62,6 +65,11 @@ export interface InitResult {
   profile: string;
   files: InitFileResult[];
   notes: string[];
+  /**
+   * I-19 `--dry-run`: the unified diff (current → new) of every file init WOULD write; nothing
+   * was written. Absent on a real run.
+   */
+  diff?: string;
 }
 
 /** Resolves the global `axiom` bin; `undefined` = not on PATH. */
@@ -89,6 +97,11 @@ export interface InitOptions {
   upgrade?: boolean;
   /** S-1207: write the managed/enterprise policy layers into `out` (never system paths). */
   managed?: { out: string };
+  /**
+   * I-19: compute every write (create / merge / upgrade / managed) and return it as
+   * `InitResult.diff` without touching the filesystem. `files[].action` says what WOULD happen.
+   */
+  dryRun?: boolean;
   /** Test seam (upgrade): the global bin. Default `defaultBinLocator()`. */
   locateBin?: BinLocator;
   /** Test seam (upgrade): is a resident daemon answering health? Default reads ~/.axiom/daemon.json. */
@@ -111,11 +124,19 @@ export const INIT_FILES = {
   junieGuidelines: ".junie/guidelines.md",
   clineHook: ".clinerules/hooks/PreToolUse",
   clineHookPs1: ".clinerules/hooks/PreToolUse.ps1",
+  kiroHook: ".kiro/hooks/axiom-gate.json",
+  opencodePlugin: ".opencode/plugins/axiom-gate.js",
   gateProfile: ".axiom/gate-profile.json",
   gitignore: ".gitignore",
 } as const;
 
-export const GITIGNORE_LINES = [".axiom/*", "!.axiom/profiles/", "!.axiom/gate-profile.json"];
+export const GITIGNORE_LINES = [
+  ".axiom/*",
+  "!.axiom/profiles/",
+  "!.axiom/gate-profile.json",
+  "!.axiom/axiom.json",
+  "!.axiom/mcp-pins.json",
+];
 
 /** Lines that ignore the `.axiom` directory itself — negations below it can never apply. */
 const AXIOM_DIR_IGNORES = new Set([".axiom", ".axiom/", "/.axiom", "/.axiom/"]);
@@ -142,15 +163,34 @@ export function gateCommand(bin: GateBin, format: string): string {
   return `${bin} gate --stdin --format ${format}`;
 }
 
+function windowsExe(bin: GateBin): string {
+  return bin === "axiom" ? "axiom.cmd" : "axiom-hook.exe";
+}
+
 /**
- * The same command for a harness that runs it through `powershell -Command` on Windows
- * (VS Code Local, Windsurf/Devin, Codex): call the `.cmd` shim/exe explicitly — a bare name
- * resolves to npm's `axiom.ps1`, which may be blocked by execution policy — and propagate the
- * exit code, because `-Command` turns any code other than 0/1 into 1 and exit 2 IS the deny.
+ * The same command for a harness that runs it through `powershell -Command` on Windows and
+ * blocks ONLY on exit 2 (VS Code Local, Windsurf/Devin): call the `.cmd` shim/exe explicitly — a
+ * bare name resolves to npm's `axiom.ps1`, which may be blocked by execution policy — and map
+ * every outcome that is not the gate's own 0/2 (node missing, `axiom.cmd` not on PATH → no
+ * `$LASTEXITCODE`, a crash → 1) to exit 2, because `-Command` turns any other code into 1 and 1
+ * is a non-blocking warning there. Copilot CLI reads the same field and denies on 2 as well.
  */
 export function gateCommandPowerShell(bin: GateBin, format: string): string {
-  const exe = bin === "axiom" ? "axiom.cmd" : "axiom-hook.exe";
-  return `${exe} gate --stdin --format ${format}; exit $LASTEXITCODE`;
+  return `${windowsExe(bin)} gate --stdin --format ${format}; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }`;
+}
+
+/** POSIX twin of {@link gateCommandPowerShell}: `command not found` (127) or a crash → exit 2. */
+export function gateCommandBash(bin: GateBin, format: string): string {
+  return `${gateCommand(bin, format)}; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc`;
+}
+
+/**
+ * Codex `commandWindows` / TOML `command_windows`: the shim/exe and nothing else. Codex does not
+ * run it through `powershell -Command`, so a `; exit $LASTEXITCODE` suffix became arguments of
+ * the gate (usage error → no verdict).
+ */
+export function gateCommandWindows(bin: GateBin, format: string): string {
+  return `${windowsExe(bin)} gate --stdin --format ${format}`;
 }
 
 /**
@@ -163,6 +203,10 @@ export function gatePostCommand(format: string): string {
 
 export function gatePostCommandPowerShell(format: string): string {
   return `axiom.cmd gate --stdin --post --format ${format}; exit $LASTEXITCODE`;
+}
+
+export function gatePostCommandWindows(format: string): string {
+  return `axiom.cmd gate --stdin --post --format ${format}`;
 }
 
 /** First global bin that understands `axiom gate --post` (older gates reject the flag). */
@@ -190,7 +234,7 @@ export function copilotHook(bin: GateBin = "axiom"): Record<string, unknown> {
         {
           type: "command",
           command: gateCommand(bin, "auto"),
-          bash: gateCommand(bin, "auto"),
+          bash: gateCommandBash(bin, "auto"),
           powershell: gateCommandPowerShell(bin, "auto"),
           timeoutSec: HOOK_TIMEOUT_SEC,
         },
@@ -293,16 +337,17 @@ export function cursorHooks(bin: GateBin = "axiom"): Record<string, unknown> {
   };
 }
 
+/** Windsurf/Devin pre-hooks AXIOM wires; `pre_mcp_tool_use` gates MCP write tools too. */
+export const WINDSURF_EVENTS = ["pre_write_code", "pre_run_command", "pre_mcp_tool_use"] as const;
+
 export function windsurfHooks(bin: GateBin = "axiom"): Record<string, unknown> {
-  const command = gateCommand(bin, "windsurf");
-  // Only exit 2 blocks in Windsurf/Devin; on Windows the command runs via `powershell -Command`.
-  const powershell = gateCommandPowerShell(bin, "windsurf");
-  return {
-    hooks: {
-      pre_write_code: [{ command, powershell }],
-      pre_run_command: [{ command, powershell }],
-    },
-  };
+  // Only exit 2 blocks in Windsurf/Devin: `command` runs via `bash -c`, `powershell` via
+  // `powershell -Command` — both map a crash / missing node to 2.
+  const entry = () => ({
+    command: gateCommandBash(bin, "windsurf"),
+    powershell: gateCommandPowerShell(bin, "windsurf"),
+  });
+  return { hooks: Object.fromEntries(WINDSURF_EVENTS.map((e) => [e, [entry()]])) };
 }
 
 /**
@@ -320,7 +365,7 @@ export function codexHookEntry(bin: GateBin = "axiom"): Record<string, unknown> 
       {
         type: "command",
         command,
-        commandWindows: gateCommandPowerShell(bin, "codex"),
+        commandWindows: gateCommandWindows(bin, "codex"),
         timeout: 10,
         statusMessage: "AXIOM gate",
       },
@@ -336,13 +381,40 @@ export function codexPostHookEntry(): Record<string, unknown> {
       {
         type: "command",
         command: gatePostCommand("codex"),
-        commandWindows: gatePostCommandPowerShell("codex"),
+        commandWindows: gatePostCommandWindows("codex"),
         timeout: 10,
         statusMessage: "AXIOM post-write check",
       },
     ],
   };
 }
+
+/**
+ * Kiro (kiro.dev/docs/hooks): `.kiro/hooks/<id>.json`, `{version:"v1", hooks:[…]}`. PreToolUse
+ * blocks on ANY non-zero exit (stderr goes to the agent), so `--format kiro` = no stdout, reason
+ * on stderr, exit 2 on deny — and a crash blocks too. `write` / `shell` are Kiro's built-in tool
+ * categories (each matcher entry is also a regex over tool ids); `@mcp` gates MCP tools.
+ */
+export const KIRO_MATCHER = "write|shell|@mcp";
+
+export function kiroHooks(bin: GateBin = "axiom"): Record<string, unknown> {
+  return {
+    version: "v1",
+    hooks: [
+      {
+        name: "axiom-gate",
+        description: "AXIOM write gate (axiom init)",
+        trigger: "PreToolUse",
+        matcher: KIRO_MATCHER,
+        action: { type: "command", command: gateCommand(bin, "kiro") },
+        timeout: HOOK_TIMEOUT_SEC,
+      },
+    ],
+  };
+}
+
+/** OpenCode loads every file in `.opencode/plugins/`; the plugin source lives in assets/. */
+export const OPENCODE_PLUGIN = OPENCODE_PLUGIN_JS;
 
 export function geminiHookEntry(bin: GateBin = "axiom"): Record<string, unknown> {
   return {
@@ -358,14 +430,21 @@ export function geminiHookEntry(bin: GateBin = "axiom"): Record<string, unknown>
   };
 }
 
-/** User-level only (`~/.junie/config.json`): project hooks are ignored by default. */
-export function junieUserHooks(bin: GateBin = "axiom"): Record<string, unknown> {
+/**
+ * User-level only (`~/.junie/config.json`): project hooks are ignored by default. A user hook
+ * serves every project, so the snippet pins `--root` (the payload `cwd` still wins when sent).
+ */
+export function junieUserHooks(bin: GateBin = "axiom", root?: string): Record<string, unknown> {
+  const rootArg =
+    root === undefined ? "" : ` --root ${/[\s"]/.test(root) ? JSON.stringify(root) : root}`;
   return {
     hooks: {
       PreToolUse: [
         {
           matcher: "Write|Edit|Bash",
-          hooks: [{ type: "command", command: gateCommand(bin, "junie"), timeout: 10 }],
+          hooks: [
+            { type: "command", command: `${gateCommand(bin, "junie")}${rootArg}`, timeout: 10 },
+          ],
         },
       ],
     },
@@ -451,7 +530,7 @@ export function profileNameFor(dir: string): string {
 
 export function repoProfile(name: string): Record<string, unknown> {
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: "axiom.codai.ro/v3",
     kind: "Profile",
     name,
     extends: "default",
@@ -483,6 +562,7 @@ export function repoProfile(name: string): Record<string, unknown> {
 }
 
 export const GATE_PROFILE = {
+  version: 3,
   deny: [
     ".git/**",
     ".axiom/**",
@@ -502,6 +582,11 @@ export const GATE_PROFILE = {
   maxBytes: 262144,
   steer: "hint",
   record: true,
+  // 3.0 (D-44): safe by default — the house command pack, and the four irreversible git
+  // operations stay denied in every mode and cannot be overridden.
+  mode: "enforce",
+  commands: { pack: "house" },
+  hard: ["house.forcePush", "house.resetHard", "house.cleanForce", "house.worktreeRemoveForce"],
 };
 
 // ------------------------------------------------- shared with doctor (S-1204) --
@@ -585,13 +670,13 @@ export function defaultBinLocator(): BinLocator {
 export function defaultHealthFetch(timeoutMs = DAEMON_HEALTH_TIMEOUT_MS): HealthFetcher {
   return (state) =>
     new Promise((resolve, reject) => {
-      // daemon.json is user-writable: a tampered host must not receive the bearer token.
+      // daemon.json is user-writable: never talk to a non-loopback host.
       if (!isLoopbackHost(state.host)) {
         reject(new Error(`daemon host ${state.host} is not loopback`));
         return;
       }
+      // Protocol 2: no bearer is ever sent (responses are MAC-signed instead).
       const headers: Record<string, string> = { [H_PROTOCOL]: String(DAEMON_PROTOCOL) };
-      if (state.token !== undefined) headers.authorization = `Bearer ${state.token}`;
       const req = request(
         { host: state.host, port: state.port, path: HEALTH_PATH, method: "GET", headers },
         (res) => {
@@ -662,6 +747,8 @@ const HARNESS_MARKERS: readonly [string, HarnessName][] = [
   [".gemini", "gemini"],
   [".junie", "junie"],
   [".clinerules", "cline"],
+  [".kiro", "kiro"],
+  [".opencode", "opencode"],
 ];
 
 async function isDir(root: string, rel: string): Promise<boolean> {
@@ -694,17 +781,37 @@ function json(v: unknown): string {
 
 class Writer {
   readonly files: InitFileResult[] = [];
+  /** Dry run: every write that WOULD happen, in order (current text → new text). */
+  readonly planned: { path: string; before: string | undefined; after: string }[] = [];
   private readonly root: string;
   private readonly force: boolean;
-  constructor(root: string, force: boolean) {
+  private readonly dry: boolean;
+  constructor(root: string, force: boolean, dry = false) {
     this.root = root;
     this.force = force;
+    this.dry = dry;
   }
 
   private async write(rel: string, text: string, mode?: "0644" | "0755"): Promise<void> {
     // Contained: rejects a symlink/junction segment (ERR_SYMLINK_IN_PATH) or an escape.
     const { abs } = await resolveContained(this.root, rel);
+    if (this.dry) {
+      this.planned.push({ path: rel, before: await readOrUndefined(abs), after: text });
+      return;
+    }
     await writeAtomic(abs, new TextEncoder().encode(text), mode);
+  }
+
+  /** Unified diff of the planned writes (dry run). */
+  diff(): string {
+    const enc = new TextEncoder();
+    return unifiedDiff(
+      this.planned.map((p) => ({
+        path: p.path,
+        before: p.before === undefined ? undefined : enc.encode(p.before),
+        after: enc.encode(p.after),
+      })),
+    );
   }
 
   private record(rel: string, action: InitAction, reason?: string): void {
@@ -726,6 +833,12 @@ class Writer {
     } else {
       this.record(rel, "skipped", "exists");
     }
+  }
+
+  /** Dry run into a directory that does not exist yet: every file would be created. */
+  planCreate(rel: string, text: string): void {
+    this.planned.push({ path: rel, before: undefined, after: text });
+    this.record(rel, "created");
   }
 
   /**
@@ -1025,7 +1138,7 @@ async function wireCursor(w: Writer, wire: HarnessWiring): Promise<void> {
 async function wireWindsurf(w: Writer, root: string, wire: HarnessWiring): Promise<string> {
   const rel = (await isDir(root, ".devin")) ? INIT_FILES.devinHooks : INIT_FILES.windsurfHooks;
   const fresh = windsurfHooks(wire.bin);
-  await w.mergeJson(rel, () => fresh, flatEditor(fresh, ["pre_write_code", "pre_run_command"]));
+  await w.mergeJson(rel, () => fresh, flatEditor(fresh, WINDSURF_EVENTS));
   return rel;
 }
 
@@ -1073,6 +1186,14 @@ async function wireCline(w: Writer, wire: HarnessWiring): Promise<void> {
   await w.owned(INIT_FILES.clineHookPs1, clineHookPs1(wire.bin));
 }
 
+async function wireKiro(w: Writer, wire: HarnessWiring): Promise<void> {
+  await w.owned(INIT_FILES.kiroHook, json(kiroHooks(wire.bin)));
+}
+
+async function wireOpencode(w: Writer): Promise<void> {
+  await w.owned(INIT_FILES.opencodePlugin, OPENCODE_PLUGIN);
+}
+
 function checkProfileName(profile: string): void {
   if (!ProfileNameSchema.safeParse(profile).success || BUILTIN_PROFILE_NAMES.has(profile)) {
     throw new AxiomError(
@@ -1091,7 +1212,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const profile = opts.profileName ?? profileNameFor(root);
   checkProfileName(profile);
   if (opts.upgrade === true) return runUpgrade(opts, root, harnesses, profile);
-  const w = new Writer(root, opts.force === true);
+  const w = new Writer(root, opts.force === true, opts.dryRun === true);
   const notes: string[] = [];
   const daemon = opts.daemon === true;
   const wire: HarnessWiring = { bin: daemon ? "axiom-hook" : "axiom", daemon, post: true };
@@ -1142,13 +1263,25 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   if (has("junie")) {
     await wireJunie(w);
     notes.push(
-      `junie: hooks run only in Junie CLI and only from the USER config ~/.junie/config.json (the IDE plugin runs none) — merge ${JSON.stringify(junieUserHooks(wire.bin))}`,
+      `junie: hooks run only in Junie CLI and only from the USER config ~/.junie/config.json (the IDE plugin runs none) — merge ${JSON.stringify(junieUserHooks(wire.bin, root))}`,
     );
   }
   if (has("cline")) {
     await wireCline(w, wire);
     notes.push(
       'cline: tick "Enable Hooks" in Cline settings; Cline has no project MCP file — add "axiom" in the Cline MCP settings',
+    );
+  }
+  if (has("kiro")) {
+    await wireKiro(w, wire);
+    notes.push(
+      `kiro: ${INIT_FILES.kiroHook} gates the write, shell and MCP tool categories (PreToolUse blocks on any non-zero exit, so a crashed gate blocks too); add "axiom" to .kiro/settings/mcp.json by hand`,
+    );
+  }
+  if (has("opencode")) {
+    await wireOpencode(w);
+    notes.push(
+      `opencode: ${INIT_FILES.opencodePlugin} runs \`axiom gate --format claude\` before every tool and throws on deny (15 s timeout = deny); add "axiom" under "mcp" in opencode.json by hand`,
     );
   }
   await w.owned(`.axiom/profiles/${profile}.json`, json(repoProfile(profile)));
@@ -1173,7 +1306,25 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   } else {
     notes.push("hooks call the global bin: npm install -g @codai/axiom-mcp (never npx in a hook)");
   }
-  return { root, harnesses, profile, files: w.files, notes };
+  return finish(w, { root, harnesses, profile, files: w.files, notes }, opts);
+}
+
+/** Attach the dry-run diff (and its note) when nothing was written. */
+function finish(w: Writer, r: InitResult, opts: InitOptions): InitResult {
+  if (opts.dryRun !== true) return r;
+  return {
+    ...r,
+    notes: [
+      ...r.notes,
+      "dry run: nothing was written; the diff shows every change init would make",
+    ],
+    diff: w.diff(),
+  };
+}
+
+/** I-19 `axiom init --dry-run`: the same computation as {@link runInit}, nothing written. */
+export function initDryRun(opts: Omit<InitOptions, "dryRun">): Promise<InitResult> {
+  return runInit({ ...opts, dryRun: true });
 }
 
 // ------------------------------------------------------------- upgrade (S-1204) --
@@ -1421,7 +1572,7 @@ async function runUpgrade(
     daemonUp,
     skipped: { npx: false },
   };
-  const w = new Writer(root, false);
+  const w = new Writer(root, false, opts.dryRun === true);
   const notes: string[] = [];
 
   await w.upgradeJson(INIT_FILES.mcp, (doc) =>
@@ -1466,9 +1617,7 @@ async function runUpgrade(
     upgradeMcpEntry(doc, "mcpServers", ctx.binPresent, ctx.skipped),
   );
   for (const rel of [INIT_FILES.devinHooks, INIT_FILES.windsurfHooks]) {
-    await w.upgradeJson(rel, (doc) =>
-      upgradeFlatDoc(doc, ctx, ["pre_write_code", "pre_run_command"]),
-    );
+    await w.upgradeJson(rel, (doc) => upgradeFlatDoc(doc, ctx, WINDSURF_EVENTS));
   }
   await w.upgradeJson(INIT_FILES.geminiSettings, (doc) => [
     ...upgradeNestedDoc(doc, ctx, { pre: "BeforeTool" }),
@@ -1515,7 +1664,7 @@ async function runUpgrade(
   if (!daemonUp) {
     notes.push("upgrade: no resident daemon answering — hook commands keep the axiom bin");
   }
-  return { root, harnesses, profile, files: w.files, notes };
+  return finish(w, { root, harnesses, profile, files: w.files, notes }, opts);
 }
 
 // ------------------------------------------------------------- managed (S-1207) --
@@ -1573,13 +1722,13 @@ export function codexRequirementsToml(): string {
     ...hook(
       "PreToolUse",
       gateCommand("axiom", "codex"),
-      gateCommandPowerShell("axiom", "codex"),
+      gateCommandWindows("axiom", "codex"),
       "AXIOM gate",
     ),
     ...hook(
       "PostToolUse",
       gatePostCommand("codex"),
-      gatePostCommandPowerShell("codex"),
+      gatePostCommandWindows("codex"),
       "AXIOM post-write check",
     ),
     "",
@@ -1612,15 +1761,28 @@ export const VSCODE_POLICY_MD = [
 
 async function runManaged(opts: InitOptions, out: string): Promise<InitResult> {
   const abs = path.resolve(out);
-  await mkdir(abs, { recursive: true });
-  const root = await realDir(abs, "ERR_ROOT_NOT_DIR");
-  const w = new Writer(root, opts.force === true);
+  const dry = opts.dryRun === true;
+  const missing =
+    dry &&
+    !(await stat(abs).then(
+      (s) => s.isDirectory(),
+      () => false,
+    ));
+  if (!dry) await mkdir(abs, { recursive: true });
+  const root = missing ? abs : await realDir(abs, "ERR_ROOT_NOT_DIR");
+  const w = new Writer(root, opts.force === true, dry);
   const copilot = copilotHook("axiom");
-  await w.owned(MANAGED_FILES.claude, json(claudeManagedSettings()));
-  await w.owned(MANAGED_FILES.codex, codexRequirementsToml());
-  await w.owned(MANAGED_FILES.cursor, json(cursorHooks("axiom")));
-  await w.owned(MANAGED_FILES.copilot, json(copilot));
-  await w.owned(MANAGED_FILES.vscode, VSCODE_POLICY_MD);
+  const files: [string, string][] = [
+    [MANAGED_FILES.claude, json(claudeManagedSettings())],
+    [MANAGED_FILES.codex, codexRequirementsToml()],
+    [MANAGED_FILES.cursor, json(cursorHooks("axiom"))],
+    [MANAGED_FILES.copilot, json(copilot)],
+    [MANAGED_FILES.vscode, VSCODE_POLICY_MD],
+  ];
+  for (const [rel, text] of files) {
+    if (missing) w.planCreate(rel, text);
+    else await w.owned(rel, text);
+  }
   const notes = [
     `claude: install ${MANAGED_FILES.claude} as managed-settings.json in /Library/Application Support/ClaudeCode/ (macOS), /etc/claude-code/ (Linux/WSL) or C:\\Program Files\\ClaudeCode\\ (Windows — C:\\ProgramData\\ClaudeCode is no longer read)`,
     `codex: install ${MANAGED_FILES.codex} as /etc/codex/requirements.toml (Linux/macOS) or %ProgramData%\\OpenAI\\Codex\\requirements.toml (Windows)`,
@@ -1629,11 +1791,6 @@ async function runManaged(opts: InitOptions, out: string): Promise<InitResult> {
     `vscode: ${MANAGED_FILES.vscode} lists the organisation policies to set (ChatHooks, ChatToolsAutoApprove, …)`,
     "every managed hook calls the global bin: npm install -g @codai/axiom-mcp on each machine",
   ];
-  return {
-    root,
-    harnesses: ["claude", "codex", "cursor", "copilot", "vscode"],
-    profile: "",
-    files: w.files,
-    notes,
-  };
+  const harnesses: HarnessName[] = ["claude", "codex", "cursor", "copilot", "vscode"];
+  return finish(w, { root, harnesses, profile: "", files: w.files, notes }, opts);
 }

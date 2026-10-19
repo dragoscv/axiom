@@ -12,9 +12,11 @@ applied (anti-rollback). Nothing about `manifestDigest` changes when a bundle is
 
 ```mermaid
 flowchart LR
+  accTitle: Signing and verification flow
+  accDescr: A signer produces a DSSE envelope over the manifest and the verifier checks it against the trust store and anti-rollback counter.
   subgraph signer [Signer — CI or operator]
     K[private key<br/>AXIOM_SIGNING_KEY · --key-file]
-    B[bundle.json] --> S[axiom sign]
+    B[bundle.json] --> S[axiom keys sign]
     K --> S
     S --> SB["bundle + signatures<br/>manifestDigest unchanged"]
   end
@@ -36,7 +38,7 @@ What signing defends against:
 | An agent, a compromised harness, or a person edits a manifest *after* it was reviewed/produced by the trusted pipeline | Every byte of the canonical body is under the signature. Any change → `signature.bad` / `signature.notCanonical`; `apply` refuses (`ERR_CHECKS_FAILED`). |
 | A bundle signed by a key the root does not know | `signature.unknownKey`. Keys are an explicit per-root allowlist (`keys.json`); there is no "any valid key" mode. |
 | Replaying an **older**, legitimately signed bundle to undo a newer one | `antiRollback`: the body carries a monotonic `counter`; the root remembers `lastCounter` and rejects `counter ≤ lastCounter` (`signature.rollback`). |
-| A leaked private key | Remove its entry from `keys.json` (`axiom trust remove`). `notBefore` on a new key lets you refuse counters that predate its issuance. |
+| A leaked private key | Remove its entry from `keys.json` (`axiom keys trust remove`). `notBefore` on a new key lets you refuse counters that predate its issuance. |
 | Signature presence used as proof of review | Presence is *not* verification: `facts.manifest.signed` only says "has envelopes"; `manifest.requireSigned` is what verifies. |
 
 What it deliberately does **not** defend against:
@@ -45,7 +47,7 @@ What it deliberately does **not** defend against:
   manifest is root-relative by design, so one signed bundle may legitimately be applied to
   several clones). A bundle signed for repo A is then a valid signed bundle for repo B if B
   trusts the same key. **S-409 closes this when you opt in**: set a `rootId` on the trust
-  store (`axiom trust root-id github:org/repo --root .`) and sign with `--root-id`; the
+  store (`axiom keys trust root-id github:org/repo --root .`) and sign with `--root-id`; the
   store then accepts only envelopes bound to that id (see *Root-bound signatures*).
 - **Key compromise before revocation.** Whatever the key signs until you remove it is
   trusted.
@@ -99,7 +101,7 @@ The in-toto attestation (`bundle.attestation` / `bundle.envelope`,
   ```
 
   `name` is a label; `notBefore` (optional) is the lowest `counter` the key may sign for;
-  `minCounter` (optional) is the floor used before any state exists. `axiom trust add`
+  `minCounter` (optional) is the floor used before any state exists. `axiom keys trust add`
   re-derives the `keyid` from `publicKey` and refuses entries where they disagree.
 
 - Anti-rollback state — `<root>/.axiom/trust/state.json`:
@@ -118,7 +120,7 @@ The in-toto attestation (`bundle.attestation` / `bundle.envelope`,
   - `--key-file <path>` — same formats (wins over the env var).
 
   They are never written under a root, never stored in the trust store and never printed.
-  `axiom keygen` writes the private key to a file with mode `0600` and prints only the
+  `axiom keys gen` writes the private key to a file with mode `0600` and prints only the
   public entry and the file path.
 
 ## Root-bound signatures (S-409)
@@ -138,10 +140,10 @@ equal `manifestDigest` (transplanting a bound envelope onto another manifest is
 `signature.bad`), then compares `rootId` to the store's before checking the Ed25519 signature.
 
 ```sh
-axiom trust root-id github:dragoscv/brivio --root /repo     # bind the store (idempotent)
-axiom trust root-id --root /repo                            # show
-axiom sign bundle.json --key-file k.key --root-id github:dragoscv/brivio
-axiom trust root-id --clear --root /repo                    # back to "any"
+axiom keys trust root-id github:dragoscv/brivio --root /repo     # bind the store (idempotent)
+axiom keys trust root-id --root /repo                            # show
+axiom keys sign bundle.json --key-file k.key --root-id github:dragoscv/brivio
+axiom keys trust root-id --clear --root /repo                    # back to "any"
 ```
 
 When the same manifest must be applied to several roots, sign it once per root (the
@@ -157,23 +159,23 @@ the predicate and the CLI/MCP refuse a `state.json` whose MAC is missing or wron
 `state.json` but not read `state.key` can no longer lower `lastCounter` to replay an old
 bundle. Roots without a `state.key` (created before 2.2) keep working unauthenticated until
 their next apply creates one. Protect `state.key` like the trust store itself; never commit
-it. `axiom trust reset` style removal of `state.json` keeps the key.
+it. `axiom keys trust reset` style removal of `state.json` keeps the key.
 
 ## CI key ceremony
 
 The private key must never exist on a developer machine that also runs the agent.
 
-1. On a clean runner (or an ephemeral container): `axiom keygen --out ./k --name ci-<repo>`.
+1. On a clean runner (or an ephemeral container): `axiom keys gen --out ./k --name ci-<repo>`.
    Copy the **file contents** into a GitHub **repository secret** `AXIOM_SIGNING_KEY`
    (Settings → Secrets and variables → Actions), then delete `./k`. The public entry
    (`publicEntry` on stdout) is the only thing that leaves the runner.
-2. Commit the public entry: `axiom trust add ci-pub.json --root .` and, if you want binding,
-   `axiom trust root-id github:<owner>/<repo> --root .`. Commit `.axiom/trust/keys.json`; never
+2. Commit the public entry: `axiom keys trust add ci-pub.json --root .` and, if you want binding,
+   `axiom keys trust root-id github:<owner>/<repo> --root .`. Commit `.axiom/trust/keys.json`; never
    commit `state.json`, `state.key` or any `*.key`.
 3. In the signing job:
 
    ```yaml
-   - run: axiom sign bundle.json --root-id github:${{ github.repository }}
+   - run: axiom keys sign bundle.json --root-id github:${{ github.repository }}
      env:
        AXIOM_SIGNING_KEY: ${{ secrets.AXIOM_SIGNING_KEY }}
    ```
@@ -234,7 +236,7 @@ manifest hash). AXIOM keeps only the monotonic rule and makes it strict:
 
 Provider errors (`verdict: error`, never pass): no root, trust file missing
 (`ERR_NOT_FOUND`), unreadable/invalid trust file (`ERR_PROVIDER_FAILED`), corrupt
-`state.json` (`ERR_TRUST_STATE_CORRUPT`). `axiom verify --root` / `axiom_manifest_verify`
+`state.json` (`ERR_TRUST_STATE_CORRUPT`). `axiom plan verify --root` / `axiom_manifest_verify`
 report `signatures.code`: `ERR_SIGNATURE_MISSING` when the bundle carries no signature
 at all, `ERR_SIGNATURE_INVALID` for every other failure.
 
@@ -242,35 +244,35 @@ at all, `ERR_SIGNATURE_INVALID` for every other failure.
 
 ```sh
 # 1. Generate a signing key (once, on the machine/CI that signs)
-axiom keygen --out ./secrets --name ci > ci-pub.json
+axiom keys gen --out ./secrets --name ci > ci-pub.json
 #   → stdout: { "publicEntry": {keyid, alg, publicKey, name}, "privateKeyFile": "./secrets/axiom-signing-<id>.key" }
 #   the .key file is mode 0600 and is the ONLY copy of the private key
 
 # 2. Pin the public key in the target repo
-axiom trust add ci-pub.json --root /repo
-axiom trust list --root /repo
+axiom keys trust add ci-pub.json --root /repo
+axiom keys trust list --root /repo
 
 # 3. Compile a plan that carries a counter, then sign
-axiom compile plan.json -o bundle.json            # plan.json has "counter": 42
-axiom sign bundle.json --key-file ./secrets/axiom-signing-<id>.key
-#   or:  AXIOM_SIGNING_KEY=<base64> axiom sign bundle.json -o signed.json
+axiom plan compile plan.json -o bundle.json            # plan.json has "counter": 42
+axiom keys sign bundle.json --key-file ./secrets/axiom-signing-<id>.key
+#   or:  AXIOM_SIGNING_KEY=<base64> axiom keys sign bundle.json -o signed.json
 
 # 4. Verify (structure + signatures against the root's trust store)
-axiom verify bundle.json --root /repo
+axiom plan verify bundle.json --root /repo
 #   → { ok, signed: true, signatures: { trustFile, keyids: [...], findings: [], ok: true } }
 
 # 5. Enforce at apply time with a profile that requires it
-#   /repo/.axiom/profiles/signed.json:
-#   { "apiVersion":"axiom.dev/v2","kind":"Profile","name":"signed",
+#   a profile "signed" (in /repo/.axiom/axiom.json, or the 2.x /repo/.axiom/profiles/signed.json):
+#   { "apiVersion":"axiom.codai.ro/v3","kind":"Profile","name":"signed",
 #     "checks":[{"id":"manifest.requireSigned","predicate":"manifest.requireSigned",
 #                "params":{"antiRollback":true},"severity":"error"}] }
-axiom check bundle.json --root /repo --profile signed
-axiom apply bundle.json --root /repo --profile signed --confirm sha256:<digest>
+axiom plan check bundle.json --root /repo --profile signed
+axiom plan apply bundle.json --root /repo --profile signed --confirm sha256:<digest>
 #   → applied; .axiom/trust/state.json now has lastCounter: 42
 #   re-applying any bundle with counter ≤ 42 → signature.rollback → ERR_CHECKS_FAILED
 
 # Revoke
-axiom trust remove <keyid> --root /repo
+axiom keys trust remove <keyid> --root /repo
 ```
 
 Over MCP, `axiom_manifest_verify { bundle, root }` reports the same `signatures` block and
@@ -284,15 +286,15 @@ identity (issuer + subject — for GitHub Actions, the workflow file and ref), a
 logged in Rekor. The root then pins the *identity* instead of a key.
 
 ```sh
-axiom sign bundle.json --keyless [-o signed.json]                  # unbound payload
-axiom sign bundle.json --keyless --bound --root /repo              # root-bound: rootId from the root's trust store
-axiom sign bundle.json --keyless --root-id github:<owner>/<repo>   # root-bound, id given explicitly
+axiom keys sign bundle.json --keyless [-o signed.json]                  # unbound payload
+axiom keys sign bundle.json --keyless --bound --root /repo              # root-bound: rootId from the root's trust store
+axiom keys sign bundle.json --keyless --root-id github:<owner>/<repo>   # root-bound, id given explicitly
 ```
 
 - The payload is the **same bytes** as the Ed25519 path: `JCS(manifest)`, or
   `JCS({ manifest, rootId })` with payload type `application/vnd.axiom.manifest-bound+json` when
   bound. `--bound` without `--root-id` reads `rootId` from `.axiom/trust/keys.json`
-  (`axiom trust root-id <id>` first); `--root` is only valid with `--bound`; `--key-file` is
+  (`axiom keys trust root-id <id>` first); `--root` is only valid with `--bound`; `--key-file` is
   refused.
 - The Sigstore bundle is appended to `bundle.keylessSignatures[]`, beside `signatures[]` and
   outside the canonical body — `manifestDigest` does not change. The CLI prints
@@ -311,7 +313,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: npm i -g @codai/axiom-mcp
-      - run: axiom sign bundle.json --keyless --root-id github:${{ github.repository }}
+      - run: axiom keys sign bundle.json --keyless --root-id github:${{ github.repository }}
 ```
 
 ### Signer identity policy

@@ -14,6 +14,7 @@ import { axmParser } from "./parser.js";
 export { AXM_VERSION } from "./compile.js";
 export type { Diagnostic, Position, Range } from "./diagnostics.js";
 export { formatAxm, hereDocTerminator } from "./format.js";
+export { KEYWORD_IMAGES } from "./lexer.js";
 
 export interface ParseResult {
   /** Present only when there are no error diagnostics. */

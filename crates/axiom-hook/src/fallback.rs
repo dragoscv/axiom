@@ -5,8 +5,20 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub const ENV_OVERRIDE: &str = "AXIOM_HOOK_FALLBACK";
+/// Deadline for the fallback `axiom gate` (ms, 100..=600000); default 10 s.
+pub const ENV_TIMEOUT: &str = "AXIOM_HOOK_FALLBACK_TIMEOUT_MS";
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub fn timeout() -> Duration {
+    std::env::var(ENV_TIMEOUT)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|ms| (100..=600_000).contains(ms))
+        .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
+}
 const CLI_REL: [&str; 5] = ["node_modules", "@codai", "axiom-mcp", "dist", "cli.js"];
 
 /// How to start the full gate: `program` + leading args, then `gate <args…>`.
@@ -105,8 +117,14 @@ pub fn discover(override_path: Option<OsString>, path_var: Option<OsString>) -> 
     None
 }
 
-/// Run the fallback; `None` when it could not be started or died without an exit code.
-pub fn run(launcher: &Launcher, args: &[String], stdin_bytes: Vec<u8>) -> Option<i32> {
+/// Run the fallback; `None` when it could not be started, died without an exit code, or did not
+/// finish within `deadline` (then it is killed — the caller fails closed).
+pub fn run(
+    launcher: &Launcher,
+    args: &[String],
+    stdin_bytes: Vec<u8>,
+    deadline: Duration,
+) -> Option<i32> {
     let mut child = Command::new(&launcher.program)
         .args(&launcher.lead)
         .arg("gate")
@@ -121,9 +139,21 @@ pub fn run(launcher: &Launcher, args: &[String], stdin_bytes: Vec<u8>) -> Option
     let writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&stdin_bytes);
     });
-    let status = child.wait().ok()?;
-    let _ = writer.join();
-    status.code()
+    let until = Instant::now() + deadline;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = writer.join();
+                return status.code();
+            }
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None; // the writer thread may still be blocked on a full pipe: detach it
+            }
+        }
+    }
 }
 
 #[cfg(test)]

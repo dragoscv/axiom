@@ -218,7 +218,11 @@ function runGuard(sb, command) {
     child.on("error", reject);
     child.on("close", (code) => {
       const deny = code === 2 || /"permissionDecision"\s*:\s*"deny"/.test(out);
-      resolve(deny ? "deny" : "allow");
+      // Since 2026-10-19 the guard is warn-by-default: a rule that fires answers allow + a
+      // "WARNING (allowed) - flagged by" context. That is the same judgement as a deny, in the
+      // relaxed mode — AXIOM's warn records are counted as would-deny too (D-40).
+      const flagged = /WARNING \(allowed\) - flagged by/.test(out);
+      resolve(deny || flagged ? "deny" : "allow");
     });
     child.stdin.end(payload);
   });

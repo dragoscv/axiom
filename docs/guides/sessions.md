@@ -8,7 +8,8 @@ session is about to overwrite content it has never seen.
 
 ## Configure
 
-Add a `sessions` block to `.axiom/gate-profile.json`:
+Add a `sessions` block to the gate policy (the `gate` section of `.axiom/axiom.json`, or the
+deprecated `.axiom/gate-profile.json`):
 
 ```json
 {

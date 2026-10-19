@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  checkSessionBudget,
   checkSessionWrite,
   checkStaleScript,
   recordDeniedCreate,
@@ -68,6 +69,78 @@ describe("SessionsConfigSchema", () => {
     });
     expect(SessionsConfigSchema.safeParse({ windowMin: 0 }).success).toBe(false);
     expect(SessionsConfigSchema.safeParse({ extra: 1 }).success).toBe(false);
+  });
+
+  it("budget defaults: windowMin 60, decision ask; strict", () => {
+    expect(SessionsConfigSchema.parse({ budget: { maxFiles: 3 } }).budget).toEqual({
+      maxFiles: 3,
+      windowMin: 60,
+      decision: "ask",
+    });
+    expect(SessionsConfigSchema.safeParse({ budget: { maxFiles: 0 } }).success).toBe(false);
+    expect(SessionsConfigSchema.safeParse({ budget: { extra: 1 } }).success).toBe(false);
+    expect(SessionsConfigSchema.safeParse({ budget: { decision: "warn" } }).success).toBe(false);
+  });
+});
+
+describe("sessions.budget", () => {
+  const target = (rel: string, op: "write" | "delete" = "write"): SessionCtx => ({
+    root: repo.root,
+    sessionId: "A",
+    agentId: "claude:A",
+    tool: "Edit",
+    targets: [{ relPath: rel, op, whole: false }],
+  });
+  async function wrote(rel: string, at: number, op: "write" | "delete" = "write") {
+    await recordSessionWrite({ ...target(rel, op), now: at });
+  }
+
+  it("maxFiles: the (N+1)th distinct file in the window asks with counts; repeats do not count", async () => {
+    const c = cfg({ budget: { maxFiles: 2 } });
+    await wrote("a.txt", T0);
+    await wrote("b.txt", T0 + MIN);
+    expect(await checkSessionWrite({ ...target("a.txt"), now: T0 + 2 * MIN }, c)).toBeUndefined();
+    const v = await checkSessionWrite({ ...target("c.txt"), now: T0 + 2 * MIN }, c);
+    expect(v?.id).toBe("sessions.budget");
+    expect(v?.decision).toBe("ask");
+    expect(v?.reason).toContain("3 distinct files");
+    expect(v?.reason).toContain("max 2");
+    // outside the 60 min window the old writes no longer count
+    expect(await checkSessionWrite({ ...target("c.txt"), now: T0 + 61 * MIN }, c)).toBeUndefined();
+  });
+
+  it("maxDeletes with decision deny; another session has its own budget", async () => {
+    const c = cfg({ budget: { maxDeletes: 1, decision: "deny", windowMin: 10 } });
+    await wrote("a.txt", T0, "delete");
+    const v = await checkSessionWrite({ ...target("b.txt", "delete"), now: T0 + MIN }, c);
+    expect(v).toMatchObject({ id: "sessions.budget", decision: "deny" });
+    expect(v?.reason).toContain("2 files deleted");
+    const other = { ...target("b.txt", "delete"), sessionId: "B", agentId: "claude:B", now: T0 };
+    expect(await checkSessionWrite(other, c)).toBeUndefined();
+    expect(await checkSessionWrite({ ...target("b.txt"), now: T0 + MIN }, c)).toBeUndefined();
+  });
+
+  it("no sessionId / no limits → no opinion; a blind deny outranks a budget ask", async () => {
+    const { sessionId: _s, ...anon } = target("x.txt");
+    expect(
+      await checkSessionWrite({ ...anon, now: T0 }, cfg({ budget: { maxFiles: 1 } })),
+    ).toBeUndefined();
+    const noLimits = { windowMin: 60, decision: "ask" as const };
+    expect(
+      checkSessionBudget({ wrote: {}, deleted: {} }, target("x").targets, noLimits, T0),
+    ).toBeUndefined();
+    await put("a.txt", "v0");
+    await recordSessionWrite(ctx("B", "a.txt", T0));
+    await put("a.txt", "v1");
+    await wrote("z.txt", T0);
+    const c = cfg({ blindOverwrite: "deny", budget: { maxFiles: 1 } });
+    const whole: SessionCtx = {
+      ...target("a.txt"),
+      tool: "Write",
+      targets: [{ relPath: "a.txt", op: "write", whole: true }],
+      now: T0 + MIN,
+    };
+    expect((await checkSessionWrite(whole, c))?.id).toBe("blind.overwrite");
   });
 });
 

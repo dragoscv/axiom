@@ -1,30 +1,6 @@
 /**
- * `@codai/axiom-axm-lsp` — language server for `.axm` (docs/reference/axm-syntax.md "Editor support").
- *
- * The feature functions are pure (text in, LSP structures out) so hosts other than the bundled
- * bin can embed them; `startServer` wires them to a `vscode-languageserver` connection.
+ * `@codai/axiom-axm-lsp` — DEPRECATED since 3.0 (D-45). The language server moved into
+ * `@codai/axiom-axm` (`@codai/axiom-axm/lsp`, bin `axm-lsp`); this package only re-exports it so
+ * existing installs keep working through 3.x. It will not be published for 4.0.
  */
-export {
-  computeCompletions,
-  computeDiagnostics,
-  computeHover,
-  computeSemanticTokens,
-  computeSymbols,
-  DIAGNOSTIC_SOURCE,
-  formatDocument,
-  SEMANTIC_LEGEND,
-  SEMANTIC_TOKEN_TYPES,
-  toLspRange,
-} from "./features.js";
-export { LineIndex, type ScanToken, scan, type TokenKind } from "./scan.js";
-export { startServer } from "./server.js";
-export {
-  CAPABILITIES,
-  KEYWORDS,
-  type KeywordDoc,
-  MODE_VALUES,
-  OP_VALUES,
-  PREDICATE_IDS,
-  PREDICATES,
-  PROFILE_VALUES,
-} from "./vocabulary.js";
+export * from "@codai/axiom-axm/lsp";

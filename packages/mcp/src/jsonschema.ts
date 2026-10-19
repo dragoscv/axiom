@@ -44,7 +44,11 @@ export function jsonSchemaFor(kind: SchemaKind): Record<string, unknown> {
     io: "input",
     unrepresentable: "any",
   });
-  return { $id: `https://axiom.dev/schemas/v2/${kind}.schema.json`, title: kind, ...json };
+  return {
+    $id: `https://dragoscv.github.io/axiom/schemas/v3/${kind}.schema.json`,
+    title: kind,
+    ...json,
+  };
 }
 
 /** Compact JSON Schema for tool input/output (spec/tools.json). */

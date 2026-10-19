@@ -1,5 +1,6 @@
-export type { DigestRef, Sha256Digest } from "./digest.js";
+export type { CanonErrorCode, DigestRef, Sha256Digest } from "./digest.js";
 export {
+  CanonError,
   canonicalDigestRef,
   canonicalHash,
   digestRef,
@@ -51,9 +52,12 @@ export type {
 } from "./statement.js";
 export {
   AGENT_DECISION_V0_1,
+  AGENT_DECISION_V0_1_LEGACY,
   AXIOM_APPLY_ATTESTATION_V1,
+  AXIOM_APPLY_ATTESTATION_V1_LEGACY,
   AXIOM_BUILD_TYPE,
   AXIOM_BUILDER_ID,
+  AXIOM_SPEC_BASE,
   argsHash,
   buildAgentDecisionStatement,
   buildApplyAttestation,

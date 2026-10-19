@@ -1,11 +1,6 @@
 #!/usr/bin/env node
 /**
- * `axiom-axm-lsp` bin. Transport is picked by `vscode-languageserver` from argv:
- * `--stdio` (default for generic editors) or `--node-ipc` (what the VS Code client passes).
+ * `axiom-axm-lsp` bin — DEPRECATED since 3.0 (D-45): forwards to the `axm-lsp` bin of
+ * `@codai/axiom-axm` (`@codai/axiom-axm/lsp/main`). Same argv handling (`--stdio` default).
  */
-import { startServer } from "./server.js";
-
-if (!process.argv.some((a) => a === "--stdio" || a === "--node-ipc" || a.startsWith("--socket"))) {
-  process.argv.push("--stdio");
-}
-startServer();
+import "@codai/axiom-axm/lsp/main";

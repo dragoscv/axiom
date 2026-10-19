@@ -1,10 +1,18 @@
 //! One `POST /v1/gate` round-trip to the resident daemon over loopback HTTP/1.1.
+//!
+//! Protocol 2: every request carries a fresh `x-axiom-nonce`; a verdict counts only when its
+//! `x-axiom-mac` equals `hex(HMAC-SHA256(key, nonce "\n" exit "\n" sha256hex(body)))`, the body is
+//! framed (Content-Length or chunked — a close-delimited body may be truncated) and the exit code
+//! is 0, 1 or 2. No bearer token is sent.
 
 use crate::pct;
+use crate::sha;
 use crate::state::{DAEMON_PROTOCOL, DaemonState};
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 /// DAEMON_CLIENT_TIMEOUT_MS in daemon-proto.ts.
@@ -29,12 +37,73 @@ pub struct Verdict {
     pub exit: i32,
 }
 
+/// A parsed 200 before authentication.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answer {
+    pub verdict: Verdict,
+    pub mac: Option<String>,
+}
+
+/// Result of one round trip.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// Authenticated verdict.
+    Verdict(Verdict),
+    /// No verdict (unreachable, timeout, non-200, garbage, unframed): fall back.
+    NoVerdict,
+    /// A well-formed 200 whose MAC does not verify: someone else answered. Fall back (or deny
+    /// under `AXIOM_GATE_DAEMON_STRICT=1`).
+    Untrusted,
+}
+
+/// 32 hex chars, unique per call. Not secret: it only has to make a recorded answer useless.
+/// `RandomState` keys come from the OS RNG (then differ per instance); mixed with time + pid.
+pub fn nonce() -> String {
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut out = [0u8; 16];
+    for (i, half) in out.chunks_exact_mut(8).enumerate() {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u128(t);
+        h.write_u32(std::process::id());
+        h.write_usize(i);
+        half.copy_from_slice(&h.finish().to_le_bytes());
+    }
+    sha::hex(&out)
+}
+
+pub fn expected_mac(key: &[u8], nonce: &str, exit: i32, body: &[u8]) -> String {
+    let msg = format!("{nonce}\n{exit}\n{}", sha::hex(&sha::sha256(body)));
+    sha::hex(&sha::hmac_sha256(key, msg.as_bytes()))
+}
+
+/// Authenticate a parsed answer against our nonce.
+pub fn authenticate(state: &DaemonState, nonce: &str, a: Answer) -> Outcome {
+    let Some(mac) = a.mac.as_deref().and_then(sha::unhex) else {
+        return Outcome::Untrusted;
+    };
+    let want = sha::unhex(&expected_mac(
+        &state.key,
+        nonce,
+        a.verdict.exit,
+        &a.verdict.stdout,
+    ))
+    .unwrap_or_default();
+    if state.key.len() == 32 && sha::ct_eq(&want, &mac) {
+        Outcome::Verdict(a.verdict)
+    } else {
+        Outcome::Untrusted
+    }
+}
+
 pub fn build_request(
-    state: &DaemonState,
     host_header: &str,
     args: &[String],
     cwd: &str,
     stdin_status: &str,
+    nonce: &str,
     body: &[u8],
 ) -> Vec<u8> {
     let mut target = String::from("/v1/gate");
@@ -43,18 +112,11 @@ pub fn build_request(
         target.push_str("a=");
         target.push_str(&pct::encode_component(a));
     }
-    let mut head = format!(
-        "POST {target} HTTP/1.1\r\nhost: {host_header}\r\nx-axiom-protocol: {DAEMON_PROTOCOL}\r\nx-axiom-cwd: {}\r\nx-axiom-stdin: {stdin_status}\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n",
+    let head = format!(
+        "POST {target} HTTP/1.1\r\nhost: {host_header}\r\nx-axiom-protocol: {DAEMON_PROTOCOL}\r\nx-axiom-nonce: {nonce}\r\nx-axiom-cwd: {}\r\nx-axiom-stdin: {stdin_status}\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
         pct::encode_header(cwd),
         body.len()
     );
-    if let Some(token) = &state.token {
-        // A token with CR/LF would let a tampered state file inject headers: refuse to send it.
-        if !token.contains(['\r', '\n']) {
-            head.push_str(&format!("authorization: Bearer {token}\r\n"));
-        }
-    }
-    head.push_str("\r\n");
     let mut req = head.into_bytes();
     req.extend_from_slice(body);
     req
@@ -84,8 +146,8 @@ fn dechunk(mut b: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Parse a complete HTTP/1.1 response. `None` = no verdict (non-200, missing/invalid exit
-/// header, truncated body, garbage).
-pub fn parse_response(raw: &[u8]) -> Option<Verdict> {
+/// header — only 0, 1, 2 —, unframed or truncated body, garbage). The MAC is checked separately.
+pub fn parse_response(raw: &[u8]) -> Option<Answer> {
     let split = find(raw, b"\r\n\r\n")?;
     let head = std::str::from_utf8(&raw[..split]).ok()?;
     let mut rest = &raw[split + 4..];
@@ -97,6 +159,7 @@ pub fn parse_response(raw: &[u8]) -> Option<Verdict> {
     }
     let mut exit: Option<i32> = None;
     let mut stderr = String::new();
+    let mut mac: Option<String> = None;
     let mut content_length: Option<usize> = None;
     let mut chunked = false;
     for line in lines {
@@ -104,13 +167,15 @@ pub fn parse_response(raw: &[u8]) -> Option<Verdict> {
         let value = value.trim();
         match name.trim().to_ascii_lowercase().as_str() {
             "x-axiom-exit" => {
-                exit = value
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|c| *c <= 255)
-                    .map(i32::from);
+                exit = match value {
+                    "0" => Some(0),
+                    "1" => Some(1),
+                    "2" => Some(2),
+                    _ => None,
+                };
             }
             "x-axiom-stderr" => stderr = pct::decode(value),
+            "x-axiom-mac" => mac = Some(value.to_string()),
             "content-length" => content_length = Some(value.parse().ok()?),
             "transfer-encoding" => chunked = value.to_ascii_lowercase().contains("chunked"),
             _ => {}
@@ -119,19 +184,22 @@ pub fn parse_response(raw: &[u8]) -> Option<Verdict> {
     let exit = exit?;
     let stdout = if chunked {
         dechunk(rest)?
-    } else if let Some(n) = content_length {
+    } else {
+        // No Content-Length → close-delimited: a cut connection is indistinguishable from the end.
+        let n = content_length?;
         if rest.len() < n {
             return None;
         }
         rest = &rest[..n];
         rest.to_vec()
-    } else {
-        rest.to_vec()
     };
-    Some(Verdict {
-        stdout,
-        stderr,
-        exit,
+    Some(Answer {
+        verdict: Verdict {
+            stdout,
+            stderr,
+            exit,
+        },
+        mac,
     })
 }
 
@@ -144,14 +212,28 @@ fn loopback_addrs(state: &DaemonState) -> Vec<SocketAddr> {
         .unwrap_or_default()
 }
 
-/// `None` = no verdict (unreachable, timeout, refused, non-200…): the caller falls back.
 pub fn round_trip(
     state: &DaemonState,
     args: &[String],
     cwd: &str,
     stdin_status: &str,
     body: &[u8],
-) -> Option<Verdict> {
+) -> Outcome {
+    let nonce = nonce();
+    match exchange(state, args, cwd, stdin_status, &nonce, body) {
+        Some(a) => authenticate(state, &nonce, a),
+        None => Outcome::NoVerdict,
+    }
+}
+
+fn exchange(
+    state: &DaemonState,
+    args: &[String],
+    cwd: &str,
+    stdin_status: &str,
+    nonce: &str,
+    body: &[u8],
+) -> Option<Answer> {
     let addr = loopback_addrs(state).into_iter().find_map(|a| {
         TcpStream::connect_timeout(&a, CONNECT_TIMEOUT)
             .ok()
@@ -172,11 +254,11 @@ pub fn round_trip(
     stream.set_write_timeout(remaining()).ok()?;
     stream
         .write_all(&build_request(
-            state,
             &host_header,
             args,
             cwd,
             stdin_status,
+            nonce,
             body,
         ))
         .ok()?;
@@ -197,108 +279,121 @@ pub fn round_trip(
             // so a fully received response can end in ConnectionReset/Aborted instead of EOF.
             // Keep it when it is complete (parse_response requires the full Content-Length or
             // chunked body); anything partial still means "no verdict".
-            Err(_) => return complete_response(&raw),
+            Err(_) => return parse_response(&raw),
         }
     }
     parse_response(&raw)
-}
-
-/// A response that is whole by its own framing (Content-Length met or chunked terminator seen).
-fn complete_response(raw: &[u8]) -> Option<Verdict> {
-    let split = find(raw, b"\r\n\r\n")?;
-    let head = std::str::from_utf8(&raw[..split])
-        .ok()?
-        .to_ascii_lowercase();
-    let framed =
-        head.contains("\r\ncontent-length:") || head.contains("transfer-encoding: chunked");
-    if !framed {
-        return None; // body delimited by close only: a reset may have cut it short
-    }
-    parse_response(raw)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn reset_after_a_framed_response_keeps_the_verdict() {
-        let whole = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 3\r\n\r\nabc";
-        assert_eq!(
-            complete_response(whole).map(|v| (v.exit, v.stdout)),
-            Some((2, b"abc".to_vec()))
-        );
-        let cut = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 9\r\n\r\nabc";
-        assert!(complete_response(cut).is_none(), "short body is no verdict");
-        let unframed = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\n\r\nabc";
-        assert!(
-            complete_response(unframed).is_none(),
-            "close-delimited body may be truncated"
-        );
-        assert!(complete_response(b"HTTP/1.1 200 OK\r\nx-axi").is_none());
+    fn v(raw: &[u8]) -> Option<(i32, Vec<u8>)> {
+        parse_response(raw).map(|a| (a.verdict.exit, a.verdict.stdout))
     }
 
-    fn state(token: Option<&str>) -> DaemonState {
+    #[test]
+    fn framing_is_required() {
+        let whole = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 3\r\n\r\nabc";
+        assert_eq!(v(whole), Some((2, b"abc".to_vec())));
+        let cut = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 2\r\ncontent-length: 9\r\n\r\nabc";
+        assert!(v(cut).is_none(), "short body is no verdict");
+        let unframed = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\n\r\nabc";
+        assert!(
+            v(unframed).is_none(),
+            "close-delimited body may be truncated"
+        );
+        assert!(v(b"HTTP/1.1 200 OK\r\nx-axi").is_none());
+    }
+
+    fn state() -> DaemonState {
         DaemonState {
-            protocol: 1.0,
+            protocol: 2.0,
             pid: 1.0,
             host: "127.0.0.1".into(),
             port: 47861,
             version: "2.5.0".into(),
             roots: vec![],
             started_at: None,
-            token: token.map(str::to_string),
+            key: vec![7u8; 32],
         }
     }
 
     #[test]
-    fn request_carries_args_headers_and_body() {
+    fn request_carries_args_headers_nonce_and_body() {
         let args = vec!["--stdin".to_string(), "--root".into(), "C:\\my repo".into()];
-        let req = build_request(
-            &state(Some("tok")),
-            "127.0.0.1:47861",
-            &args,
-            "/a b",
-            "ok",
-            b"{}",
-        );
+        let req = build_request("127.0.0.1:47861", &args, "/a b", "ok", "n0nce", b"{}");
         let text = String::from_utf8(req).expect("utf8");
         assert!(
             text.starts_with("POST /v1/gate?a=--stdin&a=--root&a=C%3A%5Cmy%20repo HTTP/1.1\r\n")
         );
         assert!(text.contains("\r\nhost: 127.0.0.1:47861\r\n"));
-        assert!(text.contains("\r\nx-axiom-protocol: 1\r\n"));
+        assert!(text.contains("\r\nx-axiom-protocol: 2\r\n"));
+        assert!(text.contains("\r\nx-axiom-nonce: n0nce\r\n"));
         assert!(text.contains("\r\nx-axiom-cwd: /a%20b\r\n"));
         assert!(text.contains("\r\nx-axiom-stdin: ok\r\n"));
         assert!(text.contains("\r\ncontent-length: 2\r\n"));
         assert!(text.contains("\r\nconnection: close\r\n"));
-        assert!(text.contains("\r\nauthorization: Bearer tok\r\n"));
+        assert!(!text.contains("authorization"));
         assert!(!text.to_ascii_lowercase().contains("x-axiom-version"));
         assert!(text.ends_with("\r\n\r\n{}"));
     }
 
     #[test]
-    fn no_token_no_authorization_and_crlf_token_refused() {
-        let t =
-            String::from_utf8(build_request(&state(None), "h", &[], "/", "timeout", b"")).unwrap();
-        assert!(t.starts_with("POST /v1/gate HTTP/1.1\r\n"));
-        assert!(!t.contains("authorization"));
-        let t = String::from_utf8(build_request(
-            &state(Some("a\r\nx-evil: 1")),
-            "h",
-            &[],
-            "/",
-            "ok",
-            b"",
-        ))
-        .unwrap();
-        assert!(!t.contains("authorization") && !t.contains("x-evil"));
+    fn nonces_are_unique_hex() {
+        let a = nonce();
+        let b = nonce();
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn mac_is_checked_against_nonce_exit_and_body() {
+        let st = state();
+        let body = b"{\"x\":1}".to_vec();
+        let good = expected_mac(&st.key, "nnnn", 2, &body);
+        let ans = |mac: Option<String>, exit: i32, stdout: Vec<u8>| Answer {
+            verdict: Verdict {
+                stdout,
+                stderr: String::new(),
+                exit,
+            },
+            mac,
+        };
+        assert!(matches!(
+            authenticate(&st, "nnnn", ans(Some(good.clone()), 2, body.clone())),
+            Outcome::Verdict(_)
+        ));
+        assert_eq!(
+            authenticate(&st, "other", ans(Some(good.clone()), 2, body.clone())),
+            Outcome::Untrusted
+        );
+        assert_eq!(
+            authenticate(&st, "nnnn", ans(Some(good.clone()), 0, body.clone())),
+            Outcome::Untrusted
+        );
+        assert_eq!(
+            authenticate(&st, "nnnn", ans(Some(good), 2, b"{}".to_vec())),
+            Outcome::Untrusted
+        );
+        assert_eq!(
+            authenticate(&st, "nnnn", ans(None, 2, body.clone())),
+            Outcome::Untrusted
+        );
+        assert_eq!(
+            authenticate(&st, "nnnn", ans(Some("zz".into()), 2, body)),
+            Outcome::Untrusted
+        );
     }
 
     #[test]
     fn parses_a_200_verdict() {
-        let raw = b"HTTP/1.1 200 OK\r\nX-Axiom-Exit: 2\r\nx-axiom-stderr: AXIOM%20GATE%20DENY%20ERR_X%3A%20no%0Aline2\r\nContent-Length: 4\r\nConnection: close\r\n\r\n{\"a\"}trailing";
-        let v = parse_response(raw).expect("verdict");
+        let raw = b"HTTP/1.1 200 OK\r\nX-Axiom-Exit: 2\r\nx-axiom-stderr: AXIOM%20GATE%20DENY%20ERR_X%3A%20no%0Aline2\r\nX-Axiom-Mac: abcd\r\nContent-Length: 4\r\nConnection: close\r\n\r\n{\"a\"}trailing";
+        let a = parse_response(raw).expect("verdict");
+        assert_eq!(a.mac.as_deref(), Some("abcd"));
+        let v = a.verdict;
         assert_eq!(v.exit, 2);
         assert_eq!(v.stderr, "AXIOM GATE DENY ERR_X: no\nline2");
         assert_eq!(v.stdout, b"{\"a\"");
@@ -307,9 +402,12 @@ mod tests {
     #[test]
     fn parses_chunked_and_empty_bodies() {
         let raw = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;ext\r\nde\r\n0\r\n\r\n";
-        assert_eq!(parse_response(raw).expect("verdict").stdout, b"abcde");
+        assert_eq!(
+            parse_response(raw).expect("verdict").verdict.stdout,
+            b"abcde"
+        );
         let raw = b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\ncontent-length: 0\r\n\r\n";
-        let v = parse_response(raw).expect("verdict");
+        let v = parse_response(raw).expect("verdict").verdict;
         assert_eq!((v.stdout.len(), v.stderr.as_str(), v.exit), (0, "", 0));
     }
 
@@ -322,6 +420,9 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: 256\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: -1\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: deny\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nx-axiom-exit: 3\r\ncontent-length: 0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nx-axiom-exit: 00\r\ncontent-length: 0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\n\r\nclose-delimited",
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\ncontent-length: 10\r\n\r\nshort",
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\ntransfer-encoding: chunked\r\n\r\nzz\r\n",
             b"HTTP/1.1 200 OK\r\nx-axiom-exit: 0\r\n",
@@ -339,7 +440,7 @@ mod tests {
 
     #[test]
     fn non_loopback_hosts_are_never_contacted() {
-        let mut s = state(None);
+        let mut s = state();
         s.host = "10.1.2.3".into();
         assert!(loopback_addrs(&s).is_empty());
         s.host = "127.0.0.1".into();

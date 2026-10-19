@@ -17,6 +17,7 @@ Shared test helpers for AXIOM v2 packages. Never published.
   | Fixture | Pins |
   |---------|------|
   | `plan-basic` | inline utf8 + base64, nested path, NFC text, `overwrite`, checks |
+  | `plan-basic-v2` | the same plan with the 2.x `apiVersion: "axiom.dev/v2"` — pins that 2.x plans keep compiling to their 2.x digest through 3.x (D-41) |
   | `plan-patch` | one `patch` source per format (unified, v4a update, v4a Add File, search-replace) against `plan-patch.preimage/` — D-17 exact matching |
   | `plan-patch-inline` | the same content as inline sources; `golden.test.ts` asserts `planDigest` equality with `plan-patch` and that only `manifestDigest` differs (`origin`) |
 

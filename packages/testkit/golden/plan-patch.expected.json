@@ -1,6 +1,6 @@
 {
-  "manifestDigest": "sha256:ccc984b0de78f944b29df153b870146372eae7a7b45a3f9de3405413b6672699",
-  "planDigest": "sha256:bbde50734d06574bc07f8ec403d6497f35f8a5833131ea77fb14e6198bc02e25",
+  "manifestDigest": "sha256:b7139ec7abe2a8114edb41cec7434d249d5be64ea0f9ae3b423b8412ad1e33f9",
+  "planDigest": "sha256:9be28b8a8046e71a1c5675f18234864e2c3c0d2a16a22c8eb73476cade24eba1",
   "artifacts": [
     {
       "path": "CHANGELOG.md",

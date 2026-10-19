@@ -38,6 +38,17 @@ exits 0/1 and supports `--json`. `run-guards.mjs [filter…] [--fast] [--strict]
 into a failure. `packages/_v1` is ignored everywhere. Adding a guard = one new file; the runner
 discovers it.
 
+## Licensing of contributions and sign-off (DCO)
+
+AXIOM is MIT-licensed, and contributions are accepted under the same license
+(inbound = outbound): by submitting a pull request you agree that your contribution is licensed
+under the [MIT License](LICENSE) of this repository.
+
+Every commit must carry a `Signed-off-by: Your Name <you@example.com>` trailer (`git commit -s`),
+certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/): you wrote
+the change or otherwise have the right to submit it under the project's license. Use your real
+name; commits without a sign-off cannot be merged.
+
 ## Changesets
 
 Any change under `packages/*/src` (except `testkit`) needs `pnpm changeset` → `.changeset/*.md`.

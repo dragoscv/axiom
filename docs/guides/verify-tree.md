@@ -1,4 +1,4 @@
-# `axiom verify --tree` and the GitHub Action
+# `axiom plan verify --tree` and the GitHub Action
 
 *Prove that a real tree matches a manifest — in CI, long after the agent is gone — and optionally publish an in-toto attestation (S-403, D-20/D-21).*
 
@@ -7,7 +7,7 @@ whether a real tree agrees — in CI, before a merge, long after the agent that 
 manifest is gone.
 
 ```
-axiom verify <bundle.json> --tree <root> [--pre] [--attest <out.intoto.json>]
+axiom plan verify <bundle.json> --tree <root> [--pre] [--attest <out.intoto.json>]
 ```
 
 | flag | meaning |
@@ -48,7 +48,9 @@ first, so a self-inconsistent bundle stops before any file is read.
 
 `--attest` emits an in-toto Statement v1 with
 
-- `predicateType: https://axiom.dev/attestation/apply/v1`
+- `predicateType: https://dragoscv.github.io/axiom/spec/attestation/apply/v1` — the predicate is
+  specified at [spec/attestation/apply/v1](../spec/attestation/apply/v1.md). Attestations written
+  by 2.x carry the legacy `https://axiom.dev/attestation/apply/v1`, which is still accepted on read.
 - `subject`: the manifest (`name` = plan name, `digest` = `manifestDigest`) **plus** one entry per
   present artifact path, so `gh attestation verify` can be pointed at either the manifest digest
   or a single file.
@@ -90,7 +92,7 @@ jobs:
 | `pre` | `false` | verify `preImage` instead of artifacts |
 | `attest` | `false` | write + upload the in-toto attestation via `actions/attest@v4` |
 | `attestation-path` | `axiom-attestation.intoto.json` | where the Statement is written |
-| `version` | `2` | `@codai/axiom-mcp` dist-tag / version installed with `npm i -g` |
+| `version` | `3` | `@codai/axiom-mcp` dist-tag / version installed with `npm i -g` |
 | `local-cli` | — | path to a built `cli.js` (dogfooding only) |
 
 Outputs: `ok`, `manifest-digest`, `mismatches` (count), `attestation-path`. A mismatch fails
@@ -101,7 +103,7 @@ sha256 of any file on disk, so `gh attestation verify <file>` — which hashes t
 pass — cannot be pointed at `bundle.json`. Look the attestation up by subject digest instead:
 
 ```sh
-# the digest is in .axiom/applied/<hex>.json, a CheckReport, or `axiom verify` output
+# the digest is in .axiom/applied/<hex>.json, a CheckReport, or `axiom plan verify` output
 gh api repos/<owner>/<repo>/attestations/sha256:<manifest hex> \
   --jq '.attestations[].bundle.dsseEnvelope.payload' | base64 -d \
   | jq '.predicateType, .subject, .predicate.tree, .predicate.source'
@@ -112,8 +114,10 @@ manifest digest — the JCS bytes of `bundle.manifest` (that is what the digest 
 
 ```sh
 node -e 'const {canonicalize}=require("@codai/axiom-canon");const b=require(process.argv[1]);process.stdout.write(canonicalize(b.manifest))' bundle.json > manifest.jcs
-gh attestation verify manifest.jcs --repo <owner>/<repo> --predicate-type https://axiom.dev/attestation/apply/v1
+gh attestation verify manifest.jcs --repo <owner>/<repo> --predicate-type https://dragoscv.github.io/axiom/spec/attestation/apply/v1
 ```
+
+For an attestation produced by 2.x, pass the legacy `--predicate-type https://axiom.dev/attestation/apply/v1`.
 
 `gh` fetches the bundle for that digest from GitHub, checks the Sigstore signature, the
 certificate's workflow identity and the Rekor entry, and prints the verified statement.
@@ -131,7 +135,7 @@ edit, and upload an attestation on `main`.
 
 **See also**
 
-- [GitHub Action](../integration/github-action.md) — every input/output, the `@v2` moving tag
+- [GitHub Action](../integration/github-action.md) — every input/output, the moving major tag
 - [Signing](signing.md) — DSSE signatures on the bundle itself (a different proof)
 - [Trust model](../concepts/trust-model.md) — attestation among the other trust boundaries
 - [Plan format](../reference/plan-format.md#manifestbody--the-hashed-object) — `preImage[]`, which `--pre` compares against

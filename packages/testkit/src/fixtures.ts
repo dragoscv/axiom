@@ -29,7 +29,7 @@ export function makePlan(
         },
   );
   const plan: PlanInput = {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: "axiom.codai.ro/v3",
     kind: "Plan",
     name: opts.name ?? "fixture",
     intent: opts.intent ?? "testkit fixture",

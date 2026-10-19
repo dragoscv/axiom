@@ -3,9 +3,9 @@ import { createReadStream } from "node:fs";
 import { type FileHandle, mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDigestRef } from "@codai/axiom-canon";
+import { parseDigestRef, sha256Hex } from "@codai/axiom-canon";
 import { AxiomError } from "@codai/axiom-schema";
-import { casGet, casHas, casPath } from "./cas.js";
+import { casGetUnverified, casHas, casPath } from "./cas.js";
 
 /** Hard cap for a fetched `ref` (design §2.5 says 64 MiB; the CAS reader caps at 32 MiB). */
 export const REF_BYTES_MAX: number = 32 * 1024 * 1024;
@@ -206,15 +206,44 @@ async function readHttpsStream(
   }
 }
 
+/** CAS read that re-hashes: a poisoned entry under the pinned digest is ERR_DIGEST_MISMATCH. */
+async function verifiedCasRead(
+  hex: string,
+  src: RefSource,
+  opts: ResolveRefOptions,
+): Promise<Uint8Array | undefined> {
+  const bytes = await casGetUnverified(opts.root, hex);
+  if (bytes === undefined) return undefined;
+  const actual = sha256Hex(bytes);
+  if (actual !== hex) {
+    const o: { path?: string; details: Record<string, unknown> } = {
+      details: {
+        expected: src.digest,
+        actual: `sha256:${actual}`,
+        uri: redactUri(src.uri),
+        source: "cas",
+      },
+    };
+    if (opts.path !== undefined) o.path = opts.path;
+    throw new AxiomError(
+      "ERR_DIGEST_MISMATCH",
+      "CAS entry does not match the pinned ref digest",
+      o,
+    );
+  }
+  return bytes;
+}
+
 /**
  * Resolve a pinned `{ uri, digest }` source. Order: CAS hit (no network, even when
- * `allowNet` is false) → `ERR_NET_DISABLED` unless `allowNet` → `https:` only
- * (`file:` with `allowFile`), host allowlist, `redirect: "error"`, timeout, byte cap →
- * digest check → atomic store in the CAS. A digest mismatch is never stored.
+ * `allowNet` is false; re-hashed — a poisoned entry is `ERR_DIGEST_MISMATCH`, never used)
+ * → `ERR_NET_DISABLED` unless `allowNet` → `https:` only (`file:` with `allowFile`), host
+ * allowlist, `redirect: "error"`, timeout, byte cap → digest check → atomic store in the
+ * CAS. A digest mismatch is never stored.
  */
 export async function resolveRef(src: RefSource, opts: ResolveRefOptions): Promise<Uint8Array> {
   const hex = parseDigestRef(src.digest as `sha256:${string}`);
-  const cached = await casGet(opts.root, hex);
+  const cached = await verifiedCasRead(hex, src, opts);
   if (cached !== undefined) return cached;
 
   if (!opts.allowNet) {
@@ -282,7 +311,7 @@ export async function resolveRef(src: RefSource, opts: ResolveRefOptions): Promi
       await rm(sink.tmp, { force: true });
     }
   }
-  const bytes = await casGet(opts.root, hex);
+  const bytes = await verifiedCasRead(hex, src, opts);
   if (bytes === undefined) {
     throw new AxiomError("ERR_BLOB_MISSING", "ref was stored but cannot be read back", {
       details: { digest: src.digest },

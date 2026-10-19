@@ -4,6 +4,7 @@
  * source range of the offending item through a position map keyed by JSON path.
  */
 import {
+  API_VERSION,
   type ErrorCode,
   isErrorCode,
   type Plan,
@@ -105,7 +106,7 @@ class Compiler {
     const nameTok = first(tokens(ctx, "name"));
     this.at("name", tokenRange(nameTok));
     const plan: PlanInput = {
-      apiVersion: "axiom.dev/v2",
+      apiVersion: API_VERSION,
       kind: "Plan",
       name: nameTok?.image ?? "",
       intent: "",

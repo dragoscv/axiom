@@ -1,6 +1,26 @@
 import { createHash } from "node:crypto";
 import { canonicalize } from "./jcs.js";
 
+/**
+ * Codes canon can raise. Each is a member of `ERROR_CODES` in `@codai/axiom-schema` (canon
+ * cannot depend on schema, so the subset is restated here; callers map `code` 1:1 onto
+ * `AxiomError`).
+ */
+export type CanonErrorCode = "ERR_DIGEST_FORMAT" | "ERR_SIGNATURE_INVALID";
+
+/**
+ * Typed failure from canon. Extends `TypeError` so pre-existing `instanceof TypeError`
+ * handling keeps working.
+ */
+export class CanonError extends TypeError {
+  readonly code: CanonErrorCode;
+  constructor(code: CanonErrorCode, message: string) {
+    super(message);
+    this.name = "CanonError";
+    this.code = code;
+  }
+}
+
 /** `sha256:<64 lowercase hex>` — the content-address form used across AXIOM. */
 export type DigestRef = `sha256:${string}`;
 
@@ -24,7 +44,7 @@ export function sha256Digest(data: string | Uint8Array): Sha256Digest {
 
 /** Wrap a hex digest as `sha256:<hex>`. Throws on malformed hex. */
 export function digestRef(hex: string): DigestRef {
-  if (!HEX64.test(hex)) throw new TypeError(`invalid sha256 hex: ${hex}`);
+  if (!HEX64.test(hex)) throw new CanonError("ERR_DIGEST_FORMAT", `invalid sha256 hex: ${hex}`);
   return `sha256:${hex}`;
 }
 
@@ -32,7 +52,7 @@ export function digestRef(hex: string): DigestRef {
 export function parseDigestRef(ref: string): string {
   const m = REF.exec(ref);
   const hex = m?.[1];
-  if (hex === undefined) throw new TypeError(`invalid digest ref: ${ref}`);
+  if (hex === undefined) throw new CanonError("ERR_DIGEST_FORMAT", `invalid digest ref: ${ref}`);
   return hex;
 }
 

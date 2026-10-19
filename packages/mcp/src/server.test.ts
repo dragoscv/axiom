@@ -1,9 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ApplyResult, CheckReport, ManifestBundle } from "@codai/axiom-schema";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createRootsPolicy } from "./roots.js";
+import { createServer } from "./server.js";
 import { type Harness, harness, makePlan, structured, textOf, tmpRepo } from "./test-helpers.js";
-import { BUNDLE_BYTES_MAX, TOOL_DEFS } from "./tools.js";
+import { BUNDLE_BYTES_MAX, CORE_TOOL_NAMES, parseToolset, TOOL_DEFS } from "./tools.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
 let other: Awaited<ReturnType<typeof tmpRepo>>;
@@ -22,7 +25,63 @@ afterEach(async () => {
 const plan = () =>
   makePlan({ "src/a.ts": "export const a = 1;\n", "README.md": "# hi\n" }, { name: "demo" });
 
+/** A server built with NO options — what `axiom mcp` serves without `--tools`. */
+async function defaultServer(root: string) {
+  const server = createServer(await createRootsPolicy([root]));
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "axiom-test", version: "0.0.0" });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  return {
+    client,
+    close: async () => {
+      await client.close();
+      await server.close();
+    },
+  };
+}
+
 describe("tools/list", () => {
+  it("toolset core (the default) lists exactly the 6 core tools", async () => {
+    const core = await harness([repo.root], { toolset: "core" });
+    const dflt = await defaultServer(repo.root);
+    try {
+      for (const c of [core, dflt]) {
+        const { tools } = await c.client.listTools();
+        expect(tools.map((t) => t.name).sort()).toEqual(
+          [
+            "axiom_apply",
+            "axiom_apply_dry_run",
+            "axiom_check",
+            "axiom_rollback",
+            "axiom_status",
+            "axiom_write",
+          ].sort(),
+        );
+      }
+      expect([...CORE_TOOL_NAMES].sort()).toHaveLength(6);
+      // a full-only tool is not callable on a core server (JSON-RPC InvalidParams, -32602)
+      await expect(core.call("axiom_plan_compile", { plan: plan() })).rejects.toThrow(
+        expect.objectContaining({ code: -32602 }),
+      );
+    } finally {
+      await core.close();
+      await dflt.close();
+    }
+  });
+
+  it("toolset full lists every registered tool", async () => {
+    const { tools } = await h.client.listTools();
+    expect(tools.length).toBe(TOOL_DEFS.length);
+    expect(tools.length).toBeGreaterThan(CORE_TOOL_NAMES.length);
+  });
+
+  it("parseToolset accepts core|full (case-insensitive), defaults to core, rejects others", () => {
+    expect(parseToolset(undefined)).toBe("core");
+    expect(parseToolset("FULL")).toBe("full");
+    expect(parseToolset(" core ")).toBe("core");
+    expect(() => parseToolset("all")).toThrowError(expect.objectContaining({ code: "ERR_USAGE" }));
+  });
+
   it("exposes every registered tool with annotations, input and output schemas", async () => {
     const { tools } = await h.client.listTools();
     expect(tools).toHaveLength(TOOL_DEFS.length);
@@ -117,8 +176,8 @@ describe("full pipeline", () => {
       emitter: string;
       version: string;
     }[];
-    expect(rows).toHaveLength(7);
-    expect(rows[0]).toMatchObject({ emitter: "web", version: "2.0.0", template: "biome.config" });
+    // D-45: no emitter is built in; `--emitter <pkg>` loads one (see emitters.test.ts).
+    expect(rows).toEqual([]);
     const templates = await h.client.listResourceTemplates();
     expect(templates.resourceTemplates.map((t) => t.uriTemplate).sort()).toEqual([
       "axiom://applied/{sha}",

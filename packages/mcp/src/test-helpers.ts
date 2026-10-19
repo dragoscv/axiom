@@ -23,7 +23,7 @@ export async function tmpRepo(prefix = "axiom-mcp-"): Promise<TmpRepo> {
 /** `{ path: utf8 content }` → PlanInput. */
 export function makePlan(files: Record<string, string>, opts: { name?: string } = {}): PlanInput {
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: "axiom.codai.ro/v3",
     kind: "Plan",
     name: opts.name ?? "fixture",
     intent: "mcp test fixture",
@@ -41,13 +41,13 @@ export interface Harness {
   close: () => Promise<void>;
 }
 
-/** In-process client ↔ server over a linked InMemoryTransport pair. */
+/** In-process client ↔ server over a linked InMemoryTransport pair (`toolset: "full"` unless set). */
 export async function harness(
   roots: readonly string[],
   serverOpts: Omit<CreateServerOptions, "log"> = {},
 ): Promise<Harness> {
   const policy = await createRootsPolicy(roots);
-  const server = createServer(policy, { ...serverOpts, log: silentLogger });
+  const server = createServer(policy, { toolset: "full", ...serverOpts, log: silentLogger });
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "axiom-test", version: "0.0.0" });
   await Promise.all([server.connect(st), client.connect(ct)]);

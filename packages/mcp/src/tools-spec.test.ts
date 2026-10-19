@@ -2,8 +2,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildCodaiToolsSpec, renderCodaiToolsSpec, renderToolsSpec } from "./spec.js";
-import { TOOL_DEFS } from "./tools.js";
+import {
+  buildCodaiToolsSpec,
+  buildToolsSpec,
+  renderCodaiToolsSpec,
+  renderToolsSpec,
+} from "./spec.js";
+import { CORE_TOOL_NAMES, TOOL_DEFS, toolsFor } from "./tools.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -23,9 +28,16 @@ describe("spec/tools.json parity", () => {
     expect(spec.tools).toHaveLength(TOOL_DEFS.length);
     for (const [i, e] of spec.tools.entries()) {
       const def = TOOL_DEFS[i];
-      expect(Object.keys(e).sort()).toEqual(["description", "name", "parameters", "risk"]);
+      expect(Object.keys(e).sort()).toEqual([
+        "description",
+        "name",
+        "parameters",
+        "risk",
+        "toolset",
+      ]);
       expect(e.name).toBe(def?.name);
       expect(e.risk).toBe(def?.riskClass);
+      expect(e.toolset).toBe(CORE_TOOL_NAMES.includes(e.name) ? "core" : "full");
       expect(e.parameters).not.toHaveProperty("$schema");
       expect(e.parameters.type).toBe("object");
     }
@@ -46,6 +58,27 @@ describe("spec/tools.json parity", () => {
     expect(risk.axiom_status).toBe("READ");
     // one-tool write: preview + confirm, writes the tree
     expect(risk.axiom_write).toBe("SENSITIVE");
+  });
+
+  it("tools.json marks exactly the 6 core tools `toolset: core`, every other one `full`", () => {
+    const spec = buildToolsSpec();
+    expect(spec).toHaveLength(TOOL_DEFS.length);
+    const core = spec.filter((t) => t.toolset === "core").map((t) => t.name);
+    expect(core.sort()).toEqual([...CORE_TOOL_NAMES].sort());
+    expect(core).toHaveLength(6);
+    expect(spec.filter((t) => t.toolset === "full")).toHaveLength(TOOL_DEFS.length - 6);
+    expect(
+      toolsFor("core")
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(core.sort());
+    expect(toolsFor("full")).toHaveLength(TOOL_DEFS.length);
+    // every core name is a registered tool (no typo can shrink the default set silently)
+    for (const n of CORE_TOOL_NAMES)
+      expect(
+        TOOL_DEFS.some((t) => t.name === n),
+        n,
+      ).toBe(true);
   });
 
   it("riskClass follows annotations; names are unique and snake_case", () => {

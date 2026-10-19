@@ -4,9 +4,19 @@
 
 Field reference for every wire type. The source of truth is
 `packages/schema/src/*.ts` (Zod v4); the generated JSON Schemas are in
-`packages/schema/schemas/*.json` and served as `axiom://schema/<Kind>`. Every
+`packages/schema/schemas/*.json`, served as `axiom://schema/<Kind>` and published at
+`https://dragoscv.github.io/axiom/schemas/v3/<Kind>.schema.json`. Every
 object is `.strict()` — unknown keys are rejected. Error codes have their own
 page: [error-codes.md](error-codes.md).
+
+### `apiVersion`
+
+Every wire object carries `apiVersion`. Objects written by 3.x carry **`axiom.codai.ro/v3`**;
+the 2.x value **`axiom.dev/v2`** is still accepted on read through every 3.x release, so stored
+Plans, profiles and reports keep validating. A `Manifest` copies the `apiVersion` of the Plan it
+was compiled from (it is inside the hash, so a v2 Plan and its v3 twin have different
+`manifestDigest`s); `ApplyResult` is always written as v3. Policy:
+[versioning.md](versioning.md).
 
 Worked example throughout: `packages/testkit/golden/plan-basic.plan.json`.
 
@@ -37,7 +47,7 @@ reports every violation, each as an error code:
 
 ```json
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "Plan",
   "name": "golden-basic",
   "intent": "Three inline files: text, nested path, and a binary payload.",
@@ -58,11 +68,11 @@ reports every violation, each as an error code:
 
 | Field | Type | Constraint |
 |-------|------|------------|
-| `apiVersion` | literal | `"axiom.dev/v2"` |
+| `apiVersion` | enum | `"axiom.codai.ro/v3"` (written by 3.x) or `"axiom.dev/v2"` (accepted on read) |
 | `kind` | literal | `"Plan"` |
 | `name` | string | `^[a-z0-9][a-z0-9-]{0,63}$` — lowercase kebab-case, ≤ 64 chars |
 | `intent` | string | ≤ 2000 chars; human-readable purpose, recorded in the attestation |
-| `profile` | string | min 1, default `"default"`. Name of the check profile (`default`, `strict`, `permissive`, or `<root>/.axiom/profiles/<name>.json`) |
+| `profile` | string | min 1, default `"default"`. Name of the check profile (`default`, `strict`, `permissive`, or a repository profile — discovery in [profiles.md](profiles.md)) |
 | `capabilities` | enum[] | any of `fs net secret ai compute git`; default `[]`. Recorded, not enforced by a sandbox |
 | `artifacts` | `PlanArtifact[]` | 1–2000 entries |
 | `checks` | `CheckRef[]` | default `[]`; merged after the profile's checks (same `id` → the plan's wins) |
@@ -125,9 +135,9 @@ Resolution order in `compilePlan(plan, { root, net })` (`packages/plan/src/ref.t
 5. **Pin check** — digest mismatch → `ERR_DIGEST_MISMATCH { expected, actual, bytes }` and the
   temp file is deleted; **nothing is stored**. Match → fsync + atomic rename into the CAS.
 
-CLI: `axiom compile plan.json --root . --allow-net [--net-allow cdn.example.com,*.github.com]
-[--allow-file]`. `axiom apply` never fetches: a ref whose blob is not in the CAS fails with
-`ERR_REF_OFFLINE` before any write, so run `compile --allow-net` on the same root first. The
+CLI: `axiom plan compile plan.json --root . --allow-net [--net-allow cdn.example.com,*.github.com]
+[--allow-file]`. `axiom plan apply` never fetches: a ref whose blob is not in the CAS fails with
+`ERR_REF_OFFLINE` before any write, so run `plan compile --allow-net` on the same root first. The
 MCP `axiom_plan_compile` tool has no network switch — agents cannot enable fetching; an operator
 does it from the CLI. Blob lifecycle (`axiom gc`) is in [cas.md](../concepts/cas.md).
 
@@ -135,8 +145,10 @@ does it from the CLI. Blob lifecycle (`axiom gc`) is in [cas.md](../concepts/cas
 
 `{ type: "template", emitter, template, params }` asks a registered *emitter* to render the
 bytes at compile time. `compilePlan` ships no emitters; the caller passes
-`{ emitters: createEmitterRegistry([...]) }` (the `axiom` CLI/MCP register `web@2.0.0` from
-`@codai/axiom-emitters-web`). After rendering, the artifact is a normal blob: sha256 digest,
+`{ emitters: createEmitterRegistry([...]) }`. Since 3.0 the `axiom` CLI/MCP bundle **no** emitter:
+load one with `axiom plan compile --emitter <pkg>` (repeatable, e.g.
+`--emitter @codai/axiom-emitters-web`, which registers `web@2.0.0` — `WEB_EMITTER_VERSION`); the
+package must be installed. After rendering, the artifact is a normal blob: sha256 digest,
 checks, two-phase apply. The manifest records `origin: "template"` and
 `toolchain.emitters[emitter] = version`.
 
@@ -187,7 +199,7 @@ The predicate catalogue and each `params` shape: [checks.md](../guides/checks.md
 
 ### YAML plans
 
-`axiom compile plan.yaml` (or `.yml`, case-insensitive) accepts a Plan written as YAML. The
+`axiom plan compile plan.yaml` (or `.yml`, case-insensitive) accepts a Plan written as YAML. The
 parser (`parsePlanYaml` in `packages/plan/src/yaml.ts`, `yaml` loaded lazily) produces a plain
 object that is then validated by the **same** `PlanSchema` and compiled by the same
 `compilePlan` as the JSON form, so a YAML Plan and its JSON twin yield the **same**
@@ -208,8 +220,8 @@ is ignored; a top-level `$schema` **key** is stripped before validation (otherwi
 `PlanSchema` would reject it). Quote strings YAML would retype — `mode: "0644"`, not `0644`.
 
 ```yaml
-# yaml-language-server: $schema=https://axiom.dev/schemas/plan.json
-apiVersion: axiom.dev/v2
+# yaml-language-server: $schema=https://dragoscv.github.io/axiom/schemas/v3/Plan.schema.json
+apiVersion: axiom.codai.ro/v3
 kind: Plan
 name: golden-basic
 intent: "Three inline files: text, nested path, and a binary payload."
@@ -234,7 +246,7 @@ hashed; everything else is transport.
 
 | Field | Type | Constraint |
 |-------|------|------------|
-| `apiVersion` | literal | `"axiom.dev/v2"` |
+| `apiVersion` | enum | copied from the Plan: `"axiom.codai.ro/v3"` or `"axiom.dev/v2"` |
 | `kind` | literal | `"Manifest"` |
 | `name` | `PlanName` | copied from the plan |
 | `profile` | string | min 1 |
@@ -281,20 +293,21 @@ Every resolved blob is re-hashed; a mismatch is `ERR_DIGEST_MISMATCH` (or
 
 | Field | Type | Constraint |
 |-------|------|------------|
-| `apiVersion`, `kind` | literals | `"axiom.dev/v2"`, `"Profile"` |
+| `apiVersion`, `kind` | literals | `"axiom.codai.ro/v3"` (or `"axiom.dev/v2"` on read), `"Profile"` |
 | `name` | string | `^[a-z0-9][a-z0-9._-]{0,63}$` |
 | `extends` | profile name | optional; resolved parent-first, cycles → `ERR_INVALID_PROFILE` |
 | `checks` | `CheckRef[]` | child entries replace parent entries with the same `id` |
 | `limits` | `{ maxArtifacts?, maxTotalBytes?, maxBlobBytes? }` | positive ints; merged shallowly over the parent |
 | `facts` | `{ allowRepo: bool = true, allowGuards: bool = false }` | `allowRepo=false` skips repo predicates; `allowGuards` gates `guard.external` |
 
-Built-in profiles and their check lists: [profiles.md](profiles.md).
+Built-in profiles, their check lists and the 3.0 `.axiom/axiom.json` policy file that now carries
+them: [profiles.md](profiles.md).
 
 ## CheckReport
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `apiVersion`, `kind` | literals | `"axiom.dev/v2"`, `"CheckReport"` |
+| `apiVersion`, `kind` | literals | `"axiom.codai.ro/v3"` (or `"axiom.dev/v2"` on read), `"CheckReport"` |
 | `manifestDigest` | `DigestRef` | the bundle that was checked |
 | `profile` | string | resolved profile name |
 | `verdict` | `pass \| fail \| error` | `error` = a provider, predicate lookup, params validation or predicate run failed. Never a silent pass |
@@ -311,7 +324,7 @@ Provider failures carry `facts.code` (an error code) and `facts.__provider: true
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `apiVersion`, `kind` | literals | `"axiom.dev/v2"`, `"ApplyResult"` |
+| `apiVersion`, `kind` | literals | `"axiom.codai.ro/v3"` (or `"axiom.dev/v2"` on read), `"ApplyResult"` |
 | `manifestDigest` | `DigestRef` | |
 | `mode` | `dry-run \| fs \| pr` | `pr` = fs apply + branch + commit of exactly the touched paths (no push); see [apply.md](../guides/apply.md#pr-mode) |
 | `status` | `applied \| noop \| rolled-back \| failed` | `failed` requires `error` |

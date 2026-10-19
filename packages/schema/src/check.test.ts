@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CheckRefSchema, CheckReportSchema, FindingSchema } from "./check.js";
 import { REF_A, REF_B } from "./fixtures.test-helpers.js";
+import { API_VERSIONS } from "./plan.js";
 
 describe("CheckRefSchema", () => {
   it("applies severity default and accepts any JSON params", () => {
@@ -76,5 +77,15 @@ describe("CheckReportSchema", () => {
 
   it("is strict", () => {
     expect(CheckReportSchema.safeParse({ ...valid, extra: true }).success).toBe(false);
+  });
+
+  it("D-41: accepts exactly the plan apiVersions (v3 canonical + v2 legacy)", () => {
+    for (const v of API_VERSIONS) {
+      expect(CheckReportSchema.safeParse({ ...valid, apiVersion: v }).success).toBe(true);
+    }
+    expect(CheckReportSchema.shape.apiVersion.options).toEqual([...API_VERSIONS]);
+    expect(CheckReportSchema.safeParse({ ...valid, apiVersion: "axiom.dev/v3" }).success).toBe(
+      false,
+    );
   });
 });

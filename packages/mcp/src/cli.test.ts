@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makePlan, tmpRepo } from "./test-helpers.js";
 import { TOOL_DEFS } from "./tools.js";
 
@@ -14,6 +15,17 @@ const execFileP = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "cli.js");
 const hasDist = existsSync(CLI);
+/** Printable ASCII plus tab/newline/CR only. */
+const ASCII = /^[\t\n\r -~]*$/;
+
+/** Private HOME/USERPROFILE so no test reads ~/.axiom (daemon.json, gate profile) of the machine. */
+let fakeHome = "";
+beforeAll(async () => {
+  fakeHome = await mkdtemp(join(tmpdir(), "axiom-cli-home-"));
+});
+afterAll(async () => {
+  if (fakeHome !== "") await rm(fakeHome, { recursive: true, force: true });
+});
 
 interface Run {
   code: number;
@@ -21,11 +33,13 @@ interface Run {
   stderr: string;
 }
 
-async function run(args: string[], cwd?: string): Promise<Run> {
+async function run(args: string[], cwd?: string, stdin?: string): Promise<Run> {
   try {
-    const opts =
-      cwd === undefined ? { maxBuffer: 16 * 1024 * 1024 } : { cwd, maxBuffer: 16 * 1024 * 1024 };
-    const { stdout, stderr } = await execFileP(process.execPath, [CLI, ...args], opts);
+    const env = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, AXIOM_GATE_DAEMON: "0" };
+    const opts = { maxBuffer: 16 * 1024 * 1024, env, ...(cwd === undefined ? {} : { cwd }) };
+    const p = execFileP(process.execPath, [CLI, ...args], opts);
+    if (stdin !== undefined) p.child.stdin?.end(stdin);
+    const { stdout, stderr } = await p;
     return { code: 0, stdout, stderr };
   } catch (e) {
     const err = e as { code?: number; stdout?: string; stderr?: string };
@@ -72,6 +86,108 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     }
   });
 
+  it("D-43: --help overview is grouped, <= 40 lines, ASCII; per-command help is only that command", async () => {
+    const top = await run(["--help"]);
+    expect(top.code).toBe(0);
+    expect(top.stdout.trimEnd().split("\n").length).toBeLessThanOrEqual(40);
+    expect(top.stdout).toMatch(ASCII);
+    for (const g of ["plan", "journal", "keys", "hook", "setup"]) expect(top.stdout).toContain(g);
+
+    const viaNew = await run(["plan", "apply", "--help"]);
+    const viaOld = await run(["apply", "--help"]);
+    const viaHelp = await run(["help", "plan", "apply"]);
+    expect(viaNew.code).toBe(0);
+    expect(viaNew.stdout).toMatch(ASCII);
+    expect(viaOld.stdout).toBe(viaNew.stdout);
+    expect(viaHelp.stdout).toBe(viaNew.stdout);
+    expect(viaNew.stdout).toContain("axiom plan apply <bundle.json>");
+    expect(viaNew.stdout).toContain("(default: 30000)");
+    expect(viaNew.stdout).not.toContain("axiom plan compile");
+    expect(viaNew.stdout).not.toContain("axiom gate");
+
+    const group = await run(["keys", "--help"]);
+    expect(group.code).toBe(0);
+    expect(group.stdout).toContain("axiom keys gen");
+    expect(group.stdout).not.toContain("axiom plan");
+  });
+
+  it("D-43: usage errors exit 2 with one-line usage + help hint; --json gives ERR_USAGE", async () => {
+    const bad = await run(["plan", "apply", "b.json", "--dryrun"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toMatch(ASCII);
+    const lines = bad.stderr.trimEnd().split("\n");
+    expect(lines[0]).toMatch(/^error: unknown option '--dryrun'.*did you mean '--dry-run'/);
+    expect(lines[1]).toMatch(/^usage: axiom plan apply <bundle\.json>/);
+    expect(lines[2]).toBe("Run 'axiom plan apply --help' for usage, options and examples.");
+    expect(lines.length).toBe(3);
+
+    const missing = await run(["compile"]);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("usage: axiom plan compile");
+
+    const j = await run(["plan", "compile", "--json"]);
+    expect(j.code).toBe(2);
+    const env = JSON.parse(j.stderr) as {
+      code: string;
+      message: string;
+      details: { usage: string };
+    };
+    expect(env.code).toBe("ERR_USAGE");
+    expect(env.details.usage).toMatch(/^axiom plan compile/);
+  });
+
+  it("D-43: unknown command suggests a near name (distance <= 2), never a far one", async () => {
+    const near = await run(["aply"]);
+    expect(near.code).toBe(2);
+    expect(near.stderr).toContain("did you mean 'plan apply'");
+    const sub = await run(["journal", "lgo"]);
+    expect(sub.code).toBe(2);
+    expect(sub.stderr).toContain("did you mean 'journal log'");
+    const far = await run(["frobnicate"]);
+    expect(far.code).toBe(2);
+    expect(far.stderr).not.toContain("did you mean");
+  });
+
+  it("missing input -> ERR_NOT_FOUND with details.path; malformed JSON -> ERR_INVALID_PLAN with line/column", async () => {
+    const gone = join(repo.root, "nope.json");
+    for (const args of [
+      ["compile", gone],
+      ["plan", "verify", gone],
+      ["plan", "check", gone, "--root", repo.root],
+    ]) {
+      const r = await run(args);
+      expect(r.code, args.join(" ")).toBe(2);
+      const e = JSON.parse(r.stderr) as { code: string; details: { path: string } };
+      expect(e.code, args.join(" ")).toBe("ERR_NOT_FOUND");
+      expect(e.details.path).toBe(gone);
+    }
+    const broken = join(repo.root, "broken.json");
+    await writeFile(broken, '{\n  "apiVersion": "axiom.dev/v2",\n  "kind": Plan\n}\n');
+    const r = await run(["plan", "compile", broken]);
+    expect(r.code).toBe(2);
+    const e = JSON.parse(r.stderr) as { code: string; details: { line: number; column: number } };
+    expect(e.code).toBe("ERR_INVALID_PLAN");
+    expect(e.details.line).toBe(3);
+    expect(e.details.column).toBeGreaterThan(0);
+  });
+
+  it("gate keeps answering through the old verb and the new path (hook contract unchanged)", async () => {
+    const stats = await run(["setup", "stats", "--root", repo.root]);
+    expect(stats.code, stats.stderr).toBe(0);
+    expect(stats.stdout).toMatch(ASCII);
+    expect(stats.stdout).toContain("axiom stats - ");
+    const payload = JSON.stringify({
+      cwd: repo.root,
+      tool_name: "Write",
+      tool_input: { file_path: join(repo.root, ".env"), content: "X=1" },
+    });
+    const old = await run(["gate", "--stdin", "--format", "claude"], repo.root, payload);
+    const neu = await run(["hook", "gate", "--stdin", "--format", "claude"], repo.root, payload);
+    expect(old.code).toBe(neu.code);
+    expect(old.stdout).toBe(neu.stdout);
+    expect(old.stdout).toContain("deny");
+  });
+
   it("dist/cli.js is self-contained: no workspace or npm imports remain", async () => {
     const text = await readFile(CLI, "utf8");
     const mainText = await readFile(join(here, "..", "dist", "cli-main.js"), "utf8");
@@ -94,6 +210,14 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     await mkdir(join(alone, "dist"), { recursive: true });
     await writeFile(join(alone, "dist", "cli.js"), text);
     await writeFile(join(alone, "dist", "cli-main.js"), mainText);
+    // cli.js may statically import small shared chunks (the zero-dependency gate fast path).
+    for (const m of text.matchAll(/^import\b[^\n]*?from\s+["']\.\/([^"']+)["']/gm)) {
+      const chunk = m[1] as string;
+      await writeFile(
+        join(alone, "dist", chunk),
+        await readFile(join(here, "..", "dist", chunk), "utf8"),
+      );
+    }
     await writeFile(
       join(alone, "package.json"),
       JSON.stringify({ type: "module", version: "0.0.0-test" }),
@@ -140,6 +264,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     const noConfirm = await run(["apply", bundleFile, "--root", repo.root]);
     expect(noConfirm.code).toBe(2);
     expect(noConfirm.stderr).toContain("ERR_CONFIRM_DIGEST_MISMATCH");
+    expect(noConfirm.stderr).toContain("--dry-run");
 
     const ap = await run(["apply", bundleFile, "--root", repo.root, "--confirm", manifestDigest]);
     expect(ap.code, ap.stderr).toBe(0);
@@ -157,7 +282,9 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
       attestation: { file: string; predicateFile: string; predicateType: string; subjects: number };
     };
     expect(vtj).toMatchObject({ ok: true, tree: "post", mismatches: [] });
-    expect(vtj.attestation.predicateType).toBe("https://axiom.dev/attestation/apply/v1");
+    expect(vtj.attestation.predicateType).toBe(
+      "https://dragoscv.github.io/axiom/spec/attestation/apply/v1",
+    );
     expect(vtj.attestation.subjects).toBe(2); // manifest + src/x.ts
     const statement = JSON.parse(await readFile(attestFile, "utf8")) as {
       _type: string;
@@ -252,13 +379,16 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     expect(out.diagnostics[0]?.range.start).toEqual({ line: 3, column: 10 });
   });
 
-  it("emitters lists web@2.0.0 templates; compile renders a template source through it", async () => {
-    const list = await run(["emitters"]);
+  it("emitters lists web@2.0.0 templates via --emitter; compile renders a template source through it", async () => {
+    const empty = await run(["emitters", "--json"]);
+    expect(JSON.parse(empty.stdout)).toEqual([]);
+    const WEB = join(here, "..", "..", "emitters-web");
+    const list = await run(["emitters", "--emitter", WEB]);
     expect(list.code).toBe(0);
     const lines = list.stdout.trim().split("\n");
     expect(lines).toHaveLength(7);
-    expect(lines[0]).toMatch(/^web@2\.0\.0: biome\.config — .+/);
-    const json = await run(["emitters", "--json"]);
+    expect(lines[0]).toMatch(/^web@2\.0\.0: biome\.config - .+/);
+    const json = await run(["emitters", "--json", "--emitter", WEB]);
     const rows = JSON.parse(json.stdout) as { emitter: string; template: string }[];
     expect(rows.map((r) => r.template)).toContain("hono.route");
 
@@ -283,7 +413,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
         ],
       }),
     );
-    const c = await run(["compile", planFile]);
+    const c = await run(["compile", planFile, "--emitter", WEB]);
     expect(c.code, c.stderr).toBe(0);
     const bundle = JSON.parse(c.stdout) as {
       manifest: {
@@ -306,7 +436,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
         ],
       }),
     );
-    const bad = await run(["compile", planFile]);
+    const bad = await run(["compile", planFile, "--emitter", WEB]);
     expect(bad.code).toBe(2);
     expect(JSON.parse(bad.stderr.trim().split("\n").at(-1) ?? "{}")).toMatchObject({
       code: "ERR_EMITTER_UNKNOWN",
@@ -322,7 +452,7 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
       await mkdir(join(repo.root, "sub"), { recursive: true });
       const transport = new StdioClientTransport({
         command: process.execPath,
-        args: [CLI, "mcp", "--root", repo.root, "--log-level", "debug"],
+        args: [CLI, "mcp", "--root", repo.root, "--log-level", "debug", "--tools", "full"],
         stderr: "pipe",
       });
       const client = new Client(

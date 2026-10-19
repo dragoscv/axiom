@@ -1,7 +1,7 @@
 {
   "name": "@codai/axiom-axm-lsp",
-  "version": "2.7.0",
-  "description": "Language server for AXIOM `.axm` plans: diagnostics, completion, hover, document symbols, formatting and semantic tokens over LSP, reusing the @codai/axiom-axm Chevrotain parser (one grammar, zero drift)",
+  "version": "3.0.0",
+  "description": "DEPRECATED (3.0): the .axm language server moved into @codai/axiom-axm (`@codai/axiom-axm/lsp`, bin `axm-lsp`). This package only re-exports it for 3.x.",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",
   "repository": {
@@ -37,22 +37,20 @@
   "files": [
     "dist",
     "!dist/**/*.map",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
+    "prepack": "node ../../scripts/gen-third-party-notices.mjs --package packages/axm-lsp",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
-    "@codai/axiom-axm": "workspace:*",
-    "@codai/axiom-schema": "workspace:*",
-    "vscode-languageserver": "catalog:",
-    "vscode-languageserver-textdocument": "catalog:"
+    "@codai/axiom-axm": "workspace:*"
   },
   "devDependencies": {
-    "@codai/axiom-checks": "workspace:*",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

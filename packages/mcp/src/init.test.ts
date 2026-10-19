@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadProfile } from "@codai/axiom-checks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GateProfileSchema } from "./gate.js";
@@ -21,33 +22,50 @@ import {
   detectHarnesses,
   GATE_PROFILE,
   GITIGNORE_LINES,
+  gateCommandBash,
+  gateCommandPowerShell,
   geminiHookEntry,
   gitignoreHidesPolicy,
   type HarnessName,
   HOOK_TIMEOUT_SEC,
+  INIT_FILES,
+  initDryRun,
   isAxiomGateEntry,
   isAxiomPostEntry,
   JUNIE_GUIDELINES_MARKER,
   junieUserHooks,
+  KIRO_MATCHER,
+  kiroHooks,
   MANAGED_FILES,
   MCP_SERVER_ENTRY,
+  OPENCODE_PLUGIN,
   PROJECT_MCP_ENTRY,
   profileNameFor,
   runInit,
   toDaemonCommand,
   upgradeCodexToml,
+  WINDSURF_EVENTS,
   windsurfHooks,
 } from "./init.js";
 import { tmpRepo } from "./test-helpers.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
 let outside: Awaited<ReturnType<typeof tmpRepo>>;
+let home: Awaited<ReturnType<typeof tmpRepo>>;
+const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 beforeEach(async () => {
   repo = await tmpRepo("axiom-init-");
   outside = await tmpRepo("axiom-init-outside-");
+  home = await tmpRepo("axiom-init-home-");
+  process.env.HOME = home.root;
+  process.env.USERPROFILE = home.root;
 });
 afterEach(async () => {
-  await Promise.all([repo.cleanup(), outside.cleanup()]);
+  for (const k of ["HOME", "USERPROFILE"] as const) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
+  await Promise.all([repo.cleanup(), outside.cleanup(), home.cleanup()]);
 });
 
 const readJson = async (rel: string) =>
@@ -172,7 +190,7 @@ describe("axiom init (S-701)", () => {
     const r = await runInit({ root: repo.root, profileName: "demo" });
     expect(r.files.find((f) => f.path === ".gitignore")?.action).toBe("updated");
     expect(await readFile(join(repo.root, ".gitignore"), "utf8")).toBe(
-      "node_modules\r\n.axiom/*\r\n!.axiom/profiles/\r\n!.axiom/gate-profile.json\r\n",
+      "node_modules\r\n.axiom/*\r\n!.axiom/profiles/\r\n!.axiom/gate-profile.json\r\n!.axiom/axiom.json\r\n!.axiom/mcp-pins.json\r\n",
     );
   });
 
@@ -360,7 +378,8 @@ describe("axiom init — every harness", () => {
   });
 
   it("auto-detects every new marker dir (.devin and .windsurf map to one windsurf)", async () => {
-    for (const d of [".cursor", ".windsurf", ".devin", ".gemini", ".junie", ".clinerules"]) {
+    const dirs = [".cursor", ".windsurf", ".devin", ".gemini", ".junie", ".clinerules", ".kiro"];
+    for (const d of [...dirs, ".opencode"]) {
       await mkdir(join(repo.root, d));
     }
     expect(await detectHarnesses(repo.root)).toEqual([
@@ -369,6 +388,8 @@ describe("axiom init — every harness", () => {
       "gemini",
       "junie",
       "cline",
+      "kiro",
+      "opencode",
     ]);
   });
 
@@ -419,10 +440,11 @@ describe("axiom init — every harness", () => {
       expect(e.exec).toBeUndefined();
       expect(e.args).toBeUndefined();
       expect(String(e.command)).toMatch(/gate --stdin --format auto$/);
-      expect(String(e.bash)).toMatch(/gate --stdin --format auto$/);
-      // PowerShell -Command maps exit 2 (the deny) to 1 unless the code is propagated.
+      expect(String(e.bash)).toMatch(/gate --stdin --format auto; rc=\$\?; .* exit \$rc$/);
+      // PowerShell -Command maps exit 2 (the deny) to 1 unless the code is propagated, and a
+      // missing node / crash must become 2 (VS Code Local blocks only on 2).
       expect(String(e.powershell)).toMatch(
-        /^axiom(\.cmd|-hook\.exe) gate .*; exit \$LASTEXITCODE$/,
+        /^axiom(\.cmd|-hook\.exe) gate .*; if \(\$LASTEXITCODE -notin 0,2\) \{ exit 2 \} else \{ exit \$LASTEXITCODE \}$/,
       );
       expect(e.timeoutSec).toBe(HOOK_TIMEOUT_SEC);
     }
@@ -451,13 +473,17 @@ describe("axiom init — every harness", () => {
     );
   });
 
-  it("windsurf + codex Windows commands propagate the exit code (exit 2 = block)", () => {
+  it("windsurf maps crashes to exit 2; codex Windows commands are the bare shim (no PowerShell suffix)", () => {
     const w = windsurfHooks() as { hooks: Record<string, { powershell: string }[]> };
     expect(w.hooks.pre_write_code?.[0]?.powershell).toBe(
-      "axiom.cmd gate --stdin --format windsurf; exit $LASTEXITCODE",
+      "axiom.cmd gate --stdin --format windsurf; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }",
     );
     const c = codexHookEntry() as { hooks: { commandWindows: string }[] };
-    expect(c.hooks[0]?.commandWindows).toMatch(/; exit \$LASTEXITCODE$/);
+    expect(c.hooks[0]?.commandWindows).toBe("axiom.cmd gate --stdin --format codex");
+    const cp = codexPostHookEntry() as { hooks: { commandWindows: string }[] };
+    expect(cp.hooks[0]?.commandWindows).toBe("axiom.cmd gate --stdin --post --format codex");
+    const d = codexHookEntry("axiom-hook") as { hooks: { commandWindows: string }[] };
+    expect(d.hooks[0]?.commandWindows).toBe("axiom-hook.exe gate --stdin --format codex");
   });
 
   it("claude command hook fails closed and covers shell tools", () => {
@@ -717,3 +743,268 @@ async function put(rel: string, v: unknown): Promise<void> {
   await mkdir(join(abs, ".."), { recursive: true });
   await writeFile(abs, typeof v === "string" ? v : JSON.stringify(v));
 }
+
+describe("axiom init — v3 harnesses (B4)", () => {
+  it("kiro: .kiro/hooks/axiom-gate.json v1 PreToolUse, write|shell|@mcp, --format kiro; idempotent", async () => {
+    const { first, second } = await initTwice("kiro");
+    expect(pathsOf(first)).toContain(INIT_FILES.kiroHook);
+    const doc = await readJson(INIT_FILES.kiroHook);
+    expect(doc).toEqual(kiroHooks());
+    expect(doc).toEqual({
+      version: "v1",
+      hooks: [
+        {
+          name: "axiom-gate",
+          description: "AXIOM write gate (axiom init)",
+          trigger: "PreToolUse",
+          matcher: "write|shell|@mcp",
+          action: { type: "command", command: "axiom gate --stdin --format kiro" },
+          timeout: HOOK_TIMEOUT_SEC,
+        },
+      ],
+    });
+    expect(KIRO_MATCHER.split("|")).toEqual(expect.arrayContaining(["write", "shell"]));
+    expect(first.notes.some((n) => n.startsWith("kiro:"))).toBe(true);
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+    const d = kiroHooks("axiom-hook") as { hooks: { action: { command: string } }[] };
+    expect(d.hooks[0]?.action.command).toBe("axiom-hook gate --stdin --format kiro");
+  });
+
+  it("kiro and opencode are picked by --harness auto from their marker dirs", async () => {
+    await mkdir(join(repo.root, ".kiro"));
+    await mkdir(join(repo.root, ".opencode"));
+    const r = await runInit({ root: repo.root, profileName: "demo" });
+    expect(r.harnesses).toEqual(["kiro", "opencode"]);
+    expect(pathsOf(r)).toEqual(
+      expect.arrayContaining([INIT_FILES.kiroHook, INIT_FILES.opencodePlugin]),
+    );
+  });
+
+  it("opencode: writes the single-file ESM plugin (tool.execute.before, spawn without a shell)", async () => {
+    const { first, second } = await initTwice("opencode");
+    expect(pathsOf(first)).toContain(INIT_FILES.opencodePlugin);
+    const js = await readFile(join(repo.root, INIT_FILES.opencodePlugin), "utf8");
+    expect(js).toBe(OPENCODE_PLUGIN);
+    expect(js).toContain('"tool.execute.before"');
+    expect(js).toContain('from "node:child_process"');
+    expect(js).toContain('"gate", "--stdin", "--format", "claude"');
+    expect(js).not.toMatch(/shell\s*:\s*true/);
+    expect(js).not.toMatch(/\bexecSync?\(/);
+    expect(js).toContain("15000");
+    expect(js).not.toContain("\r");
+    expect(first.notes.some((n) => n.startsWith("opencode:"))).toBe(true);
+    expect(second.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("windsurf/devin also gate MCP tools (pre_mcp_tool_use); every event uses the crash-mapping forms", async () => {
+    const doc = windsurfHooks() as {
+      hooks: Record<string, { command: string; powershell: string }[]>;
+    };
+    expect(Object.keys(doc.hooks)).toEqual([...WINDSURF_EVENTS]);
+    expect(WINDSURF_EVENTS).toContain("pre_mcp_tool_use");
+    for (const ev of WINDSURF_EVENTS) {
+      expect(doc.hooks[ev]?.[0]).toEqual({
+        command: gateCommandBash("axiom", "windsurf"),
+        powershell: gateCommandPowerShell("axiom", "windsurf"),
+      });
+    }
+    expect(gateCommandBash("axiom", "windsurf")).toBe(
+      "axiom gate --stdin --format windsurf; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc",
+    );
+  });
+
+  it("junie: the user-level snippet pins --root to this repository", async () => {
+    await mkdir(join(repo.root, ".junie"));
+    const r = await runInit({ root: repo.root, profileName: "demo" });
+    const note = r.notes.find((n) => n.startsWith("junie:")) ?? "";
+    const snippet = JSON.parse(note.slice(note.indexOf("{"))) as {
+      hooks: { PreToolUse: { hooks: { command: string }[] }[] };
+    };
+    const cmd = snippet.hooks.PreToolUse[0]?.hooks[0]?.command ?? "";
+    expect(cmd.startsWith("axiom gate --stdin --format junie --root ")).toBe(true);
+    expect(cmd).toContain(r.root.includes(" ") ? JSON.stringify(r.root) : r.root);
+    expect(junieUserHooks("axiom", "/a b")).toEqual({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Write|Edit|Bash",
+            hooks: [
+              {
+                type: "command",
+                command: 'axiom gate --stdin --format junie --root "/a b"',
+                timeout: 10,
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it.runIf(process.platform === "win32")(
+    "PowerShell form: gate exit 0/2 pass through, crash (1) and a missing axiom.cmd become 2",
+    async () => {
+      const { execFile } = await import("node:child_process");
+      const bin = join(outside.root, "bin");
+      await mkdir(bin);
+      const run = (code: number | "missing") =>
+        new Promise<number>((resolve) => {
+          const dir = code === "missing" ? join(outside.root, "empty") : bin;
+          const cmd = gateCommandPowerShell("axiom", "auto");
+          const env = { ...process.env, PATH: `${dir};${process.env.SystemRoot}\\System32` };
+          const go = async () => {
+            if (code !== "missing") await writeFile(join(bin, "axiom.cmd"), `@exit /b ${code}\r\n`);
+            const ps = join(
+              process.env.SystemRoot ?? "C:\\Windows",
+              "System32",
+              "WindowsPowerShell",
+              "v1.0",
+              "powershell.exe",
+            );
+            execFile(
+              ps,
+              ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+              { env, windowsHide: true },
+              (err) => resolve(err === null ? 0 : Number((err as { code?: unknown }).code)),
+            );
+          };
+          void go();
+        });
+      expect(await run(0)).toBe(0);
+      expect(await run(2)).toBe(2);
+      expect(await run(1)).toBe(2);
+      expect(await run(3)).toBe(2);
+      expect(await run("missing")).toBe(2);
+    },
+    60_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "bash form: gate exit 0/2 pass through, crash and command-not-found (127) become 2",
+    async () => {
+      const { execFile } = await import("node:child_process");
+      const bin = join(outside.root, "bin");
+      await mkdir(bin);
+      const run = (code: number | "missing") =>
+        new Promise<number>((resolve) => {
+          const go = async () => {
+            if (code !== "missing") {
+              await writeFile(join(bin, "axiom"), `#!/bin/sh\nexit ${code}\n`, { mode: 0o755 });
+            }
+            const dir = code === "missing" ? join(outside.root, "empty") : bin;
+            execFile(
+              "/bin/sh",
+              ["-c", gateCommandBash("axiom", "windsurf")],
+              { env: { PATH: `${dir}:/usr/bin:/bin` } },
+              (err) => resolve(err === null ? 0 : Number((err as { code?: unknown }).code)),
+            );
+          };
+          void go();
+        });
+      expect(await run(0)).toBe(0);
+      expect(await run(2)).toBe(2);
+      expect(await run(1)).toBe(2);
+      expect(await run("missing")).toBe(2);
+    },
+  );
+});
+
+describe("axiom init --dry-run (I-19)", () => {
+  it("computes every file and a unified diff without writing anything", async () => {
+    for (const d of [".github", ".claude", ".kiro"]) await mkdir(join(repo.root, d));
+    await writeFile(join(repo.root, ".gitignore"), "node_modules\n");
+    const r = await initDryRun({ root: repo.root, profileName: "demo" });
+    expect(r.files.map((f) => [f.path, f.action])).toEqual([
+      [".vscode/mcp.json", "created"],
+      [".github/hooks/axiom-gate.json", "created"],
+      [".claude/settings.json", "created"],
+      [INIT_FILES.kiroHook, "created"],
+      [".axiom/profiles/demo.json", "created"],
+      [".axiom/gate-profile.json", "created"],
+      [".gitignore", "updated"],
+    ]);
+    expect((await readdir(repo.root)).sort()).toEqual([
+      ".claude",
+      ".github",
+      ".gitignore",
+      ".kiro",
+    ]);
+    expect(await readdir(join(repo.root, ".kiro"))).toEqual([]);
+    expect(await readFile(join(repo.root, ".gitignore"), "utf8")).toBe("node_modules\n");
+    const diff = r.diff ?? "";
+    expect(diff).toContain("--- /dev/null\n+++ b/.kiro/hooks/axiom-gate.json");
+    expect(diff).toContain("--- a/.gitignore\n+++ b/.gitignore");
+    expect(diff).toContain("+.axiom/*");
+    expect(diff).toContain('+  "version": 3,');
+    expect(r.notes.some((n) => n.startsWith("dry run:"))).toBe(true);
+    // The real run then writes exactly what the dry run predicted.
+    const real = await runInit({ root: repo.root, profileName: "demo" });
+    expect(real.files.map((f) => [f.path, f.action])).toEqual(
+      r.files.map((f) => [f.path, f.action]),
+    );
+    expect(real.diff).toBeUndefined();
+    const again = await initDryRun({ root: repo.root, profileName: "demo" });
+    expect(again.diff).toBe("");
+    expect(again.files.every((f) => f.action === "skipped")).toBe(true);
+  });
+
+  it("--upgrade and --managed honour dry-run too", async () => {
+    await put(".axiom/gate-profile.json", { deny: [] });
+    const before = await readFile(join(repo.root, ".axiom/gate-profile.json"), "utf8");
+    const up1 = await runInit({
+      root: repo.root,
+      profileName: "demo",
+      upgrade: true,
+      dryRun: true,
+      locateBin: NEW_BIN,
+      daemonRunning: async () => false,
+    });
+    expect(actionOf(up1, ".axiom/gate-profile.json")).toBe("updated");
+    expect(up1.diff).toContain('+  "steer": "hint"');
+    expect(await readFile(join(repo.root, ".axiom/gate-profile.json"), "utf8")).toBe(before);
+    const out = join(outside.root, "policy");
+    const m = await runInit({ root: repo.root, managed: { out }, dryRun: true });
+    expect(m.files.map((f) => f.action)).toEqual(Object.values(MANAGED_FILES).map(() => "created"));
+    expect(m.diff).toContain(`+++ b/${MANAGED_FILES.codex}`);
+    expect(await readdir(outside.root)).toEqual([]);
+  });
+});
+
+describe("docs snippets are generated by init (<!-- init:… --> markers)", () => {
+  const DOCS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs");
+  const expected: Record<string, unknown> = {
+    claude: { hooks: { PreToolUse: [CLAUDE_HOOK_ENTRY], PostToolUse: [CLAUDE_POST_HOOK_ENTRY] } },
+    copilot: COPILOT_HOOK,
+    codex: { hooks: { PreToolUse: [codexHookEntry()], PostToolUse: [codexPostHookEntry()] } },
+    cursor: cursorHooks(),
+    windsurf: windsurfHooks(),
+    gemini: { hooks: { BeforeTool: [geminiHookEntry()] } },
+    kiro: kiroHooks(),
+    junie: junieUserHooks(),
+  };
+
+  /** Every `<!-- init:name -->` followed by a fenced json block, parsed. */
+  function snippets(md: string): [string, unknown][] {
+    const out: [string, unknown][] = [];
+    const re = /<!-- init:([a-z]+) -->\r?\n```json\r?\n([\s\S]*?)\r?\n```/g;
+    for (const m of md.matchAll(re)) out.push([m[1] ?? "", JSON.parse(m[2] ?? "")]);
+    return out;
+  }
+
+  it("harnesses.md and hooks.md carry every marked snippet exactly as init writes it", async () => {
+    const seen = new Set<string>();
+    for (const file of ["integration/harnesses.md", "getting-started/hooks.md"]) {
+      const md = await readFile(join(DOCS, file), "utf8");
+      const found = snippets(md);
+      expect(found.length, file).toBeGreaterThan(0);
+      // A marker whose block did not parse as fenced json would be silently skipped.
+      expect((md.match(/<!-- init:[a-z]+ -->/g) ?? []).length, file).toBe(found.length);
+      for (const [name, doc] of found) {
+        expect(Object.keys(expected), `${file}: unknown marker init:${name}`).toContain(name);
+        expect(doc, `${file} init:${name}`).toEqual(expected[name]);
+        seen.add(name);
+      }
+    }
+    expect([...seen].sort()).toEqual(Object.keys(expected).sort());
+  });
+});

@@ -22,6 +22,12 @@ export {
 export * from "./predicates/index.js";
 export { KeylessParams } from "./predicates/signature.js";
 export {
+  DEFAULT_GLOB_NOCASE,
+  type GlobMatcherOptions,
+  globMatcher,
+  type Matcher,
+} from "./predicates/util.js";
+export {
   BUILTIN_PROFILE_INPUTS,
   builtinProfiles,
   type LoadProfileOptions,

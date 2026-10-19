@@ -6,6 +6,8 @@
  * `manifest.toolchain.emitters[<id>]`, so bumping it changes the manifest digest.
  */
 
+import { AxiomError } from "@codai/axiom-schema";
+
 /** Structural subset of `z.ZodType.safeParse` — keeps `plan` free of a zod dependency. */
 export interface ParamsSchema<T = unknown> {
   safeParse(
@@ -38,7 +40,11 @@ export interface EmitterRegistry {
 export function createEmitterRegistry(emitters: readonly TemplateEmitter[]): EmitterRegistry {
   const byId = new Map<string, TemplateEmitter>();
   for (const e of emitters) {
-    if (byId.has(e.id)) throw new Error(`duplicate emitter id: ${e.id}`);
+    if (byId.has(e.id)) {
+      throw new AxiomError("ERR_EMITTER_UNKNOWN", `duplicate emitter id: ${e.id}`, {
+        details: { emitter: e.id, reason: "duplicate" },
+      });
+    }
     byId.set(e.id, e);
   }
   return {

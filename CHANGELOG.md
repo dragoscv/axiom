@@ -20,6 +20,25 @@ release notes with the full asset list (binaries, `SHA256SUMS`, `.vsix`) live on
 | `@codai/axiom-emitters-web` | [packages/emitters-web/CHANGELOG.md](packages/emitters-web/CHANGELOG.md) | Optional `template` emitter `web@2.0.0` |
 | `@codai/axiom-mcp` | [packages/mcp/CHANGELOG.md](packages/mcp/CHANGELOG.md) | The published bin: MCP server, CLI, hook mode |
 
+## 3.0.0 (2026-10-19) — reality check + redesign
+
+Breaking release after the 2026-10-19 reality check
+([report](docs/research/2026-10-19-reality-check.md), decisions D-41..D-45). Upgrade notes:
+[MIGRATION.md](MIGRATION.md#from-2x-to-30). Per-package details: `packages/*/CHANGELOG.md`.
+
+- **Security:** 14 verified P0 fixed — gate bypasses (newline, quoting, case, 8.3, rule order,
+  override from file content), daemon squatting (protocol 2, HMAC), `.axiom/` trust store
+  overwrite, journal path escape, unverified CAS refs, profile version skew.
+- **One policy file** `.axiom/axiom.json` with `extends`; apiVersion `axiom.codai.ro/v3`
+  (v2 still parses); spec pages on the docs site.
+- **CLI:** noun groups from one command table (old verbs kept as aliases), `axgate` alias,
+  `explain`, `suggest-profile`, `doctor --fleet`, `journal replay`, `report`, `pin`,
+  `acp-proxy`, `init --dry-run`, `migrate --profile`.
+- **Harnesses:** Kiro, OpenCode, ACP; Codex Windows fix; Claude-only deny document; Junie ask.
+- **MCP:** core toolset of 6 by default (`--tools full` for all 19); emitters opt-in.
+- **Also:** VS Code "AXIOM" extension, journal redaction + retention, budget gates, outside-write
+  undo, PR-comment action, third-party notices, WCAG 2.2 AA docs site (0 axe violations).
+
 ## 2.2.1 (2026-09-21) — Phase 5: distribution, docs site, repo polish
 
 No wire or API change. Standalone binaries for linux-x64, linux-arm64, darwin-arm64,

@@ -5,333 +5,205 @@
 [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-mcp?label=npm&logo=npm)](https://www.npmjs.com/package/@codai/axiom-mcp)
 [![downloads](https://img.shields.io/npm/dm/%40codai%2Faxiom-mcp?label=downloads)](https://www.npmjs.com/package/@codai/axiom-mcp)
 [![CI](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/ci.yml?branch=main&label=CI&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/actions/workflow/status/dragoscv/axiom/release.yml?label=release&logo=github)](https://github.com/dragoscv/axiom/actions/workflows/release.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dragoscv/axiom/badge)](https://scorecard.dev/viewer/?uri=github.com/dragoscv/axiom)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15478/badge)](https://www.bestpractices.dev/projects/15478)
 [![license](https://img.shields.io/badge/license-MIT-1c1917)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-dragoscv.github.io%2Faxiom-c2410c)](https://dragoscv.github.io/axiom/)
-[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.dragoscv%2Faxiom-c2410c)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest)
 [![node](https://img.shields.io/badge/node-%E2%89%A5%2022.14-1c1917?logo=node.js)](https://nodejs.org)
 
-[Docs](https://dragoscv.github.io/axiom/) · [Quickstart](#quickstart-60-s) · [Tools](#tools) · [Architecture](#architecture) · [Packages](#packages) · [Contributing](CONTRIBUTING.md)
+[Docs](https://dragoscv.github.io/axiom/) · [Quickstart](#quickstart) · [Install](#install) · [Harnesses](#harnesses) · [Packages](#packages) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
-An agent describes a change set as a **Plan**. AXIOM compiles it to a canonical,
-content-addressed **Manifest**, runs **checks** over the whole set, and **applies** it with a
-hash-gated two-phase commit that leaves a journal and, optionally, a signed attestation.
-It ships as one npm package — `@codai/axiom-mcp` — that is an MCP server, a CLI, a
-PreToolUse hook and a GitHub Action.
+**AXIOM is the transactional write gate for coding agents.** It sits between an agent and your
+repository: every write and shell command the agent attempts is judged before it runs, and a
+change set the agent submits is applied as one transaction you can undo byte for byte.
 
-## Why
+## What you get
 
-- **Per change set, not per tool call.** Harness hooks (Claude Code, Copilot, Cursor) decide
-  one write at a time. A forty-file refactor is forty blind decisions; AXIOM checks the whole
-  manifest first — "if you touch X you must also touch Y", dependency budgets, secrets, paths.
-- **Byte-exact.** The manifest is JCS-canonical (RFC 8785) and holds only sha256 digests;
-  `apply` demands the digest you inspected (`confirmDigest`), re-hashes every pre-image at
-  commit, and rolls back to the byte-identical prior tree on any failure — on a tree several
-  agents share.
-- **Provable.** Every apply leaves a journal keyed by digest. Manifests can be DSSE-signed
-  with pinned Ed25519 keys and anti-rollback counters; `verify --tree` proves a tree matches a
-  manifest and emits an in-toto attestation that CI uploads to Sigstore.
+- **A gate in 12 harnesses**: Claude Code, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline, Kiro, OpenCode and any ACP client. One policy file decides which paths, secrets and shell commands (`git push --force`, `git reset --hard`, `rm -rf /`, …) are allowed, asked about or denied.
+- **Digest-confirmed apply**: a change set is compiled to a canonical manifest; `apply` runs only with the digest you inspected, re-checks every file's prior hash at commit (two-phase), and rolls back to the byte-identical tree on any failure.
+- **Session undo**: `axiom journal undo --session <id>` restores every file one agent session wrote, including allowed writes outside the repository.
+- **A journal you can read**: relaxed and recorded decisions go to `.axiom/decisions.jsonl` (redacted); `axiom explain last` says which rule decided, from which profile, and how to fix it; `axiom report` renders a static HTML report.
+- **Attestations**: DSSE (Ed25519) signatures and in-toto statements ([apply](https://dragoscv.github.io/axiom/spec/attestation/apply/v1/), [agent decision](https://dragoscv.github.io/axiom/spec/attestation/agent-decision/v0.1/)) that `gh attestation verify` can check.
 
-## What it does
+**No telemetry.** AXIOM sends nothing anywhere. It reads and writes only the roots you allow
+and `~/.axiom/`; the only outbound network access is a `ref` source fetch you opt into with
+`--allow-net`.
 
-```mermaid
-flowchart LR
-  subgraph entry [Entry points]
-    direction TB
-    MCP[MCP server<br/>stdio · Streamable HTTP]
-    CLI[CLI<br/>axiom compile · check · apply]
-    HOOK[PreToolUse hook<br/>axiom gate --stdin]
-    GHA[GitHub Action<br/>dragoscv/axiom/action@v2]
-  end
-  P[Plan<br/>JSON or .axm] -->|compile| M[Manifest<br/>JCS · sha256 per file<br/>blobs · CAS · ref · patch]
-  M -->|check| C[CheckReport<br/>pass · fail · error]
-  C -->|apply · 2PC<br/>confirmDigest| T[Repository tree]
-  T --> J[Journal · ApplyResult<br/>DSSE signature · in-toto attestation]
-  J -.->|rollback| T
-  entry --> P
-```
-
-## Install
-
-| Channel | Command | Platforms |
-|---|---|---|
-| Run without installing | `npx -y @codai/axiom-mcp mcp --root .` | anywhere with Node ≥ 22.14 |
-| Global bin (`axiom`) — required for hooks | `npm i -g @codai/axiom-mcp` | anywhere with Node ≥ 22.14 |
-| Standalone binary, no Node (from 2.2.1) | `curl -fsSL https://dragoscv.github.io/axiom/install.sh \| sh` | linux-x64 · linux-arm64 · darwin-arm64 · darwin-x64 |
-| Standalone binary, no Node (from 2.2.1) | `irm https://dragoscv.github.io/axiom/install.ps1 \| iex` | win-x64 |
-| Homebrew (same binary) | `brew install dragoscv/tap/axiom` | macOS · Linux |
-| VS Code `.axm` extension | `axiom-axm-<version>.vsix` on the [GitHub release](https://github.com/dragoscv/axiom/releases) | VS Code ≥ 1.138 |
-| GitHub Action | `uses: dragoscv/axiom/action@v2` | ubuntu · macos · windows runners |
-| MCP Registry | `io.github.dragoscv/axiom` | any registry-aware MCP client |
-
-Then wire a repository in one idempotent step and check it:
+## Quickstart
 
 ```sh
 npm i -g @codai/axiom-mcp
-axiom init      # .vscode/mcp.json + PreToolUse hook (.github/hooks/axiom-gate.json or .claude/settings.json)
-                # + .axiom/profiles/<repo>.json + .axiom/gate-profile.json + .gitignore lines
-axiom doctor    # bin on PATH, hooks, gate p95 latency vs the 5 s hook timeout, lock, journals, profiles
+cd your-repo
+axiom setup init          # detects the harness, writes the hook + MCP entry + .axiom policy
+axiom setup doctor        # bin on PATH, hook wired, gate latency, policy valid (exit 2 = a check failed)
 ```
 
-`init` detects the harness (`--harness auto|copilot|claude|codex|vscode`), merges into existing
-JSON instead of overwriting (`--force` to replace), and writes only a note for Codex, which has no
-hook API. `doctor` exits 2 when a check fails. Per-harness files:
-[docs/getting-started/install.md](docs/getting-started/install.md).
+`setup init` writes an **enforcing** policy: the built-in deny list (`.git/**`, `.env*`,
+lockfiles, `node_modules`, …), the `house` command pack, and four hard codes that no mode or
+override can relax: `house.forcePush`, `house.resetHard`, `house.cleanForce`,
+`house.worktreeRemoveForce`. Preview it first with `axiom setup init --dry-run`.
 
-Binaries ship with `SHA256SUMS` and Sigstore provenance; npm packages carry npm provenance.
-How to check them: [SECURITY.md](SECURITY.md#verifying-what-you-download).
+Now ask the agent to force-push, or to write `.env`. The harness blocks the call and the agent
+is told why (the hook also prints the reason on stderr):
 
-## Quickstart (60 s)
-
-**1. Point an MCP client at a repo** — `.vscode/mcp.json` (Claude Desktop config is the same
-shape, see [packages/mcp/README.md](packages/mcp/README.md)):
-
-```json
-{
-  "servers": {
-    "axiom": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@codai/axiom-mcp", "mcp", "--root", "${workspaceFolder}"]
-    }
-  }
-}
+```text
+AXIOM GATE DENY house.forcePush: Force-push rewrites remote history, --force-with-lease included; ask the user first.
+AXIOM GATE DENY path.deny: path matches a denied glob (.env)
 ```
 
-`--root` is an explicit allowlist and may repeat; there is no `cwd` or env fallback.
-
-**2. Write a Plan** — `plan.json`:
-
-```json
-{
-  "apiVersion": "axiom.dev/v2",
-  "kind": "Plan",
-  "name": "hello",
-  "intent": "Add a greeting module and document it.",
-  "artifacts": [
-    { "path": "src/hello.ts",
-      "source": { "type": "inline", "content": "export const hi = () => 'hi';\n" } },
-    { "path": "README.md", "op": "overwrite",
-      "source": { "type": "inline", "content": "# hello\n" } }
-  ],
-  "checks": [{ "id": "no-secrets", "predicate": "content.noSecrets", "params": {} }]
-}
-```
-
-**3. Compile → check → apply** from the CLI (the MCP tools do the same):
+Ask why, at any time:
 
 ```sh
-axiom compile plan.json --root . -o bundle.json        # → { manifestDigest: "sha256:…" }
-axiom check   bundle.json --root .                     # → CheckReport, verdict pass|fail|error
-axiom apply   bundle.json --root . --dry-run           # unified diff, nothing written
-axiom apply   bundle.json --root . --confirm sha256:…  # two-phase commit, journal under .axiom/
-axiom rollback sha256:… --root .                       # reverse-replay that journal entry
+axiom explain last        # decision, rule, profile, the command or path, and FIX: what to do instead
 ```
 
-Plan fields, sources (`inline`, `cas`, `ref`, `patch`, `template`) and the `.axm` DSL:
-[docs/reference/plan-format.md](docs/reference/plan-format.md) · [docs/reference/axm-syntax.md](docs/reference/axm-syntax.md).
+With `"undo": true` in the gate policy, the gate keeps the pre-image of every file it lets
+through, so one session can be rolled back after the fact:
 
-## Use it as a PreToolUse hook
-
-`axiom gate --stdin` reads one harness payload, checks containment, `path.deny/allow`,
-`content.noSecrets` and `content.maxBytes` on the write target, scans shell commands for write
-primitives, and answers allow (exit 0, no output) or deny (a JSON `permissionDecision: "deny"`
-document on stdout; `--deny-exit 2` also exits 2). Fail-closed; ~100 ms end
-to end. Claude Code:
-
-```json
-{ "hooks": { "PreToolUse": [ { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-  "hooks": [ { "type": "command", "command": "axiom gate --stdin", "timeout": 5 } ] } ] } }
+```sh
+axiom journal undo --session <agent-session-id> --dry-run   # what would be restored
+axiom journal undo --session <agent-session-id>             # restore it; conflicts are skipped and reported
 ```
 
-Copilot CLI / VS Code wiring, profile file and the latency budget: [docs/getting-started/hooks.md](docs/getting-started/hooks.md).
+Trying the gate before enforcing it? Set `"mode": "warn"`: denies become warnings the agent
+sees (hard codes still deny), and `axiom setup stats` / `axiom setup suggest-profile` show what
+would have been blocked. Every key: [profiles.md](docs/reference/profiles.md#gate-keys).
+The full walk-through, including a first transactional apply:
+[quickstart](docs/getting-started/quickstart.md).
 
 > [!WARNING]
-> Install the global bin for hooks. `npx` resolution takes seconds even with a warm cache,
-> the harness times the hook out, and every harness fails **open** on timeout.
+> Hooks need the global bin. `npx` takes seconds to resolve, the harness times the hook out,
+> and every harness fails **open** on a timeout.
 
-## Use it in CI
+## Install
 
-Fail a pull request whose tree does not match the manifest an agent applied, and optionally
-upload an in-toto attestation:
-
-```yaml
-- uses: dragoscv/axiom/action@v2
-  with:
-    bundle: .axiom/manifests/<hex>.json
-    root: .
-    attest: true   # needs permissions: id-token: write, attestations: write
-```
-
-Scope, `--pre` mode and how to verify the attestation later: [docs/guides/verify-tree.md](docs/guides/verify-tree.md).
-
-## Tools
-
-Eighteen MCP tools, each with `annotations` and an `outputSchema`; errors are `isError` results
-carrying a code from the closed `ERROR_CODES` enum — a handler never throws.
-
-| Tool | What it does | Annotations |
+| Channel | How | Notes |
 |---|---|---|
-| `axiom_plan_validate` | Validate a `Plan`; `ERR_*` codes with JSON pointers | read-only |
-| `axiom_plan_compile` | `Plan` → `ManifestBundle` (inline blobs or CAS); writes only under `<root>/.axiom/` | act |
-| `axiom_manifest_verify` | Recompute the canonical digest, verify every blob and, with a root, the DSSE signatures | read-only |
-| `axiom_check` | Run a profile of predicates over a bundle; fails closed; verifies `preImage` against the tree | read-only |
-| `axiom_check_start` | Same as `axiom_check`, returned immediately as a task (long `guard.external` suites) | read-only |
-| `axiom_task_get` | Poll a task; `result` once `completed`, `error` once `failed`/`cancelled` | read-only |
-| `axiom_task_cancel` | Abort a `working` task and kill its guard process trees | act |
-| `axiom_plan_begin` | Open a chunked plan session for Plans over the 4 MiB call cap | act |
-| `axiom_plan_add` | Append a chunk of `artifacts[]` to a session | act |
-| `axiom_plan_seal` | Compile the assembled Plan through the same path as `axiom_plan_compile` | act |
-| `axiom_apply_dry_run` | Containment + pre-image check + staging + unified diff; no user files touched | read-only |
-| `axiom_apply` | Two-phase commit; requires `confirmDigest === manifestDigest`; single writer via `.axiom/lock` | destructive |
-| `axiom_rollback` | Reverse-replay the journal of an applied manifest, scoped to its paths | destructive |
-| `axiom_manifest_diff` | Added / removed / changed artifacts between two manifests | read-only |
-| `axiom_axm_parse` | `.axm` DSL text → `Plan` with `{line, column}` diagnostics | read-only |
-| `axiom_roots_list` | The allowlisted roots | read-only |
-| `axiom_status` | Lock holder, queue, in-flight intents, interrupted journals, last apply, journal-chain health | read-only |
-| `axiom_repo_snapshot` | Deterministic, content-addressed inventory of a root (`snapshotDigest`) | read-only |
+| VS Code Marketplace | [`dragoscv.axiom-axm`](https://marketplace.visualstudio.com/items?itemName=dragoscv.axiom-axm) | "AXIOM": gate status bar, Doctor / Init / Stats / Explain commands, `.axm` language support |
+| Open VSX | [`dragoscv/axiom-axm`](https://open-vsx.org/extension/dragoscv/axiom-axm) | the same extension for Cursor, VSCodium, Windsurf, Gitpod |
+| npm, global bin | `npm i -g @codai/axiom-mcp` | bins `axiom`, `axgate`, `axiom-mcp`; Node ≥ 22.14; **required for hooks** |
+| npm, no install | `npx -y @codai/axiom-mcp mcp --root .` | MCP server only |
+| Standalone binary | `curl -fsSL https://dragoscv.github.io/axiom/install.sh \| sh` | linux-x64/arm64, darwin-x64/arm64; no Node |
+| Standalone binary | `irm https://dragoscv.github.io/axiom/install.ps1 \| iex` | win-x64; no Node |
+| Homebrew | `brew install dragoscv/tap/axiom` | the same binary |
+| GitHub Action | `uses: dragoscv/axiom/action@v2` | verify a tree against a manifest, upload an attestation |
+| MCP Registry | `io.github.dragoscv/axiom` | any registry-aware MCP client |
 
-Inputs, outputs, resources (`axiom://…`), transports (`--wire 2026|2025`) and the error
-contract: [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md). CLI verbs (`init`, `doctor`, `status`, `log`, `sign`, `trust`, `gc`, `migrate v1`,
-`snapshot`, …): [packages/mcp/README.md](packages/mcp/README.md).
+The bin is also installed as **`axgate`**. [Axiom, Inc.](https://axiom.co) ships an unrelated
+CLI named `axiom`; if it is first on your PATH, call AXIOM as `axgate` (`axgate setup init`,
+`axgate gate --stdin …`). Binaries ship with `SHA256SUMS` and Sigstore provenance, npm packages
+with npm provenance: [SECURITY.md](SECURITY.md#verifying-what-you-download). Every channel:
+[install.md](docs/getting-started/install.md).
 
-## Architecture
+## Harnesses
+
+`axiom setup init --harness <name>` wires one; `auto` (the default) detects it from the files in
+the repository.
+
+| Harness | `--harness` |
+|---|---|
+| Claude Code | `claude` |
+| GitHub Copilot CLI | `copilot` |
+| VS Code (agent mode) | `vscode` |
+| Codex | `codex` |
+| Cursor | `cursor` |
+| Windsurf | `windsurf` |
+| Gemini CLI | `gemini` |
+| Junie | `junie` |
+| Cline | `cline` |
+| Kiro | `kiro` |
+| OpenCode | `opencode` |
+| ACP clients (Zed, …) | none: run the agent through `axiom acp-proxy --root . -- <agent>` |
+
+Hook files, payload formats, how a deny reaches each agent, and per-harness caveats:
+[harnesses.md](docs/integration/harnesses.md).
+
+## How it works
 
 ```mermaid
-flowchart TB
-  schema["@codai/axiom-schema<br/>Zod v4 · ERROR_CODES · JSON Schema"]
-  canon["@codai/axiom-canon<br/>JCS · sha256 · in-toto · DSSE"]
-  plan["@codai/axiom-plan<br/>compile · CAS · ref · patch"]
-  checks["@codai/axiom-checks<br/>18 predicates · profiles · guards"]
-  apply["@codai/axiom-apply<br/>containment · 2PC · journal · verify-tree"]
-  axm["@codai/axiom-axm<br/>.axm parser"]
-  lsp["@codai/axiom-axm-lsp<br/>language server"]
-  web["@codai/axiom-emitters-web<br/>template emitter"]
-  mcp["@codai/axiom-mcp<br/>MCP server · CLI · gate"]
-  plan --> schema & canon
-  checks --> schema & canon
-  apply --> schema & canon
-  axm --> schema
-  lsp --> axm & schema
-  mcp --> plan & checks & apply & axm & web & canon & schema
+flowchart LR
+  accTitle: AXIOM in front of an agent
+  accDescr: A tool call from an agent goes through the gate, which allows, asks, warns or denies it. A change set goes through compile, checks and a digest-confirmed two-phase apply that writes the journal and can be rolled back.
+  A[Agent] -->|tool call| G{gate<br/>policy and rules}
+  G -->|allow or warn| T[Repository tree]
+  G -->|ask| H[Human]
+  G -->|deny and reason| A
+  A -->|Plan| P[compile<br/>canonical Manifest]
+  P --> C[checks<br/>whole change set]
+  C -->|pass| X[apply<br/>confirmDigest and 2PC]
+  X --> T
+  X --> J[(journal<br/>decisions and undo)]
+  J -.->|rollback or undo| T
 ```
 
-`schema` and `canon` are leaves; `plan`, `checks`, `apply` depend only on those two; `axm` on
-`schema`; `axm-lsp` on `axm` + `schema`; `emitters-web` has no workspace deps (the emitter
-registry is an interface injected into `compilePlan`); `mcp` depends on everything except the
-private `testkit`; nobody depends on `mcp`. Enforced by `check-package-deps`.
+Policy lives in `.axiom/`: the gate reads `.axiom/axiom.json` (`{ version: 3, gate, checks, extends }`),
+and check profiles are built-in or `.axiom/profiles/<name>.json`.
+The **gate** judges each tool call in milliseconds (a resident daemon answers hooks in a few
+milliseconds). The **pipeline** checks a whole change set ("touch the schema, touch the
+migration", dependency budgets, secrets, paths) and applies it atomically. Terms:
+[glossary](docs/concepts/glossary.md). Concepts: [pipeline](docs/concepts/pipeline.md),
+[trust model](docs/concepts/trust-model.md), [invariants](docs/concepts/invariants.md).
 
-**Invariants** (never weakened; [PLAN.md](PLAN.md) §2, [design](docs/design/v2-architecture.md)):
+## Surfaces
 
-1. `ManifestBody` is JCS-canonical; `manifestDigest = sha256(JCS(body))`; nothing hashed contains a timestamp.
-2. Content never lives in the manifest — it travels as `blobs` (≤ 256 KiB each, ≤ 4 MiB bundle), CAS (`.axiom/cas/sha256/…`) or a digest-pinned `ref`.
-3. `apply` requires `confirmDigest === manifestDigest`; pre-images are re-verified at commit; `.axiom/lock` = single writer per root.
-4. Error codes are a closed enum; tests and clients branch on `code`, never on message text.
-5. MCP stdout is JSON-RPC only; logs to stderr at `warn`.
-6. No shell: child processes get an args array, never `shell: true`.
-7. A predicate whose fact provider cannot run yields `verdict: "error"` — fail closed.
-8. Roots are an explicit allowlist (`--root`); no `cwd` fallback.
-9. The MCP SDK is reached through one seam (`packages/mcp/src/adapter.ts`) and lives in lazy chunks.
+- **CLI**: noun groups (`axiom plan …`, `axiom journal …`, `axiom keys …`, `axiom hook …`,
+  `axiom setup …`, plus `explain`, `report`, `pin`, `mcp`, `serve`, `snapshot`, `gc`, `schema`),
+  generated from one command table; `axiom <command> --help` prints that command only. The 2.x
+  verbs (`axiom gate`, `axiom init`, `axiom apply`, …) keep working as hidden aliases until 4.0.
+  Every command: [cli.md](docs/reference/cli.md).
+- **MCP server**: `axiom mcp --root <dir>`, stdio or Streamable HTTP. 19 tools; the default
+  `core` set is the 6 an agent needs to write through AXIOM (`axiom_write`, `axiom_status`,
+  `axiom_check`, `axiom_apply_dry_run`, `axiom_apply`, `axiom_rollback`); `--tools full` adds
+  the plan, manifest and task plumbing. [mcp-tools.md](docs/reference/mcp-tools.md).
+- **Hook**: `axiom gate --stdin --format <harness>`, fail-closed, or the resident daemon
+  `axiom hook daemon`. [hooks.md](docs/getting-started/hooks.md).
+- **GitHub Action**: fail a PR whose tree does not match the manifest an agent applied, and
+  upload an attestation. [github-action.md](docs/integration/github-action.md).
+- **VS Code extension**: [vscode.md](docs/integration/vscode.md).
 
 ## Packages
 
-| Package | What | npm |
-|---|---|---|
-| [`@codai/axiom-schema`](packages/schema/README.md) | Zod v4 schemas for Plan, Manifest, CheckReport, ApplyResult, Profile, Journal, RepoSnapshot; closed `ERROR_CODES`; JSON Schema export | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-schema?label=)](https://www.npmjs.com/package/@codai/axiom-schema) |
-| [`@codai/axiom-canon`](packages/canon/README.md) | JCS (RFC 8785), sha256, in-toto Statement v1, DSSE Ed25519 envelopes | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-canon?label=)](https://www.npmjs.com/package/@codai/axiom-canon) |
-| [`@codai/axiom-plan`](packages/plan/README.md) | Plan → ManifestBundle compiler; inline / CAS / `ref` / `patch` / `template` sources; `verifyBundle`, `diffManifests` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-plan?label=)](https://www.npmjs.com/package/@codai/axiom-plan) |
-| [`@codai/axiom-checks`](packages/checks/README.md) | 18 predicates incl. `expr.cel`, `expr.cedar`, `guard.external`, `manifest.requireSigned`; profiles `default` / `strict` / `permissive` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-checks?label=)](https://www.npmjs.com/package/@codai/axiom-checks) |
-| [`@codai/axiom-apply`](packages/apply/README.md) | Containment, staging, two-phase commit, journal, rollback, lock, dry-run diff, PR mode, `verifyTree` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-apply?label=)](https://www.npmjs.com/package/@codai/axiom-apply) |
-| [`@codai/axiom-axm`](packages/axm/README.md) | `.axm` DSL → `Plan` (Chevrotain) with positioned diagnostics; `formatAxm` | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-axm?label=)](https://www.npmjs.com/package/@codai/axiom-axm) |
-| [`@codai/axiom-axm-lsp`](packages/axm-lsp/README.md) | Language server for `.axm`: diagnostics, completion, hover, symbols, formatting, semantic tokens | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-axm-lsp?label=)](https://www.npmjs.com/package/@codai/axiom-axm-lsp) |
-| [`@codai/axiom-emitters-web`](packages/emitters-web/README.md) | Optional `template` sources — the `web@2.0.0` emitter (Next 16, Hono 4, Drizzle, Biome, Tailwind v4) | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-emitters-web?label=)](https://www.npmjs.com/package/@codai/axiom-emitters-web) |
-| [`@codai/axiom-mcp`](packages/mcp/README.md) | **The published bin** — MCP server (stdio + Streamable HTTP), CLI, `gate --stdin` hook, standalone-binary entry | [![npm](https://img.shields.io/npm/v/%40codai%2Faxiom-mcp?label=)](https://www.npmjs.com/package/@codai/axiom-mcp) |
+| Package | What |
+|---|---|
+| [`@codai/axiom-mcp`](packages/mcp/README.md) | **The published bin**: CLI, MCP server, gate hook and daemon, standalone-binary entry |
+| [`@codai/axiom-schema`](packages/schema/README.md) | Zod schemas for every wire type, the closed `ERROR_CODES`, JSON Schemas (published at [`/schemas/v3/`](https://dragoscv.github.io/axiom/schemas/v3/Plan.schema.json)) |
+| [`@codai/axiom-canon`](packages/canon/README.md) | JCS (RFC 8785), sha256, in-toto statements, DSSE envelopes |
+| [`@codai/axiom-plan`](packages/plan/README.md) | Plan → ManifestBundle compiler: inline, CAS, `ref`, `patch`, `template` sources |
+| [`@codai/axiom-checks`](packages/checks/README.md) | 18 predicates (incl. `expr.cel`, `expr.cedar`, `guard.external`), built-in profiles |
+| [`@codai/axiom-apply`](packages/apply/README.md) | Containment, two-phase commit, journal, rollback, lock, PR mode, `verifyTree` |
+| [`@codai/axiom-axm`](packages/axm/README.md) | The `.axm` plan language: parser, formatter, language server (`@codai/axiom-axm/lsp`, `axm-lsp` bin) |
+| [`@codai/axiom-emitters-web`](packages/emitters-web/README.md) | Optional `template` emitter, loaded with `axiom plan compile --emitter @codai/axiom-emitters-web` |
+| [`@codai/axiom-axm-lsp`](packages/axm-lsp/README.md) | Deprecated re-export of `@codai/axiom-axm/lsp`, kept through 3.x |
 
-Private, not published: `testkit` (golden fixtures, arbitraries), `conformance` (MCP
-conformance harness), `vscode-axm` (the `.vsix`). All nine public packages share one version
-(fixed Changesets group) and are released together.
+All public packages share one version and release together. `schema` and `canon` are leaves;
+`plan`, `checks` and `apply` depend only on them; nobody depends on `mcp` (enforced by
+`check-package-deps`). Design: [v2-architecture.md](docs/design/v2-architecture.md).
 
-## Checks & profiles
+## Upgrading to 3.0
 
-A `Profile` is a list of typed predicates. Built-ins: `path.allow` / `path.deny` /
-`path.reservedNames`, `content.noSecrets` / `content.maxBytes` / `content.encodingUtf8`,
-`manifest.maxArtifacts` / `manifest.maxTotalBytes` / `manifest.requireSigned` / `manifest.noDeletes`,
-`deps.max` / `deps.deny`, `repo.noOverwriteOf` / `repo.requireCompanion`, `guard.external`
-(your own `scripts/check-*.mjs`), `expr.cel` and `expr.cedar` (offline policy languages).
-Verdict is `pass | fail | error`; anything that cannot be evaluated is `error`, which blocks
-apply. Catalogue, params and profile authoring: [docs/guides/checks.md](docs/guides/checks.md).
-
-## Signing & provenance
-
-`axiom keygen` → `axiom trust add` → `axiom sign` puts a detached DSSE envelope (Ed25519 over
-`JCS(manifest)`) beside the bundle without changing its digest; a profile with
-`manifest.requireSigned` then refuses unsigned, tampered, untrusted or replayed
-(`antiRollback`) bundles. `axiom verify --tree [--attest]` emits an in-toto Statement
-(`https://axiom.dev/attestation/apply/v1`). Envelope, key ceremony, root binding and limits:
-[docs/guides/signing.md](docs/guides/signing.md) · [docs/guides/verify-tree.md](docs/guides/verify-tree.md).
-
-## Status & roadmap
-
-**2.3.x shipped.** Plan compiler with every source type, 18 predicates, fail-closed apply with
-journal/rollback/PR mode, MCP SDK v2 (2026-07-28 wire, `--wire 2025` fallback) over stdio and
-HTTP, fail-closed gate, `.axm` DSL + LSP + VS Code extension, DSSE signing,
-`verify --tree` + attestation + GitHub Action, CI on ubuntu/windows/macos, 18 repo guards.
-**2.2.1** adds standalone binaries with provenance, the MCP Registry listing, the docs site and
-the `action@v2` tag. **2.4.0 (Phase 7, D-34)** adds `axiom init` / `axiom doctor`, multi-agent
-roots (early `ERR_CONFLICT`, FIFO lock queue, `--lock-timeout`), PR mode in an isolated worktree,
-Sigstore keyless signing with an issuer/subject policy, `axiom status` / `axiom log` /
-`verify --journal` over a hash-chained journal, `--keep-backups`, YAML Plans — and the 18th MCP tool,
-`axiom_status`. **2.4.1 (D-35)** makes the gate's deny actually block in VS Code on Windows (exit 0 +
-JSON; `--deny-exit 2` for exit-code-only harnesses), judges writes in sibling worktrees of the same
-repository against that worktree, and answers read-only tools before the gate chunk loads.
-**2.5.0 (Phase 8, D-36/D-37)** adds the resident gate daemon `axiom serve --hook` (Claude HTTP hook
-~4–5 ms, no process per call) and the native `axiom-hook` client, `--format` + `init`/`doctor` for
-nine harnesses (Claude, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline),
-the 19th MCP tool `axiom_write` (preview → apply with `confirmDigest`) with gate-side steering, and
-a decision journal attested as in-toto agent-decision statements (`axiom attest decisions`).
-**2.5.1** is a hardening patch from the first CodeQL scan (linear-time parsers, open-then-verify
-reads, loopback-only daemon probe in `doctor`), `axiom <verb> --help`, and transitive dependency
-advisories cleared (`pnpm audit` clean).
-**2.5.2** makes the gate actually run in VS Code: `axiom init` now writes
-`.github/hooks/axiom-gate.json` with `command`/`bash`/`powershell` (VS Code ignored the old
-`exec` form) and migrates the old file, Windows hooks propagate the deny exit code, and
-`axiom doctor` fails when the hook log shows the gate never ran.
-**2.6.0 (Phase 11, D-39)** makes the gate the one fast guard a machine needs: shell-command rules
-with a built-in house pack and `axiom import-guard` (parity-tested against a real PowerShell guard,
-with a shadow mode for the cutover week), cross-session overwrite / blind overwrite / stale-script
-detection, `axiom undo --session`, a file protocol for coordination marks and leases, git-state
-rules read without spawning git, PostToolUse checks (`--post`), human-only confirmation of
-`axiom_apply` / `axiom_write` through MCP elicitation, `axiom stats` with silent-gate alarms,
-`axiom init --upgrade` / `--managed`, a fail-open audit in `doctor`, SARIF for code scanning and
-OpenTelemetry spans from the daemon.
-codai's SWE harness routes every write through the gate by default
-([docs/integration/codai.md](docs/integration/codai.md)); brivio and metu wirings are in
-[docs/integration/](docs/integration/brivio.md).
-
-Decisions (`D-xx`) and stories (`S-xxx`): [PLAN.md](PLAN.md) · [TRACKER.csv](TRACKER.csv) ·
-[MIGRATION.md](MIGRATION.md) for 1.x users · [docs/reference/versioning.md](docs/reference/versioning.md).
+3.0 keeps 2.x inputs working: `axiom.dev/v2` plans parse, old verbs are hidden aliases, and
+`.axiom/gate-profile.json` / `.axiom/profiles/*.json` are still read.
+`axiom setup migrate --profile` writes the new `.axiom/axiom.json`. What changed and why:
+[MIGRATION.md](MIGRATION.md#from-2x-to-30). Release history: [CHANGELOG.md](CHANGELOG.md).
+Decisions and stories: [PLAN.md](PLAN.md) · [TRACKER.csv](TRACKER.csv).
 
 ## Development
 
-pnpm 12 · Node ≥ 22.14 · TypeScript 7 (tsgo) · tsdown · Biome · Vitest 5 · fast-check · Changesets.
+pnpm 12 · Node ≥ 22.14 · TypeScript 7 · tsdown · Biome · Vitest 5 · fast-check · Changesets.
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm lint          # biome check .
-pnpm build         # tsdown every package (before typecheck — exports point at dist/)
+pnpm build         # before typecheck: exports point at dist/
 pnpm typecheck
-pnpm test          # vitest run
-pnpm guards        # node scripts/run-guards.mjs — 18 repo invariants
+pnpm test
+pnpm guards        # node scripts/run-guards.mjs: the repo invariants in scripts/check-*.mjs
 ```
 
-All five green with output shown, a `.changeset/*.md` for anything under `packages/*/src`, and
-the ripple closed (tool → `docs/reference/mcp-tools.md` + `packages/mcp/README.md` + `spec/tools.json`;
-schema → regenerated `schemas/*.json`; golden → re-pinned). Details: [CONTRIBUTING.md](CONTRIBUTING.md)
-and `.github/instructions/`.
+All green with the output shown, a `.changeset/*.md` for any change under `packages/*/src`,
+and the ripple closed. Details: [CONTRIBUTING.md](CONTRIBUTING.md) and `.github/instructions/`.
 
 ## Community
 

@@ -1,5 +1,6 @@
 import { lockStatus } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
+import type { EmitterRegistry } from "@codai/axiom-plan";
 import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
 import { z } from "zod";
 import {
@@ -13,21 +14,28 @@ import {
   ResourceTemplate,
   type WireEra,
 } from "./adapter.js";
-import { emitterCatalogue } from "./emitters.js";
+import { emitterCatalogue, NO_EMITTERS } from "./emitters.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import { type Logger, silentLogger } from "./log.js";
 import type { RootsPolicy } from "./roots.js";
 import { listStored, loadApplied, loadManifest, loadReport, toDigestRef } from "./store.js";
 import { PlanSessionStore, TaskStore } from "./tasks.js";
-import { type AnyToolDef, TOOL_DEFS, type ToolContext } from "./tools.js";
+import { type AnyToolDef, type ToolContext, toolsFor } from "./tools.js";
+import type { Toolset } from "./toolset.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 export const SERVER_NAME = "axiom";
 export const SERVER_VERSION: string = PACKAGE_VERSION;
+export { DEFAULT_TOOLSET, parseToolset, TOOLSETS, type Toolset } from "./toolset.js";
 
 export interface CreateServerOptions {
   log?: Logger;
+  /** Explicit tool list (tests); wins over `toolset`. */
   tools?: readonly AnyToolDef[];
+  /** D-43: `core` (default — 6 tools) or `full` (every registered tool). `--tools core|full`. */
+  toolset?: Toolset;
+  /** Template emitters loaded via `--emitter <pkg>` (D-45); absent → none. */
+  emitters?: EmitterRegistry;
   /** `--allow-guards` / `--guard-allowlist` (§3.2). Omit to keep guards disabled. */
   guards?: ToolContext["guards"];
   /** Wire era this instance will serve (set by the serving entry; `legacy` when hand-connected). */
@@ -126,6 +134,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
   };
   if (opts.guards !== undefined) ctx.guards = opts.guards;
   if (opts.requireHuman === true) ctx.requireHuman = true;
+  if (opts.emitters !== undefined) ctx.emitters = opts.emitters;
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     // AXIOM's catalogue never changes at runtime: say so (SDK v2 would otherwise advertise
@@ -136,7 +145,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
     },
   );
 
-  for (const def of opts.tools ?? TOOL_DEFS) {
+  for (const def of opts.tools ?? toolsFor(opts.toolset ?? "core")) {
     server.registerTool(
       def.name,
       {
@@ -246,7 +255,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
       title: "Template emitters available to axiom_plan_compile",
       mimeType: "application/json",
     },
-    async (uri) => json(uri.href, emitterCatalogue()),
+    async (uri) => json(uri.href, emitterCatalogue(opts.emitters ?? NO_EMITTERS)),
   );
 
   // S-706: lock holder / queue / intents of every allowlisted root (read-only, never locks).
@@ -269,6 +278,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
     name: SERVER_NAME,
     version: SERVER_VERSION,
     era: opts.era ?? "legacy",
+    toolset: opts.tools === undefined ? (opts.toolset ?? "core") : "custom",
     roots: [...policy.roots],
   });
   return server;

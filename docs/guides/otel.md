@@ -76,4 +76,4 @@ tool class, the root directory, the hook format and the timing. `gen_ai.tool.cal
 **See also**
 
 - [Hooks](../getting-started/hooks.md) — the daemon these spans come from
-- [SARIF](sarif.md) — the other export, for `axiom check`
+- [SARIF](sarif.md) — the other export, for `axiom plan check`

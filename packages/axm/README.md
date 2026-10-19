@@ -14,6 +14,24 @@ if (plan) console.error(formatAxm(plan) === source); // canonical form roundtrip
 `plan` is present only when there are no error diagnostics. Positions are 1-based. CRLF input is
 normalised to LF before lexing (heredoc contents included). Full semantics: `docs/reference/axm-syntax.md`.
 
+Every keyword is also a valid `Ident`, so `plan meta { … }` (or `plan using`, `plan template`, …)
+parses: the lexer opens a JSON block after `meta` / `using X` / `template X "t"` only when that
+word is not the plan name.
+
+## Language server (`@codai/axiom-axm/lsp`, bin `axm-lsp`)
+
+Since 3.0 the `.axm` language server lives here (it was `@codai/axiom-axm-lsp`, now a deprecated
+re-export). It is a **separate entry**: the main `@codai/axiom-axm` entry never imports
+`vscode-languageserver`.
+
+```sh
+npx -p @codai/axiom-axm axm-lsp --stdio     # generic editors (neovim, helix, zed, …)
+```
+
+```ts
+import { computeCompletions, computeDiagnostics, startServer } from "@codai/axiom-axm/lsp";
+```
+
 ## Grammar
 
 ```ebnf

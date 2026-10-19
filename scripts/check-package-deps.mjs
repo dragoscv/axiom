@@ -5,13 +5,16 @@
  *
  *   schema, canon      → no @codai/* deps
  *   plan, checks, apply → only schema + canon
- *   axm                → only schema (+ plan as a devDependency for the compile-through test)
+ *   axm                → only schema (+ plan as a devDependency for the compile-through test,
+ *                        + checks as a devDependency for the LSP predicate-id parity test);
+ *                        hosts the language server since 3.0 (`@codai/axiom-axm/lsp`, D-45)
  *   emitters-web       → only schema (+ plan as a devDependency for the compile-through test);
  *                        `plan` does NOT depend on it — the emitter registry is an injected interface
- *   axm-lsp            → schema + axm (+ checks as a devDependency for the predicate-id parity test)
- *   vscode-axm         → axm-lsp only (private extension; spawns the LSP bin)
+ *   axm-lsp            → axm only (deprecated 3.x re-export of `@codai/axiom-axm/lsp`)
+ *   vscode-axm         → axm only (private extension; spawns the bundled LSP)
  *   testkit            → schema + canon + plan
- *   mcp                → anything EXCEPT testkit
+ *   mcp                → anything EXCEPT testkit; emitters-web only as a devDependency (D-45: the
+ *                        CLI loads emitters via `--emitter <pkg>`, never bundles one)
  *   conformance        → mcp as a devDependency ONLY (private harness that spawns the built CLI)
  *   nobody else depends on mcp
  *
@@ -32,18 +35,31 @@ const ALLOWED = {
   apply: ["schema", "canon"],
   axm: ["schema"],
   "emitters-web": ["schema"],
-  "axm-lsp": ["schema", "axm"],
-  "vscode-axm": ["axm-lsp"],
+  "axm-lsp": ["axm"],
+  "vscode-axm": ["axm"],
   testkit: ["schema", "canon", "plan"],
-  mcp: ["schema", "canon", "plan", "checks", "apply", "axm", "emitters-web"],
+  mcp: ["schema", "canon", "plan", "checks", "apply", "axm"],
   conformance: [],
 };
 
+/** S-1318: the five prebuilt `axiom-hook` packages — binaries only, no deps of their own. */
+const HOOK_PACKAGES = [
+  "axiom-hook-darwin-arm64",
+  "axiom-hook-darwin-x64",
+  "axiom-hook-linux-arm64",
+  "axiom-hook-linux-x64",
+  "axiom-hook-win32-x64",
+];
+for (const h of HOOK_PACKAGES) ALLOWED[h] = [];
+
+/** optionalDependencies-only exceptions (short names): mcp pulls the native hook per platform. */
+const OPTIONAL_ALLOWED = { mcp: HOOK_PACKAGES.map((h) => h.slice("axiom-".length)) };
+
 /** devDependencies-only exceptions (test tooling that must not leak into runtime deps). */
 const DEV_ALLOWED = {
-  axm: ["plan"],
+  axm: ["plan", "checks"],
   "emitters-web": ["plan"],
-  "axm-lsp": ["checks"],
+  mcp: ["emitters-web"],
   conformance: ["mcp"],
 };
 
@@ -63,7 +79,9 @@ for (const name of pkgs) {
     for (const [dep, spec] of Object.entries(pkg[section] ?? {})) {
       if (dep.startsWith(SCOPE)) {
         const short = dep.slice(SCOPE.length);
-        const devOk = section === "devDependencies" && (DEV_ALLOWED[name] ?? []).includes(short);
+        const devOk =
+          (section === "devDependencies" && (DEV_ALLOWED[name] ?? []).includes(short)) ||
+          (section === "optionalDependencies" && (OPTIONAL_ALLOWED[name] ?? []).includes(short));
         if (short === "mcp" && !devOk) {
           problems.push(
             `packages/${name}: depends on ${dep} — nobody may depend on mcp (conformance: devDependency only)`,

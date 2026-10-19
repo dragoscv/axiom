@@ -1,4 +1,4 @@
-export type { ApplyOptions, StagedFile, StagedTree } from "./apply.js";
+export type { ApplyOptions, RollbackOptions, StagedFile, StagedTree } from "./apply.js";
 export {
   appliedPath,
   apply,
@@ -15,7 +15,9 @@ export { CAS_BLOB_BYTES_MAX, casPath, resolveContent } from "./blobs.js";
 export type { ResolvedTarget } from "./contain.js";
 export {
   checkOnDiskCaseCollision,
+  checkReservedDir,
   checkTargetType,
+  isReservedAxiomPath,
   probeCaseInsensitive,
   resolveContained,
   validateArtifactPaths,

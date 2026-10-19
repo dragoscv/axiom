@@ -62,7 +62,7 @@ async function start(extra: Partial<Parameters<typeof startHttp>[1]> = {}) {
   lines = [];
   const log = createLogger({ level: "debug", write: (l) => void lines.push(l) });
   const policy = await createRootsPolicy([repo.root]);
-  handle = await startHttp(serverFactory(policy, { log }), {
+  handle = await startHttp(serverFactory(policy, { log, toolset: "full" }), {
     host: "127.0.0.1",
     port: 0,
     log,

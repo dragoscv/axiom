@@ -1,7 +1,7 @@
 {
   "name": "@codai/axiom-axm",
-  "version": "2.7.0",
-  "description": "AXIOM v2 `.axm` front-end: Chevrotain lexer + CST parser that compiles the .axm DSL 1:1 into a Plan, with position-bearing diagnostics and a deterministic inverse printer",
+  "version": "3.0.0",
+  "description": "AXIOM `.axm` front-end: Chevrotain lexer + CST parser that compiles the .axm DSL 1:1 into a Plan, with position-bearing diagnostics and a deterministic inverse printer — plus the `.axm` language server (`@codai/axiom-axm/lsp`, bin `axm-lsp`)",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",
   "repository": {
@@ -18,18 +18,32 @@
     "dsl",
     "parser",
     "chevrotain",
-    "axm"
+    "axm",
+    "lsp",
+    "language-server"
   ],
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/lsp-main.js",
+    "./src/lsp/main.ts"
+  ],
   "engines": {
     "node": ">=22.14"
+  },
+  "bin": {
+    "axm-lsp": "./dist/lsp-main.js"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./lsp": {
+      "types": "./dist/lsp.d.ts",
+      "import": "./dist/lsp.js"
+    },
+    "./lsp/main": "./dist/lsp-main.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -45,9 +59,12 @@
   },
   "dependencies": {
     "@codai/axiom-schema": "workspace:*",
-    "chevrotain": "catalog:"
+    "chevrotain": "catalog:",
+    "vscode-languageserver": "catalog:",
+    "vscode-languageserver-textdocument": "catalog:"
   },
   "devDependencies": {
+    "@codai/axiom-checks": "workspace:*",
     "@codai/axiom-plan": "workspace:*",
     "fast-check": "catalog:",
     "tsdown": "catalog:",

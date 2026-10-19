@@ -7,13 +7,25 @@
  *
  * Every exported function is gate-facing: it never throws. Checks return `undefined` (no opinion)
  * on any internal error; record functions swallow errors.
+ *
+ * 3.0 (I-4, S-1315) — `sessions.budget`: a per-session ceiling on distinct files written and
+ * files deleted inside a sliding window, counted from the same session state. Exceeding it asks
+ * (default) or denies with rule id `sessions.budget`.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import { z } from "zod";
 import type { RuleVerdict } from "./gate-verdict.js";
+
+export const SessionBudgetSchema = z.strictObject({
+  maxFiles: z.number().int().min(1).optional(),
+  maxDeletes: z.number().int().min(0).optional(),
+  windowMin: z.number().int().min(1).max(10_080).default(60),
+  decision: z.enum(["ask", "deny"]).default("ask"),
+});
+export type SessionBudget = z.infer<typeof SessionBudgetSchema>;
 
 export const SessionsConfigSchema = z.strictObject({
   foreignWrite: z.enum(["off", "ask", "deny"]).default("off"),
@@ -21,6 +33,7 @@ export const SessionsConfigSchema = z.strictObject({
   blindOverwrite: z.enum(["off", "ask", "deny"]).default("off"),
   trackReads: z.boolean().default(false),
   staleScript: z.boolean().default(true),
+  budget: SessionBudgetSchema.optional(),
 });
 export type SessionsConfig = z.infer<typeof SessionsConfigSchema>;
 
@@ -68,6 +81,8 @@ type WritersMap = Record<string, WriterEntry>;
 interface SessionState {
   seen: Record<string, string>;
   wrote: Record<string, number>;
+  /** 3.0: last delete time per path (sessions.budget). */
+  deleted: Record<string, number>;
 }
 interface DeniedEntry {
   abs: string;
@@ -126,6 +141,7 @@ async function loadSession(root: string, sessionId: string): Promise<SessionStat
   const raw = await readJson(sessionFile(root, sessionId));
   const seen: Record<string, string> = {};
   const wrote: Record<string, number> = {};
+  const deleted: Record<string, number> = {};
   if (isRecord(raw)) {
     if (isRecord(raw.seen)) {
       for (const [k, v] of Object.entries(raw.seen)) if (typeof v === "string") seen[k] = v;
@@ -133,8 +149,11 @@ async function loadSession(root: string, sessionId: string): Promise<SessionStat
     if (isRecord(raw.wrote)) {
       for (const [k, v] of Object.entries(raw.wrote)) if (typeof v === "number") wrote[k] = v;
     }
+    if (isRecord(raw.deleted)) {
+      for (const [k, v] of Object.entries(raw.deleted)) if (typeof v === "number") deleted[k] = v;
+    }
   }
-  return { seen, wrote };
+  return { seen, wrote, deleted };
 }
 
 /** Root-relative POSIX path that cannot escape the root; `undefined` otherwise. */
@@ -151,9 +170,15 @@ export async function hashFile(root: string, relPath: string): Promise<string | 
   if (rel === undefined) return undefined;
   const abs = path.join(root, ...rel.split("/"));
   try {
-    const st = await stat(abs);
-    if (!st.isFile() || st.size > HASH_BYTES_MAX) return undefined;
-    return sha256Hex(new Uint8Array(await readFile(abs)));
+    // Open first, then fstat the held descriptor: the checks and the read see the same file.
+    const fh = await open(abs, "r");
+    try {
+      const st = await fh.stat();
+      if (!st.isFile() || st.size > HASH_BYTES_MAX) return undefined;
+      return sha256Hex(new Uint8Array(await fh.readFile()));
+    } finally {
+      await fh.close();
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? ABSENT : undefined;
@@ -198,6 +223,54 @@ function decisionOf(mode: "ask" | "deny"): "ask" | "deny" {
   return mode === "ask" ? "ask" : "deny";
 }
 
+/**
+ * `sessions.budget`: would this call push the session over `maxFiles` distinct files written or
+ * `maxDeletes` files deleted within the last `windowMin` minutes? Paths already counted in the
+ * window do not count twice.
+ */
+export function checkSessionBudget(
+  session: { wrote: Record<string, number>; deleted: Record<string, number> },
+  targets: readonly SessionTarget[],
+  budget: SessionBudget,
+  now: number,
+): RuleVerdict | undefined {
+  if (budget.maxFiles === undefined && budget.maxDeletes === undefined) return undefined;
+  const from = now - budget.windowMin * 60_000;
+  const inWindow = (m: Record<string, number>): Set<string> =>
+    new Set(Object.entries(m).flatMap(([k, t]) => (t >= from && t <= now ? [k] : [])));
+  const files = inWindow(session.wrote);
+  const deletes = inWindow(session.deleted);
+  const before = { files: files.size, deletes: deletes.size };
+  for (const t of targets) {
+    const rel = safeRel(t.relPath);
+    if (rel === undefined) continue;
+    files.add(rel);
+    if (t.op === "delete") deletes.add(rel);
+  }
+  const win = `${budget.windowMin} min`;
+  if (
+    budget.maxDeletes !== undefined &&
+    deletes.size > before.deletes &&
+    deletes.size > budget.maxDeletes
+  ) {
+    return {
+      id: "sessions.budget",
+      reason: `session delete budget exceeded: this call would make ${deletes.size} files deleted in the last ${win} (max ${budget.maxDeletes}).`,
+      fix: "stop and confirm the deletions with the user, or raise sessions.budget.maxDeletes in the gate profile",
+      decision: budget.decision,
+    };
+  }
+  if (budget.maxFiles !== undefined && files.size > before.files && files.size > budget.maxFiles) {
+    return {
+      id: "sessions.budget",
+      reason: `session write budget exceeded: this call would make ${files.size} distinct files written in the last ${win} (max ${budget.maxFiles}).`,
+      fix: "stop and confirm the scope with the user, or raise sessions.budget.maxFiles in the gate profile",
+      decision: budget.decision,
+    };
+  }
+  return undefined;
+}
+
 // -------------------------------------------------------------------- checks --
 
 export async function checkSessionWrite(
@@ -206,10 +279,17 @@ export async function checkSessionWrite(
 ): Promise<RuleVerdict | undefined> {
   try {
     if (ctx.sessionId === undefined) return undefined;
-    if (cfg.foreignWrite === "off" && cfg.blindOverwrite === "off") return undefined;
+    if (cfg.foreignWrite === "off" && cfg.blindOverwrite === "off" && cfg.budget === undefined) {
+      return undefined;
+    }
     const now = ctx.now ?? Date.now();
-    const writers = await loadWriters(ctx.root);
     const session = await loadSession(ctx.root, ctx.sessionId);
+    const budget =
+      cfg.budget === undefined
+        ? undefined
+        : checkSessionBudget(session, ctx.targets, cfg.budget, now);
+    if (cfg.foreignWrite === "off" && cfg.blindOverwrite === "off") return budget;
+    const writers = await loadWriters(ctx.root);
     const windowMs = cfg.windowMin * 60_000;
     let blind: RuleVerdict | undefined;
     for (const t of ctx.targets) {
@@ -257,7 +337,9 @@ export async function checkSessionWrite(
         }
       }
     }
-    return blind;
+    // A deny outranks an ask; otherwise the budget verdict comes first.
+    if (blind?.decision === "deny" && budget?.decision !== "deny") return blind;
+    return budget ?? blind;
   } catch {
     return undefined;
   }
@@ -294,6 +376,12 @@ export async function recordSessionWrite(ctx: SessionCtx): Promise<void> {
       if (session !== undefined) {
         session.seen[rel] = preHash;
         session.wrote[rel] = now;
+      }
+    }
+    if (session !== undefined) {
+      for (const t of ctx.targets) {
+        const rel = t.op === "delete" ? safeRel(t.relPath) : undefined;
+        if (rel !== undefined) session.deleted[rel] = now;
       }
     }
     await writeJsonAtomic(writersFile(ctx.root), capWriters(writers));

@@ -34,7 +34,10 @@ export const Ident = createToken({
   categories: [IdentLike],
 });
 
+const keywordImages: string[] = [];
+
 function keyword(name: string, image: string, extra: readonly (typeof IdentLike)[] = []) {
+  keywordImages.push(image);
   return createToken({
     name,
     pattern: new RegExp(image.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
@@ -68,6 +71,9 @@ export const Secret = keyword("Secret", "secret", [CapKw]);
 export const Ai = keyword("Ai", "ai", [CapKw]);
 export const Compute = keyword("Compute", "compute", [CapKw]);
 export const Git = keyword("Git", "git", [CapKw]);
+
+/** Every reserved word of the lexer (all of them are also valid `Ident`s), in declaration order. */
+export const KEYWORD_IMAGES: readonly string[] = Object.freeze([...keywordImages]);
 
 // --- punctuation & literals ------------------------------------------------------------------
 
@@ -143,7 +149,11 @@ export const HereDoc = createToken({
 
 // --- Json -----------------------------------------------------------------------------------
 
-/** True when the lexed prefix ends in `meta`, `using QualIdent`, or `template QualIdent String`. */
+/**
+ * True when the lexed prefix ends in `meta`, `using QualIdent`, or `template QualIdent String`.
+ * A `meta` right after `plan` is the plan's NAME (keywords are valid Idents), so its `{` opens
+ * the plan body, not a JSON block. Likewise a `using`/`template` that is itself the plan name.
+ */
 function jsonExpected(tokens: readonly IToken[]): boolean {
   let i = tokens.length - 1;
   const at = (k: number): IToken | undefined => tokens[k];
@@ -151,13 +161,15 @@ function jsonExpected(tokens: readonly IToken[]): boolean {
     t !== undefined &&
     (t.tokenType.name === type.name ||
       (t.tokenType.CATEGORIES ?? []).some((c) => c.name === type.name));
-  if (is(at(i), Meta)) return true;
+  const isPlanName = (k: number): boolean => is(at(k - 1), Plan);
+  if (is(at(i), Meta)) return !isPlanName(i);
   if (is(at(i), StringLike)) i--; // template QualIdent String
   // QualIdent = IdentLike { "." IdentLike }
   if (!is(at(i), IdentLike)) return false;
+  if (isPlanName(i)) return false;
   i--;
   while (is(at(i), Dot) && is(at(i - 1), IdentLike)) i -= 2;
-  return is(at(i), Using) || is(at(i), Template);
+  return (is(at(i), Using) || is(at(i), Template)) && !isPlanName(i);
 }
 
 /** Scan one balanced `{…}` / `[…]` region, string-aware. Returns the end offset or -1. */

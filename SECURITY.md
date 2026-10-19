@@ -6,8 +6,9 @@
 
 | Version | Status |
 |---------|--------|
-| 2.2.x | Current — features, fixes and security patches, released as patch versions of the fixed group (all nine `@codai/axiom-*` share one version) |
-| 2.0.x – 2.1.x | Security fixes only; upgrade to 2.2.x (no breaking change) |
+| **3.x** | Supported — current line |
+| 2.7.x | Unsupported — the 2.x gate has bypasses fixed in 3.0; upgrade to 3.x |
+| < 2.7 | Unsupported — upgrade to 3.x |
 | 1.0.x | Deprecated on npm, no fixes. Known issues: manifest hash not content-bound, `git` spawned with `shell: true` and user strings, no rollback. Upgrade — see [MIGRATION.md](MIGRATION.md) |
 
 ## Reporting a vulnerability
@@ -16,6 +17,8 @@ Do not open a public issue. Use GitHub private vulnerability reporting on
 <https://github.com/dragoscv/axiom/security/advisories/new>. Include the
 package and version, a minimal `Plan`/bundle or command sequence that
 reproduces the problem, and the observed vs expected behaviour.
+GitHub private advisories are the only reporting channel; there is no
+security email address.
 
 Target response times: acknowledgement within 72 hours; a fix or mitigation for
 containment, TOCTOU or integrity bypasses within 7 days; other issues in the
@@ -108,6 +111,7 @@ from a tag, with provenance you can check yourself:
 |---|---|
 | npm packages (`@codai/axiom-*`) | Published with npm trusted publishing (OIDC). `npm view @codai/axiom-mcp dist.attestations` lists the provenance and publish attestations; `npm audit signatures` checks them for an installed tree. |
 | Standalone binaries (`axiom-linux-x64`, `axiom-linux-arm64`, `axiom-darwin-arm64`, `axiom-darwin-x64`, `axiom-win-x64.exe`) | `sha256sum -c SHA256SUMS` against the file from the same release, then `gh attestation verify axiom-linux-x64 --owner dragoscv` (Sigstore build provenance from `actions/attest-build-provenance`). The `install.sh` / `install.ps1` scripts on the docs site perform the checksum step for you. |
+| Legal notices (`LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSE-node.txt`) | Attached to every release next to the binaries and listed in `SHA256SUMS`: AXIOM's license, the licenses of every bundled dependency, and the license of the Node.js runtime embedded in the standalone executables. |
 | VS Code extension (`axiom-axm-<version>.vsix`) | Attached to the same GitHub release by the same tag-triggered workflow. It is **not** in `SHA256SUMS` and carries no Sigstore attestation; GitHub shows a sha256 digest for every release asset — compare it after download, and prefer the Marketplace listing once `dragoscv.axiom-axm` is published. |
 | GitHub Action (`dragoscv/axiom/action`) | Pin by commit SHA (`uses: dragoscv/axiom/action@<sha> # v2`) rather than the moving `v2` tag when you need immutability; the action itself pins `actions/attest` by SHA and installs `@codai/axiom-mcp` from npm. |
 | MCP Registry (`io.github.dragoscv/axiom`) | The registry entry only points at the npm package; the package's own provenance is the trust anchor. |

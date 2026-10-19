@@ -3,7 +3,7 @@
   "activations": {
     "A": {
       "manifest": {
-        "apiVersion": "axiom.dev/v2",
+        "apiVersion": "axiom.codai.ro/v3",
         "kind": "Manifest",
         "name": "demo",
         "profile": "default",
@@ -67,7 +67,7 @@
     },
     "R": {
       "manifest": {
-        "apiVersion": "axiom.dev/v2",
+        "apiVersion": "axiom.codai.ro/v3",
         "kind": "Manifest",
         "name": "demo",
         "profile": "default",
@@ -532,7 +532,7 @@
       "activation": "A"
     },
     {
-      "expr": "manifest.apiVersion.startsWith('axiom.dev/')",
+      "expr": "manifest.apiVersion.startsWith('axiom.codai.ro/')",
       "expect": true,
       "activation": "A"
     },

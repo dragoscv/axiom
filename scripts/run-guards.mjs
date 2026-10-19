@@ -44,6 +44,7 @@ const skips = [...flags]
 const SLOW = new Set([
   "check-cold-start.mjs",
   "check-bundle-size.mjs",
+  "check-cli-doc.mjs",
   "check-schema-json-fresh.mjs",
   "check-release-complete.mjs",
 ]);

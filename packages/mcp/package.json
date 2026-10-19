@@ -1,7 +1,7 @@
 {
   "name": "@codai/axiom-mcp",
   "mcpName": "io.github.dragoscv/axiom",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "AXIOM v2 MCP server (stdio) and CLI: validate, compile, check and transactionally apply content-addressed manifest bundles inside an allowlisted set of roots",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",
@@ -28,7 +28,8 @@
   },
   "bin": {
     "axiom": "./dist/cli.js",
-    "axiom-mcp": "./dist/cli.js"
+    "axiom-mcp": "./dist/cli.js",
+    "axgate": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -44,12 +45,14 @@
     "!dist/sea",
     "spec",
     "server.json",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsdown && pnpm run build:spec",
     "build:sea": "tsdown -c tsdown.sea.config.ts",
     "build:spec": "node --import tsx/esm scripts/gen-tools-json.ts",
+    "prepack": "node ../../scripts/gen-third-party-notices.mjs --package packages/mcp",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
@@ -59,16 +62,21 @@
     "@codai/axiom-axm": "workspace:*",
     "@codai/axiom-canon": "workspace:*",
     "@codai/axiom-checks": "workspace:*",
-    "@codai/axiom-emitters-web": "workspace:*",
     "@codai/axiom-plan": "workspace:*",
     "@codai/axiom-schema": "workspace:*",
     "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "optionalDependencies": {
-    "@cedar-policy/cedar-wasm": "catalog:"
+    "@cedar-policy/cedar-wasm": "catalog:",
+    "@codai/axiom-hook-darwin-arm64": "workspace:*",
+    "@codai/axiom-hook-darwin-x64": "workspace:*",
+    "@codai/axiom-hook-linux-arm64": "workspace:*",
+    "@codai/axiom-hook-linux-x64": "workspace:*",
+    "@codai/axiom-hook-win32-x64": "workspace:*"
   },
   "devDependencies": {
+    "@codai/axiom-emitters-web": "workspace:*",
     "@modelcontextprotocol/client": "catalog:",
     "fast-check": "catalog:",
     "tsdown": "catalog:",

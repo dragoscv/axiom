@@ -9,13 +9,16 @@ import {
   GATE_SILENT_MIN_RUNS,
   HOOK_LOG_FILE,
   hookLogRoots,
+  lineTimeMs,
   parseCopilotCliHookRuns,
   parseHookLog,
   parseHookRuns,
   readHookLogStats,
+  readHookRuns,
   readTail,
   runsForRoot,
   samePathLoose,
+  staleGateCommands,
 } from "./hooklog.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -105,6 +108,54 @@ describe("parseHookLog", () => {
     const runs = parseHookRuns("[#3] [PreToolUse] Running: axiom gate --stdin");
     expect(runs[0]?.command).toBe("axiom gate --stdin");
     expect(runs[0]?.timeoutSec).toBeUndefined();
+    expect(runs[0]?.atMs).toBeUndefined();
+  });
+
+  it("stamps each Running line with its local-time prefix", () => {
+    const runs = parseHookRuns(SAMPLE);
+    expect(runs[0]?.atMs).toBe(new Date("2026-10-14T01:43:28.080").getTime());
+    expect(lineTimeMs("nope")).toBeUndefined();
+  });
+});
+
+describe("staleGateCommands", () => {
+  const at = (stamp: string, id: number, command: string, cwd: string) =>
+    `${stamp} [info] [#${id}] [PreToolUse] Running: ${JSON.stringify({ command, cwd: { fsPath: cwd } })}`;
+  const root = join("/w", "repo");
+  const text = [
+    at("2026-10-14 01:00:00.000", 1, "axiom gate --stdin", root),
+    at("2026-10-14 09:00:00.000", 2, "axiom gate  --stdin", root),
+    at("2026-10-14 09:00:01.000", 3, "axiom gate --stdin --format auto --fail-open", root),
+    at("2026-10-14 09:00:02.000", 4, "axiom gate --stdin --format auto", root),
+    at("2026-10-14 09:00:03.000", 5, "axiom gate --stdin", join("/w", "other")),
+    at("2026-10-14 09:00:04.000", 6, "guard.ps1", root),
+  ].join("\n");
+  const since = new Date("2026-10-14T08:00:00").getTime();
+
+  it("reports gate commands that differ from the current hook file, since the cutoff, for that root", () => {
+    const runs = parseHookRuns(text);
+    expect(staleGateCommands(runs, root, ["axiom gate --stdin --format auto"], since)).toEqual([
+      "axiom gate --stdin",
+      "axiom gate --stdin --format auto --fail-open",
+    ]);
+    expect(
+      staleGateCommands(
+        runs,
+        root,
+        [
+          "axiom gate --stdin",
+          "axiom gate --stdin --format auto --fail-open",
+          "axiom gate --stdin --format auto",
+        ],
+        since,
+      ),
+    ).toEqual([]);
+  });
+
+  it("readHookRuns merges files and skips unreadable ones", async () => {
+    const f = join(home.root, "h.log");
+    await writeFile(f, text);
+    expect((await readHookRuns([f, join(home.root, "missing.log")])).length).toBe(6);
   });
 });
 

@@ -5,6 +5,9 @@ use crate::json::quote;
 
 pub const CODE: &str = "ERR_INTERNAL";
 pub const REASON: &str = "gate daemon unreachable and no axiom CLI found (fail-closed)";
+/// `AXIOM_GATE_DAEMON_STRICT=1` and the daemon answer failed its MAC.
+pub const AUTH_CODE: &str = "ERR_DAEMON_AUTH";
+pub const AUTH_REASON: &str = "gate daemon answer failed authentication (x-axiom-mac) — another process may be squatting the daemon port";
 
 /// What to print and how to exit.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +59,10 @@ pub fn parse_flags(args: &[String]) -> GateFlags {
 }
 
 pub fn render(flags: &GateFlags, reason: &str) -> DenyOutput {
+    render_code(flags, CODE, reason)
+}
+
+pub fn render_code(flags: &GateFlags, code: &str, reason: &str) -> DenyOutput {
     let r = quote(reason);
     let hook = format!(
         "{{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":{r}}}"
@@ -81,7 +88,7 @@ pub fn render(flags: &GateFlags, reason: &str) -> DenyOutput {
     };
     DenyOutput {
         stdout,
-        stderr: format!("AXIOM GATE DENY {CODE}: {reason}"),
+        stderr: format!("AXIOM GATE DENY {code}: {reason}"),
         exit: if flags.deny_exit_2 { 2 } else { exit },
     }
 }

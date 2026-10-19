@@ -36,6 +36,8 @@ export interface HookRun {
   cwd?: string;
   /** Seconds, as declared in the Running document. */
   timeoutSec?: number;
+  /** Epoch ms of the Running line (the log's local-time prefix), when it carries one. */
+  atMs?: number;
   outcome?: string;
   ms?: number;
   denied: boolean;
@@ -54,6 +56,16 @@ export interface HookLogStats {
 
 const LINE_RE = /\[#([^\]]+)\]\s+\[([^\]]+)\]\s+(Running|Output|Completed)(?::\s?|\s+)(.*)$/;
 const COMPLETED_RE = /^\(([^)]+)\)\s+in\s+(\d+(?:\.\d+)?)ms/;
+/** `2026-10-14 01:43:28.080` at the start of a line — VS Code writes local time. */
+const STAMP_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)/;
+
+/** Epoch ms of a log line's local-time prefix, `undefined` without one. */
+export function lineTimeMs(line: string): number | undefined {
+  const m = STAMP_RE.exec(line);
+  if (m === null) return undefined;
+  const t = new Date(`${m[1]}T${m[2]}`).getTime();
+  return Number.isNaN(t) ? undefined : t;
+}
 
 function parseRunning(rest: string): { command: string; timeoutSec?: number; cwd?: string } {
   try {
@@ -87,7 +99,14 @@ export function parseHookRuns(text: string): HookRun[] {
     if (m === null) continue;
     const [, id = "", event = "", kind, rest = ""] = m;
     if (kind === "Running") {
-      const run: HookRun = { id, event, ...parseRunning(rest), denied: false };
+      const atMs = lineTimeMs(line);
+      const run: HookRun = {
+        id,
+        event,
+        ...parseRunning(rest),
+        ...(atMs === undefined ? {} : { atMs }),
+        denied: false,
+      };
       runs.push(run);
       current.set(id, run);
       continue;
@@ -153,6 +172,47 @@ export function runsForRoot(runs: readonly HookRun[], root: string): HookRun[] {
 /** Axiom gate statistics for one log text (pure). */
 export function parseHookLog(text: string): HookLogStats {
   return summarizeRuns(parseHookRuns(text));
+}
+
+/** Whitespace-normalised command text for comparisons. */
+export function normalizeCommand(cmd: string): string {
+  return cmd.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Axiom gate commands VS Code actually ran for `root` since `sinceMs` that match none of the
+ * commands the hook files declare NOW — the window still holds an old hook config and needs a
+ * reload. Distinct commands, in first-seen order (pure).
+ */
+export function staleGateCommands(
+  runs: readonly HookRun[],
+  root: string,
+  current: readonly string[],
+  sinceMs: number,
+): string[] {
+  const now = new Set(current.map(normalizeCommand));
+  const out: string[] = [];
+  for (const r of runs) {
+    if (r.cwd === undefined || !samePathLoose(r.cwd, root)) continue;
+    if (r.atMs === undefined || r.atMs < sinceMs) continue;
+    if (!AXIOM_GATE_RUN_RE.test(r.command)) continue;
+    const c = normalizeCommand(r.command);
+    if (!now.has(c) && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
+/** Every hook run of the given files (tail-capped, unreadable files skipped). */
+export async function readHookRuns(files: readonly string[]): Promise<HookRun[]> {
+  const runs: HookRun[] = [];
+  for (const f of files) {
+    try {
+      runs.push(...parseHookRuns(await readTail(f)));
+    } catch {
+      // unreadable (rotated / locked) — skip
+    }
+  }
+  return runs;
 }
 
 export interface FindHookLogsOptions {

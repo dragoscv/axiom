@@ -17,14 +17,24 @@ axiom doctor                   # verifies bin, hooks, gate latency, lock, journa
 ```
 
 `axiom init` detects the harness from the marker directories in the root (`.github`, `.claude`,
-`.codex`, `.vscode`; none → copilot + vscode) or takes `--harness`, and is idempotent:
+`.codex`, `.vscode`, `.cursor`, `.windsurf`/`.devin`, `.gemini`, `.junie`, `.clinerules`, `.kiro`,
+`.opencode`; none → copilot + vscode) or takes `--harness`, and is idempotent (`--dry-run` shows
+the diff without writing):
 
 | Harness | Files `axiom init` writes |
 |---|---|
 | Copilot CLI (`copilot`) | `.github/hooks/axiom-gate.json` · `.vscode/mcp.json` |
 | VS Code (`vscode`) | `.github/hooks/axiom-gate.json` · `.vscode/mcp.json` |
-| Claude Code (`claude`) | `.claude/settings.json` (one `hooks.PreToolUse` entry merged in) · `.vscode/mcp.json` |
-| Codex (`codex`) | no hook (Codex has no hook API) — a note pointing at [harnesses.md § Codex](../integration/harnesses.md#codex) · `.vscode/mcp.json` |
+| Claude Code (`claude`) | `.claude/settings.json` (`hooks.PreToolUse` + `PostToolUse` merged in) · `.vscode/mcp.json` |
+| Codex (`codex`) | `.codex/hooks.json` (`PreToolUse` + `PostToolUse`) · `.codex/config.toml` (`[mcp_servers.axiom]`) · `.vscode/mcp.json` |
+| Cursor (`cursor`) | `.cursor/hooks.json` (`failClosed: true`) · `.cursor/mcp.json` |
+| Windsurf / Devin (`windsurf`) | `.devin/hooks.json` or `.windsurf/hooks.json` (`pre_write_code`, `pre_run_command`, `pre_mcp_tool_use`) |
+| Gemini CLI (`gemini`) | `.gemini/settings.json` (`BeforeTool` + `mcpServers.axiom`) |
+| Junie (`junie`) | `.junie/mcp/mcp.json` · `.junie/guidelines.md` section — the hook goes in `~/.junie/config.json` (printed, with `--root`) |
+| Cline (`cline`) | `.clinerules/hooks/PreToolUse` + `PreToolUse.ps1` |
+| Kiro (`kiro`) | `.kiro/hooks/axiom-gate.json` (`PreToolUse`, `write\|shell\|@mcp`) |
+| OpenCode (`opencode`) | `.opencode/plugins/axiom-gate.js` (plugin, fail-closed) |
+| ACP clients (Zed, …) | none — run the agent behind `axiom acp-proxy --root <repo> -- <agent>` |
 | every run | `.axiom/profiles/<repo-name>.json` (extends `default`) · `.axiom/gate-profile.json` · `.gitignore` lines `.axiom/*`, `!.axiom/profiles/`, `!.axiom/gate-profile.json` |
 
 An existing file is never overwritten without `--force`: JSON files are merged (other servers
@@ -77,8 +87,9 @@ version from the CLI you ran it with — the usual cause of "the hook does nothi
 Per-OS notes:
 
 - **Windows** — `npm i -g` puts `axiom.cmd` (and `axiom.ps1`) on `PATH`; the hook config calls
-  `axiom.cmd … ; exit $LASTEXITCODE` in its `powershell` field so the execution policy cannot
-  block the `.ps1` shim and the deny exit code survives. Paths in `--root` may use either slash; the server
+  `axiom.cmd …` in its `powershell` field so the execution policy cannot block the `.ps1` shim,
+  and maps the exit code (0/2 pass through, a crash or missing node → 2) so the deny survives
+  `powershell -Command`. Codex's `commandWindows` is the bare `axiom.cmd gate …`. Paths in `--root` may use either slash; the server
   realpaths them (drive letter case and 8.3 names normalise). Directory `fsync` is a no-op and
   `0755` is recorded, not applied — see [apply.md](../guides/apply.md#windows-notes).
 - **macOS** — with Homebrew node, the global bin lands in `/opt/homebrew/bin`; make sure that is

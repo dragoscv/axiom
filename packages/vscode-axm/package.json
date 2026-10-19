@@ -1,8 +1,8 @@
 {
   "name": "axiom-axm",
-  "displayName": "AXIOM .axm — plans for the agent write gate",
-  "description": "Language support for AXIOM .axm plans (the transactional write gate for coding agents): diagnostics, completion, hover, outline, formatting and semantic highlighting.",
-  "version": "2.0.0",
+  "displayName": "AXIOM — agent write gate + .axm",
+  "description": "AXIOM, the transactional write gate for coding agents, in VS Code: a status bar showing the gate state of the workspace, Doctor / Init / Stats / Explain commands, and full language support for .axm plans (diagnostics, completion, hover, outline, formatting, semantic highlighting).",
+  "version": "3.0.0",
   "private": true,
   "publisher": "dragoscv",
   "license": "MIT",
@@ -22,6 +22,7 @@
     "theme": "light"
   },
   "categories": [
+    "AI",
     "Programming Languages",
     "Linters",
     "Formatters"
@@ -46,9 +47,57 @@
   "type": "module",
   "main": "./dist/extension.cjs",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:axm"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In an untrusted workspace AXIOM spawns no process (no doctor/init/stats/explain) and uses only the bundled .axm language server, never the workspace copy.",
+      "restrictedConfigurations": [
+        "axiom.path"
+      ]
+    }
+  },
   "contributes": {
+    "commands": [
+      {
+        "command": "axiom.doctor",
+        "title": "Doctor",
+        "category": "AXIOM"
+      },
+      {
+        "command": "axiom.init",
+        "title": "Init",
+        "category": "AXIOM"
+      },
+      {
+        "command": "axiom.stats",
+        "title": "Stats",
+        "category": "AXIOM"
+      },
+      {
+        "command": "axiom.explainLast",
+        "title": "Explain last decision",
+        "category": "AXIOM"
+      },
+      {
+        "command": "axiom.refresh",
+        "title": "Refresh gate status",
+        "category": "AXIOM"
+      }
+    ],
+    "configuration": {
+      "title": "AXIOM",
+      "properties": {
+        "axiom.path": {
+          "type": "string",
+          "default": "axiom",
+          "scope": "machine-overridable",
+          "markdownDescription": "The `axiom` CLI to run (name on PATH or absolute path). On Windows `axiom.exe` and the npm `axiom.cmd` shim are found automatically; the shim is run as `node <cli.js>` — never through a shell."
+        }
+      }
+    },
     "languages": [
       {
         "id": "axm",
@@ -83,16 +132,18 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
     "package": "tsdown && node scripts/package.mjs"
   },
   "dependencies": {
-    "@codai/axiom-axm-lsp": "workspace:*",
+    "@codai/axiom-axm": "workspace:*",
     "vscode-languageclient": "catalog:"
   },
   "devDependencies": {
     "@types/vscode": "catalog:",
     "@vscode/vsce": "catalog:",
     "tsdown": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

@@ -23,7 +23,8 @@ import {
   type Toolchain,
 } from "@codai/axiom-schema";
 import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
-import { casGet, casPut } from "./cas.js";
+import { casGetUnverified, casPut } from "./cas.js";
+import { type PreImageState, readContained, realRoot } from "./contained.js";
 import { applyPatchText } from "./patch.js";
 import { type RefNetOptions, resolveRef } from "./ref.js";
 import type { EmitterRegistry } from "./template.js";
@@ -178,7 +179,8 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Sou
           details: { digest: src.digest },
         });
       }
-      const bytes = await casGet(opts.root, hex);
+      // Re-hashed right below so the mismatch error carries the artifact path.
+      const bytes = await casGetUnverified(opts.root, hex);
       if (bytes === undefined) {
         throw new AxiomError("ERR_BLOB_MISSING", "cas object not found", {
           path: a.path,
@@ -219,28 +221,34 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Sou
   }
 }
 
-async function defaultReadPreImage(root: string, relPath: string): Promise<Uint8Array | undefined> {
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  try {
-    return new Uint8Array(await readFile(join(root, ...relPath.split("/"))));
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    // ENOTDIR: a path segment is a file; EISDIR: the target is a directory → "absent" as a
-    // regular file. apply's containment checks reject the write itself.
-    if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return undefined;
-    throw err;
+type PreImageReader = (relPath: string) => Promise<PreImageState>;
+
+/**
+ * Pre-image reader in effect: injected, or a CONTAINED read of `<realpath(root)>/<path>`
+ * (symlinks/junctions are never followed — `non-file:symlink`, as apply sees them), or none.
+ */
+function preImageReader(opts: CompileOptions): PreImageReader | undefined {
+  const injected = opts.readPreImage;
+  if (injected !== undefined) {
+    return async (rel) => {
+      const bytes = await injected(rel);
+      return bytes === undefined ? { kind: "absent" } : { kind: "file", bytes };
+    };
   }
+  const root = opts.root;
+  if (root === undefined) return undefined;
+  let rootReal: Promise<string> | undefined;
+  return async (rel) => {
+    rootReal ??= realRoot(root);
+    return readContained(await rootReal, rel);
+  };
 }
 
-/** Pre-image reader in effect: injected, or `<root>/<path>` from disk, or none. */
-function preImageReader(
-  opts: CompileOptions,
-): ((relPath: string) => Promise<Uint8Array | undefined>) | undefined {
-  if (opts.readPreImage !== undefined) return opts.readPreImage;
-  if (opts.root === undefined) return undefined;
-  const root = opts.root;
-  return (rel) => defaultReadPreImage(root, rel);
+/** `sha256:<hex>`, `absent` or `non-file:<what>` — the same vocabulary apply uses. */
+function preImageLabel(s: PreImageState): string {
+  if (s.kind === "file") return `sha256:${sha256Hex(s.bytes)}`;
+  if (s.kind === "absent") return "absent";
+  return `non-file:${s.what}`;
 }
 
 async function applyPatchSource(
@@ -255,17 +263,20 @@ async function applyPatchSource(
       details: { preImage: src.preImage },
     });
   }
-  const current = await read(a.path);
-  const actual = current === undefined ? "absent" : `sha256:${sha256Hex(current)}`;
+  const state = await read(a.path);
+  const actual = preImageLabel(state);
   if (actual !== src.preImage) {
     throw new AxiomError(
       "ERR_PATCH_PREIMAGE",
-      current === undefined
+      state.kind === "absent"
         ? "patch pre-image is absent under the root"
-        : "file under the root does not match the patch pre-image",
+        : state.kind === "non-file"
+          ? "patch pre-image is not a regular file under the root (symlinks are not followed)"
+          : "file under the root does not match the patch pre-image",
       { path: a.path, details: { expected: src.preImage, actual } },
     );
   }
+  const current = state.kind === "file" ? state.bytes : undefined;
   let text: string;
   try {
     text = current === undefined ? "" : new TextDecoder("utf-8", { fatal: true }).decode(current);
@@ -427,9 +438,12 @@ export async function compilePlan(
     preImage = [];
     for (const r of resolved) {
       const cur = await read(r.artifact.path);
+      // PreImageEntrySchema admits only hex | "absent": a symlink/junction is recorded as
+      // "absent" — its target's bytes never enter the manifest. apply sees `non-file:symlink`
+      // there and refuses (ERR_PREIMAGE_CHANGED / ERR_SYMLINK_IN_PATH), so this fails closed.
       preImage.push({
         path: r.artifact.path,
-        sha256: cur === undefined ? "absent" : sha256Hex(cur),
+        sha256: cur.kind === "file" ? sha256Hex(cur.bytes) : "absent",
       });
     }
   }

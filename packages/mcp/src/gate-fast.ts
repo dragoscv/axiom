@@ -28,12 +28,23 @@ export const WRITE_TOOL_HINTS = [
   "apply_patch",
   "notebook",
   "delete",
+  "rename",
+  "move",
+  "mkdir",
 ] as const;
 /**
  * Write hints that win over every read-only hint: `search_replace` (Cursor), `delete_directory`,
  * `multi_replace_string_in_file`. A false "write" costs a gate run; a false "other" is a hole.
  */
-export const WRITE_OVERRIDE_HINTS = ["apply_patch", "replace", "delete"] as const;
+export const WRITE_OVERRIDE_HINTS = [
+  "apply_patch",
+  "replace",
+  "delete",
+  "rename",
+  "move",
+  "mkdir",
+  "create_directory",
+] as const;
 /** Substrings that mark a tool as read-only even when a write hint also matches (`create_directory`, …). */
 export const NON_WRITE_HINTS = [
   "read",
@@ -56,6 +67,8 @@ export const SHELL_TOOL_HINTS = [
   "run_command",
   "powershell",
   "cmd",
+  "create_and_run_task",
+  "run_task",
 ] as const;
 export const TOOL_NAME_KEYS = ["tool_name", "toolName", "tool", "name"] as const;
 
@@ -73,7 +86,11 @@ export function isShellTool(toolName: string): boolean {
   return SHELL_TOOL_HINTS.some((h) => n.includes(h));
 }
 
+/** Task runners execute a shell command even though their names contain write hints. */
+const TASK_TOOL_RE = /(^|[_.:-])(create_and_run_task|run_task)$/i;
+
 export function classifyTool(toolName: string): ToolClass {
+  if (TASK_TOOL_RE.test(toolName)) return "shell";
   if (isWriteTool(toolName)) return "write";
   if (isShellTool(toolName)) return "shell";
   return "other";
@@ -119,6 +136,7 @@ export const GATE_FORMATS = [
   "gemini",
   "junie",
   "cline",
+  "kiro",
 ] as const;
 export type GateFormat = (typeof GATE_FORMATS)[number];
 

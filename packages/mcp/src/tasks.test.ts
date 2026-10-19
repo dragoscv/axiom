@@ -117,7 +117,7 @@ describe("PlanSessionStore", () => {
     store.add(s.sessionId, [art("c.ts")], 5);
     const { plan, session } = store.seal(s.sessionId);
     expect(session.bytes).toBe(15);
-    expect(plan).toMatchObject({ apiVersion: "axiom.dev/v2", kind: "Plan", name: "chunked" });
+    expect(plan).toMatchObject({ apiVersion: "axiom.codai.ro/v3", kind: "Plan", name: "chunked" });
     expect(plan.artifacts.map((a) => a.path)).toEqual(["a.ts", "b.ts", "c.ts"]);
     expect(store.size).toBe(0);
     expect(codeOf(() => store.get(s.sessionId))).toBe("ERR_TASK_NOT_FOUND");
@@ -187,7 +187,8 @@ const planArb = fc
   .uniqueArray(artifactArb, { minLength: 1, maxLength: 24, selector: (a) => a.path })
   .map(
     (artifacts): PlanInput => ({
-      apiVersion: "axiom.dev/v2",
+      // Sessions seal as the current apiVersion (3.0, D-41).
+      apiVersion: "axiom.codai.ro/v3",
       kind: "Plan",
       name: "prop",
       intent: "chunked == one-shot",

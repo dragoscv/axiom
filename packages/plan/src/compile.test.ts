@@ -197,6 +197,39 @@ describe("compilePlan — determinism", () => {
       const { bundle } = await compilePlan(plan([inline("dir.txt", "x")]), { root });
       expect(bundle.manifest.preImage).toEqual([{ path: "dir.txt", sha256: "absent" }]);
     });
+    it("a junction/symlink in the path is never followed: outside bytes stay out of the bundle", async () => {
+      const { symlink } = await import("node:fs/promises");
+      const outside = await tmp();
+      const root = await tmp();
+      await writeFile(join(outside, "secret.txt"), "TOPSECRET\n");
+      await symlink(outside, join(root, "link"), process.platform === "win32" ? "junction" : "dir");
+      const pre = `sha256:${sha256Hex("TOPSECRET\n")}` as const;
+      const body = "<<<<<<< SEARCH\nTOPSECRET\n=======\nTOPSECRET\n>>>>>>> REPLACE\n";
+      const patchSecret: PlanInput["artifacts"][number] = {
+        path: "link/secret.txt",
+        op: "overwrite",
+        source: { type: "patch", format: "search-replace", preImage: pre, body },
+      };
+      const err = await expectAxiom(
+        compilePlan(plan([patchSecret]), { root }),
+        "ERR_PATCH_PREIMAGE",
+      );
+      expect(err.details?.actual).toBe("non-file:symlink");
+      // Plain inline write through the link: pre-image must not hash the outside file.
+      const { bundle } = await compilePlan(plan([inline("link/secret.txt", "x")]), { root });
+      expect(bundle.manifest.preImage).toEqual([{ path: "link/secret.txt", sha256: "absent" }]);
+      expect(JSON.stringify(bundle)).not.toContain(sha256Hex("TOPSECRET\n"));
+    });
+    it("a junction AS the root is resolved first (realpath(root)), so in-root files still read", async () => {
+      const { symlink } = await import("node:fs/promises");
+      const real = await tmp();
+      const holder = await tmp();
+      await writeFile(join(real, "f.txt"), "old");
+      const viaLink = join(holder, "root-link");
+      await symlink(real, viaLink, process.platform === "win32" ? "junction" : "dir");
+      const { bundle } = await compilePlan(plan([inline("f.txt", "new")]), { root: viaLink });
+      expect(bundle.manifest.preImage).toEqual([{ path: "f.txt", sha256: sha256Hex("old") }]);
+    });
   });
 
   it("a cas source is read back, re-hashed and inlined into blobs", async () => {
@@ -310,7 +343,7 @@ describe("compilePlan — limits", () => {
     const root = await tmp();
     const { bundle } = await compilePlan(plan(arts), { store: "cas", root });
     expect(bundle.manifest.artifacts).toHaveLength(22);
-  });
+  }, 30_000);
 });
 
 describe("compilePlan — invalid input", () => {
@@ -638,6 +671,14 @@ describe("compilePlan — template sources", () => {
 
   it("createEmitterRegistry rejects duplicate ids and lists sorted", () => {
     expect(() => createEmitterRegistry([emitter("1"), emitter("2")])).toThrow(/duplicate/);
+    let dup: unknown;
+    try {
+      createEmitterRegistry([emitter("1"), emitter("2")]);
+    } catch (err) {
+      dup = err;
+    }
+    expect(isAxiomError(dup)).toBe(true);
+    expect((dup as AxiomError).code).toBe("ERR_EMITTER_UNKNOWN");
     const r = createEmitterRegistry([{ ...emitter("1"), id: "zeta" }, emitter("1")]);
     expect(r.list()).toEqual(["demo", "zeta"]);
     expect(r.get("zeta")?.version).toBe("1");

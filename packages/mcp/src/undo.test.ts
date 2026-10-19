@@ -6,7 +6,13 @@ import { type AxiomError, isAxiomError } from "@codai/axiom-schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordSessionWrite } from "./session-guard.js";
 import { tmpRepo } from "./test-helpers.js";
-import { captureUndo, pruneUndo, undoLiveDigests, undoSession } from "./undo.js";
+import {
+  captureOutsideUndo,
+  captureUndo,
+  pruneUndo,
+  undoLiveDigests,
+  undoSession,
+} from "./undo.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
 beforeEach(async () => {
@@ -186,5 +192,88 @@ describe("undo TTL", () => {
     expect(await readdir(path.join(repo.root, ".axiom", "undo"))).toEqual([
       `${sha256Hex(B).slice(0, 16)}.jsonl`,
     ]);
+  });
+});
+
+describe("outside-root undo (I-20)", () => {
+  let out: Awaited<ReturnType<typeof tmpRepo>>;
+  beforeEach(async () => {
+    out = await tmpRepo("axiom-undo-out-");
+  });
+  afterEach(async () => {
+    await out.cleanup();
+  });
+  const o = (name: string) => path.join(out.root, name);
+  const outside = (agentId: string, absPaths: string[], now: number) =>
+    captureOutsideUndo(repo.root, {
+      agentId,
+      sessionId: agentId.split(":")[1] ?? agentId,
+      tool: "Write",
+      absPaths,
+      now,
+    });
+
+  it("captures into the root CAS and undo restores modified + deletes created outside files", async () => {
+    await writeFile(o("cfg.json"), "outside original");
+    await outside(A, [o("cfg.json"), o("new.txt"), o("cfg.json")], 1000);
+    await put("m.txt", "in v0");
+    await capture(A, "m.txt", "write", 1001);
+    expect(await casHas(repo.root, sha256Hex("outside original"))).toBe(true);
+    await writeFile(o("cfg.json"), "outside changed");
+    await writeFile(o("new.txt"), "created outside");
+    await put("m.txt", "in v1");
+    const r = await undoSession(repo.root, { agent: A });
+    const fwd = (p: string) => path.resolve(p).replace(/\\/g, "/");
+    expect(r.items.filter((i) => i.outside).map((i) => [i.path, i.action])).toEqual([
+      [fwd(o("cfg.json")), "restore"],
+      [fwd(o("new.txt")), "delete"],
+    ]);
+    expect(r.restored).toBe(3);
+    expect(await readFile(o("cfg.json"), "utf8")).toBe("outside original");
+    expect(await stat(o("new.txt")).catch(() => undefined)).toBeUndefined();
+    expect(await read("m.txt")).toBe("in v0");
+  });
+
+  it("ignores in-root and relative paths; never throws", async () => {
+    await outside(A, [abs("inside.txt"), "rel.txt", repo.root], 1);
+    expect(
+      await stat(path.join(repo.root, ".axiom", "undo")).catch(() => undefined),
+    ).toBeUndefined();
+  });
+
+  it("a later outside write by another agent is a conflict; force restores", async () => {
+    await writeFile(o("x.txt"), "v0");
+    await outside(A, [o("x.txt")], 1000);
+    await writeFile(o("x.txt"), "A");
+    await outside(B, [o("x.txt")], 2000);
+    await writeFile(o("x.txt"), "B");
+    const r = await undoSession(repo.root, { agent: A });
+    expect(r.items[0]).toMatchObject({ action: "skip", reason: "conflict", outside: true });
+    expect(await readFile(o("x.txt"), "utf8")).toBe("B");
+    await undoSession(repo.root, { agent: A, force: true });
+    expect(await readFile(o("x.txt"), "utf8")).toBe("v0");
+  });
+
+  it("a forged log line with a relative path flagged outside, or an absolute in-root line, is ignored", async () => {
+    await mkdir(path.join(repo.root, ".axiom", "undo"), { recursive: true });
+    const bad = [
+      {
+        v: 1,
+        at: 1,
+        agentId: A,
+        tool: "Write",
+        path: "../escape.txt",
+        pre: "absent",
+        outside: true,
+      },
+      { v: 1, at: 1, agentId: A, tool: "Write", path: o("y.txt"), pre: "absent" },
+    ];
+    await writeFile(
+      path.join(repo.root, ".axiom", "undo", `${sha256Hex(A).slice(0, 16)}.jsonl`),
+      `${bad.map((b) => JSON.stringify(b)).join("\n")}\n`,
+    );
+    await expect(undoSession(repo.root, { agent: A })).rejects.toMatchObject({
+      code: "ERR_NOT_FOUND",
+    });
   });
 });

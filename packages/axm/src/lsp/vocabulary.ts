@@ -79,7 +79,7 @@ export const KEYWORDS: Readonly<Record<string, KeywordDoc>> = {
   },
   template: {
     depth: 2,
-    doc: '`template emitter.name "template" {…}` — rendered at compile time by a registered emitter (e.g. `web.next-page` from @codai/axiom-emitters-web); the JSON object is the template `params`.',
+    doc: '`template emitter "template" {…}` — rendered at compile time by an emitter loaded with `--emitter <pkg>` (e.g. `template web "hono.route" {"name":"health","path":"/health","methods":["GET"]}` from @codai/axiom-emitters-web); the JSON object is the template `params`.',
     snippet: 'template ${1:emitter} "${2:template}" {$0}',
   },
   patch: {

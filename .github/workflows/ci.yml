@@ -1,8 +1,20 @@
 name: CI
 
+# Docs-only changes (FinOps, S-1322): a push to main that touches only docs/**, apps/site/** or
+# Markdown does not start this workflow at all (`paths-ignore` — nothing is required on push).
+# Pull requests are NOT path-filtered at the workflow level: a required status check whose
+# workflow never starts stays "Expected — waiting" forever and blocks the merge. Instead the
+# `changes` job classifies the diff and every heavy step is gated on `code == 'true'`, so each
+# required job still reports, under its usual name, a green result within ~20 s. The
+# `docs-guards` job always runs the dependency-free guards that judge docs (tracker sync,
+# stale markers, action pins).
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "apps/site/**"
+      - "**/*.md"
   pull_request:
     branches: [main]
 
@@ -19,56 +31,125 @@ env:
   COREPACK_ENABLE_STRICT: "0"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify the diff (docs-only → code=false)
+        id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          printf '%s\n' "$files"
+          code=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|apps/site/*|*.md) ;;
+              *) code=true ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  docs-guards:
+    # Always runs (also for code PRs): only Node, no install — these guards import node:* only.
+    name: docs guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Tracker sync · stale markers · action pins
+        run: node scripts/run-guards.mjs tracker-sync stale-markers action-pins
+
   quality:
     name: ${{ matrix.os }} / node ${{ matrix.node }}
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-        node: [22, 24]
+        # Node 24 (current LTS) on every OS; the Node 22 floor (engines >=22.14) only on ubuntu —
+        # Node-version bugs are not OS-specific, and this halves the windows/macos minutes.
+        include:
+          - { os: ubuntu-24.04, node: 22 }
+          - { os: ubuntu-24.04, node: 24 }
+          - { os: windows-2025, node: 24 }
+          - { os: macos-15, node: 24 }
+    env:
+      CODE: ${{ needs.changes.outputs.code }}
     steps:
+      - name: Docs-only change — nothing to build
+        if: env.CODE != 'true'
+        run: echo "docs-only diff; build/test skipped (see the changes job)"
+
       - name: Checkout
+        if: env.CODE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # check-changeset-present diffs against origin/main
 
       - name: Setup pnpm
+        if: env.CODE == 'true'
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         # version comes from package.json#packageManager
 
       - name: Setup Node ${{ matrix.node }}
+        if: env.CODE == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
       - name: Install
+        if: env.CODE == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Lint (Biome)
+        if: env.CODE == 'true'
         run: pnpm exec biome check .
 
       # Build first: package exports point at dist/, so cross-package types
       # (@codai/axiom-schema → plan/checks/apply) only resolve after tsdown ran.
       - name: Build
+        if: env.CODE == 'true'
         run: pnpm build
 
       - name: Typecheck
+        if: env.CODE == 'true'
         run: pnpm typecheck
 
       - name: Test (coverage)
+        if: env.CODE == 'true'
         run: pnpm exec vitest run --coverage
 
       - name: Guards
+        if: env.CODE == 'true'
         # release-complete is judged by release.yml after publish: on a `v*` push the tag
         # exists before the packages do, so CI on that commit reported all 9 as "absent
         # from the registry" (runs 35506503730, 35507489074) while the release was in flight.
         run: node scripts/run-guards.mjs --strict --skip=release-complete
 
       - name: Upload coverage
-        if: always()
+        if: always() && env.CODE == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.os }}-node${{ matrix.node }}
@@ -80,69 +161,114 @@ jobs:
     # crates/axiom-hook — the native gate client (std only, no crates). rustup is preinstalled
     # on GitHub runners, so no toolchain action (and no new pin) is needed.
     name: rust / axiom-hook
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      CODE: ${{ needs.changes.outputs.code }}
     defaults:
       run:
         working-directory: crates/axiom-hook
     steps:
+      - name: Docs-only change — nothing to build
+        if: env.CODE != 'true'
+        working-directory: .
+        run: echo "docs-only diff; cargo skipped"
+
       - name: Checkout
+        if: env.CODE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Toolchain
+        if: env.CODE == 'true'
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
           rustup default stable
           cargo --version
 
+      - name: Cache cargo registry + target
+        # std-only crate, so the registry is tiny; the win is target/ (clippy + test builds).
+        # Keyed on the lockfile + toolchain version; restore-keys reuse the last target dir.
+        if: env.CODE == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            crates/axiom-hook/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('crates/axiom-hook/Cargo.lock', 'crates/axiom-hook/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
       - name: Format
+        if: env.CODE == 'true'
         run: cargo fmt --check
 
       - name: Clippy
+        if: env.CODE == 'true'
         run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Test
+        if: env.CODE == 'true'
         run: cargo test --locked
 
   golden-cross-os:
     name: golden digests / ${{ matrix.os }}
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15]
+    # Matrix jobs are gated per step, not with a job-level `if`: a skipped matrix job reports
+    # under the unexpanded name ("golden digests / ${{ matrix.os }}"), so a required check named
+    # "golden digests / ubuntu-24.04" would wait forever on a docs-only PR.
+    env:
+      CODE: ${{ needs.changes.outputs.code }}
     steps:
+      - name: Docs-only change — nothing to build
+        if: env.CODE != 'true'
+        run: echo "docs-only diff; golden digests skipped"
+
       - name: Checkout
+        if: env.CODE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm
+        if: env.CODE == 'true'
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Setup Node 24
+        if: env.CODE == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
 
       - name: Install
+        if: env.CODE == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build schema, canon, plan
+        if: env.CODE == 'true'
         run: pnpm --filter @codai/axiom-schema --filter @codai/axiom-canon --filter @codai/axiom-plan build
 
       # update-golden.ts has no --check flag: it rewrites the expected files.
       # Run it, then `git diff --exit-code` proves this OS computed identical digests.
       - name: Recompute golden digests on this OS
+        if: env.CODE == 'true'
         run: node --import tsx/esm packages/testkit/scripts/update-golden.ts
 
       - name: Digests must match the committed fixtures
+        if: env.CODE == 'true'
         run: git diff --exit-code -- packages/testkit/golden
 
       - name: Golden test suite
+        if: env.CODE == 'true'
         run: pnpm --filter @codai/axiom-testkit test
 
       - name: Upload digests
+        if: env.CODE == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: golden-digests-${{ matrix.os }}
@@ -156,7 +282,9 @@ jobs:
     name: mcp conformance / ubuntu
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    needs: quality
+    needs: [changes, quality]
+    # Non-matrix job: a job-level skip reports "Success" under its real name.
+    if: needs.changes.outputs.code == 'true'
     continue-on-error: false
     steps:
       - name: Checkout
@@ -200,7 +328,8 @@ jobs:
     name: verify-tree action / ubuntu
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    needs: quality
+    needs: [changes, quality]
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
       id-token: write
@@ -274,3 +403,21 @@ jobs:
           test "${{ steps.fail.outcome }}" = "failure"
           test "${{ steps.fail.outputs.ok }}" = "false"
           test "${{ steps.fail.outputs.mismatches }}" = "1"
+
+      - name: PR comment body (dry run, S-1317)
+        # The drifted verify JSON is in $RUNNER_TEMP/axiom-verify.json; the comment must carry
+        # the sticky marker, the mismatch and the covered/uncovered split.
+        env:
+          AXIOM_BUNDLE: ${{ steps.scratch.outputs.bundle }}
+          AXIOM_ROOT: ${{ steps.scratch.outputs.tree }}
+          AXIOM_VERIFY_JSON: ${{ runner.temp }}/axiom-verify.json
+          AXIOM_PR_FILES: |
+            src/hello.ts
+            src/unrelated.ts
+        run: |
+          set -euo pipefail
+          node action/pr-comment.mjs --dry-run | tee "$RUNNER_TEMP/comment.md"
+          grep -q '<!-- axiom-pr-summary -->' "$RUNNER_TEMP/comment.md"
+          grep -q 'mismatch' "$RUNNER_TEMP/comment.md"
+          grep -q 'agent-applied (in an AXIOM manifest) (1)' "$RUNNER_TEMP/comment.md"
+          grep -q 'not covered by AXIOM (1)' "$RUNNER_TEMP/comment.md"

@@ -23,7 +23,7 @@
     "typecheck": "pnpm -r --filter \"@codai/axiom-*\" --filter \"!@codai/axiom-site\" run typecheck",
     "guards": "node scripts/run-guards.mjs",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && node scripts/sync-release-versions.mjs",
     "release": "pnpm build && pnpm guards && changeset publish"
   },
   "devDependencies": {

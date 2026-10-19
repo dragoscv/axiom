@@ -27,7 +27,7 @@ snapshot records facts, not guesses, and is bound to an allowlisted root.
 
 ```jsonc
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "RepoSnapshot",
   "root": { "kind": "relative" },          // the root itself is never recorded
   "snapshotDigest": "sha256:…",           // sha256(JCS(body))
@@ -87,7 +87,7 @@ too, so `exclude: ["vendor/**"]` prunes the walk). Syntax is deliberately tiny a
 
 ## Diff
 
-`diffSnapshots(a, b)` (exported from `@codai/axiom-mcp`'s `snapshot.ts`) and `axiom snapshot-diff
+`diffSnapshots(a, b)` (exported from `@codai/axiom-mcp`'s `snapshot.ts`) and `axiom snapshot diff
 a.json b.json` return `{ added[], removed[], changed: [{ path, from, to }] }` — pure, sorted, keyed
 by path. `changed` compares `sha256` when both sides have one, else `bytes` + `kind`; a `mode` or
 `kind` change also counts. There is deliberately no MCP diff tool: an agent that holds two snapshots
@@ -98,7 +98,7 @@ can diff them locally, and `axiom_manifest_diff` already covers manifests.
 ```
 axiom snapshot --root <dir> [-o snap.json] [--include <glob>]... [--exclude <glob>]...
                [--max-files n] [--max-bytes n] [--no-gitignore] [--no-digest]
-axiom snapshot-diff <a.json> <b.json>
+axiom snapshot diff <a.json> <b.json>
 ```
 
 With `-o` the file gets the full snapshot and stdout a one-line summary
@@ -109,9 +109,9 @@ With `-o` the file gets the full snapshot and stdout a one-line summary
 ```
 axiom snapshot --root . -o before.json --include "src/**"
 # … agent builds a Plan whose overwrite artifacts cite before.json sha256 values …
-axiom apply bundle.json --root . --confirm sha256:…
+axiom plan apply bundle.json --root . --confirm sha256:…
 axiom snapshot --root . -o after.json --include "src/**"
-axiom snapshot-diff before.json after.json     # exactly the manifest's paths, nothing else
+axiom snapshot diff before.json after.json     # exactly the manifest's paths, nothing else
 ```
 
 ---
