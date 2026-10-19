@@ -696,6 +696,10 @@ const VERSIONED_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["steerGlobs", STEER_MIN_VERSION],
   ["record", STEER_MIN_VERSION],
   ["ask", ASK_MIN_VERSION],
+  ["mode", ASK_MIN_VERSION],
+  ["hard", ASK_MIN_VERSION],
+  ["override", ASK_MIN_VERSION],
+  ["outside", ASK_MIN_VERSION],
 ];
 
 async function checkSteerCompat(root: string, bin: Bin): Promise<DoctorCheck | undefined> {

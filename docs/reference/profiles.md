@@ -154,6 +154,10 @@ sees one write at a time:
 | `noSecrets` | `boolean` | `true` | `content.noSecrets` on supplied content |
 | `pii` | `boolean` | `false` | also the PII patterns |
 | `maxBytes` | `int?` | — | `content.maxBytes` on supplied content |
+| `mode` | `"enforce"\|"warn"` | `enforce` | `warn`: denies become allow + warning (`relaxed: "warn"`), except `hard` codes and `ask` globs |
+| `hard` | `string[]` | `[]` | codes that always deny and cannot be overridden (exact, `prefix.*`, `*`) |
+| `override` | `boolean` | `false` | the agent passes a non-hard deny with `axiom-override: <reason>` in the tool's explanation/goal/command (`relaxed: "override"`) |
+| `outside` | `"deny"\|"warn"\|"allow"` | `deny` | targets outside the root: `ERR_CONTAINMENT`, allow + warning, or allow (warning only for OS directories) |
 
 Unknown keys are a schema error → deny `ERR_INTERNAL` (or warn + allow with `--fail-open`).
 Contract, wiring and shell scanning: [hooks.md](../getting-started/hooks.md#profile-file).

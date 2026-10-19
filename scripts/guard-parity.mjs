@@ -287,7 +287,9 @@ async function replay(jsonlPath, guardPath) {
     } catch {
       continue;
     }
-    if (!(r && r.shadow === true && typeof r.command === "string")) continue;
+    // 2.7 warn/override records are the shadow equivalent: allowed, `code` = what would have denied.
+    const relaxed = r && typeof r.relaxed === "string";
+    if (!(r && (r.shadow === true || relaxed) && typeof r.command === "string")) continue;
     if (typeof r.decided_at === "string") {
       if (from === undefined || r.decided_at < from) from = r.decided_at;
       if (to === undefined || r.decided_at > to) to = r.decided_at;
@@ -295,10 +297,13 @@ async function replay(jsonlPath, guardPath) {
     const rule = typeof r.rule === "string" ? r.rule : undefined;
     if (rule !== undefined && !rule.startsWith("house.")) {
       stateful.push({ command: r.command, rule });
-    } else if (rule === undefined && r.decision !== "allow") {
+    } else if (rule === undefined && (r.decision !== "allow" || relaxed)) {
       unjudged.push({ command: r.command, code: r.code });
     } else {
-      records.push({ command: r.command, axiom: r.decision === "allow" ? "allow" : "deny" });
+      records.push({
+        command: r.command,
+        axiom: r.decision === "allow" && !relaxed ? "allow" : "deny",
+      });
     }
   }
   const answers = await withSandbox(guardPath, (sb) =>

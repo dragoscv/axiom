@@ -211,6 +211,10 @@ describe("gate: profile", () => {
       record: false,
       undo: false,
       shadow: false,
+      mode: "enforce",
+      hard: [],
+      override: false,
+      outside: "deny",
     });
     expect(GateProfileSchema.safeParse({ deny: [], extra: 1 }).success).toBe(false);
     expect(GateProfileSchema.safeParse({ maxBytes: 0 }).success).toBe(false);
@@ -248,6 +252,10 @@ describe("gate: profile", () => {
       record: false,
       undo: false,
       shadow: false,
+      mode: "enforce",
+      hard: [],
+      override: false,
+      outside: "deny",
     });
     expect(r.source).toBe(explicit);
   });

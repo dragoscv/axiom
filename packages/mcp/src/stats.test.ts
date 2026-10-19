@@ -97,6 +97,7 @@ describe("summarizeDecisions", () => {
       deny: 3,
       ask: 1,
       shadowDiffs: 1,
+      relaxed: 0,
       // ms sorted: 7 10 20 30 40 5000 → floor(5*0.5)=2 → 20, floor(5*0.95)=4 → 40
       p50: 20,
       p95: 40,

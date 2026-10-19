@@ -461,10 +461,34 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 | `steer` | `"off"\|"hint"\|"require"` | `off` (`axiom init` writes `hint`) | `hint`: an allowed write gets a once-per-session `additionalContext` pointing at the `axiom_write` MCP tool (marker under `.axiom/hints/`); `require`: a direct write to `steerGlobs` is denied with `steer.requireApply` |
 | `steerGlobs` | `string[]` | `[]` | globs `steer: "require"` routes through `axiom_write` (e.g. `migrations/**`, `CHANGELOG.md`) |
 | `record` | `boolean` | `false` | append every judged write/shell call to `.axiom/decisions.jsonl` (JCS `args_hash`, decision, code, paths) — see below |
+| `mode` | `"enforce"\|"warn"` | `enforce` | `warn` (2.7): a deny becomes an allow whose reason reaches the agent as `additionalContext` (`AXIOM GATE WARN <code>: …`) and is journaled with `relaxed: "warn"`. `hard` codes still deny, `ask` globs still ask; a `--post` check in warn mode blocks only on `hard` codes |
+| `hard` | `string[]` | `[]` | codes that deny in every mode and cannot be overridden — exact (`house.forcePush`), `prefix.*` (`content.noSecrets.*`) or `*` |
+| `override` | `boolean` | `false` | the agent may pass a non-`hard` deny by writing `axiom-override: <reason>` (8–300 chars, to the end of the line) in the tool's `explanation` / `goal` / `description` / `reason` / `justification` or in the shell `command` text (e.g. a trailing `# axiom-override: …` comment). File content never counts. Journaled with `relaxed: "override"` and `override_reason` |
+| `outside` | `"deny"\|"warn"\|"allow"` | `deny` | a target outside the root (and outside every worktree of the same repository): `deny` = `ERR_CONTAINMENT`; `warn` = allow with a warning; `allow` = allow, warning only for operating-system directories (`C:\Windows`, `C:\Program Files*`, `C:\ProgramData`, `/etc`, `/usr`, …). Outside targets are not judged by the root's `deny`/`allow` globs |
 
 A gate profile that uses `steer`, `steerGlobs` or `record` needs axiom ≥ 2.5.0 on every machine
 that runs the hook: older gates reject unknown keys and deny every write (`axiom doctor` checks).
-`ask` needs axiom ≥ 2.7.0 for the same reason.
+`ask`, `mode`, `hard`, `override` and `outside` need axiom ≥ 2.7.0 for the same reason.
+
+### Autonomous profile — warn, override, write anywhere (2.7)
+
+For machines where agents should work unattended, the blocking checks become advice and only
+irreversible actions stay blocked:
+
+```json
+{
+  "mode": "warn",
+  "override": true,
+  "outside": "allow",
+  "hard": ["house.forcePush", "house.resetHard", "house.cleanForce", "house.worktreeRemoveForce"],
+  "record": true,
+  "commands": { "pack": "house" }
+}
+```
+
+Every relaxed call is still in `.axiom/decisions.jsonl` (`relaxed`, `code`, `override_reason`),
+and `axiom stats` counts them under `relaxed`. Wire the hook with `--fail-open` too, so an empty
+payload or an internal error never blocks a tool.
 
 ### Steering writes to the transaction (S-905)
 

@@ -151,6 +151,26 @@ export const GateProfileSchema = z
      * command text) into `.axiom/decisions.jsonl` for a parity replay before a cutover.
      */
     shadow: z.boolean().default(false),
+    /**
+     * `warn` (2.7): a deny becomes an allow carrying the reason as a warning to the agent (and a
+     * journal line with `relaxed: "warn"`). Codes in `hard` keep denying; profile `ask` globs
+     * keep asking. Default `enforce`.
+     */
+    mode: z.enum(["enforce", "warn"]).default("enforce"),
+    /** Codes that always deny, in every mode, and cannot be overridden: exact or `prefix.*`. */
+    hard: z.array(z.string().min(1)).default([]),
+    /**
+     * Let the agent pass a non-hard deny by stating why: `axiom-override: <reason>` (≥ 8 chars)
+     * in the tool's explanation / goal / description / reason / command text. Journaled as
+     * `relaxed: "override"` with the reason. Default off.
+     */
+    override: z.boolean().default(false),
+    /**
+     * Targets outside the root (and outside every worktree of the same repository): `deny`
+     * (ERR_CONTAINMENT, default), `warn` (allow + warning), `allow` (allow; a warning only for
+     * operating-system directories).
+     */
+    outside: z.enum(["deny", "warn", "allow"]).default("deny"),
   })
   .strict();
 
@@ -176,6 +196,10 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
   record: false,
   undo: false,
   shadow: false,
+  mode: "enforce",
+  hard: [],
+  override: false,
+  outside: "deny",
 };
 
 /** `--profile`, then `<root>/.axiom/gate-profile.json`, then `~/.axiom/gate-profile.json`, then default. */
@@ -896,6 +920,14 @@ export async function runGatePredicates(
   targets: readonly ResolvedGateTarget[],
   profile: GateProfile,
 ): Promise<GateDeny | undefined> {
+  return (await gatePredicateDenies(targets, profile))[0];
+}
+
+/** Every path/content predicate finding as a deny, in predicate order (path first). */
+export async function gatePredicateDenies(
+  targets: readonly ResolvedGateTarget[],
+  profile: GateProfile,
+): Promise<GateDeny[]> {
   const ctx = buildGateContext(targets);
   const findings = [];
   if (profile.deny.length > 0) findings.push(...(await pathDeny.run(ctx, { globs: profile.deny })));
@@ -908,9 +940,72 @@ export async function runGatePredicates(
     );
   if (hasContent && profile.maxBytes !== undefined)
     findings.push(...(await contentMaxBytes.run(ctx, { max: profile.maxBytes })));
-  const f = findings[0];
-  if (f === undefined) return undefined;
-  return new GateDeny(f.id, f.message, f.path);
+  return findings.map((f) => new GateDeny(f.id, f.message, f.path));
+}
+
+// ------------------------------------------------------------- relaxation --
+
+/** `axiom-override: <reason>` — the reason runs to the end of the line, 8..300 chars. */
+const OVERRIDE_RE = /axiom-override:\s*([^\r\n]{8,300})/i;
+/** Tool-input fields an agent writes prose into (never file content). */
+const OVERRIDE_KEYS = [
+  "explanation",
+  "goal",
+  "description",
+  "reason",
+  "justification",
+  "command",
+] as const;
+
+/** The override reason the agent stated in the tool call, or `undefined`. */
+export function findOverrideReason(input: Record<string, unknown>): string | undefined {
+  for (const k of OVERRIDE_KEYS) {
+    const v = input[k];
+    if (typeof v !== "string") continue;
+    const m = OVERRIDE_RE.exec(v);
+    const reason = m?.[1]?.replace(/["'`]+\s*$/, "").trim();
+    if (reason !== undefined && reason.length >= 8) return reason;
+  }
+  return undefined;
+}
+
+/** True when `code` is listed in `hard` exactly, or under a `prefix.*` / `*` entry. */
+export function isHardCode(hard: readonly string[], code: string): boolean {
+  return hard.some((h) =>
+    h === "*" ? true : h.endsWith(".*") ? code.startsWith(h.slice(0, -1)) : h === code,
+  );
+}
+
+const SYSTEM_DIRS_WIN = [
+  "c:/windows",
+  "c:/program files",
+  "c:/program files (x86)",
+  "c:/programdata",
+];
+const SYSTEM_DIRS_POSIX = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/boot",
+  "/lib",
+  "/lib64",
+  "/proc",
+  "/sys",
+  "/dev",
+  "/System",
+  "/Library",
+];
+
+/** Operating-system directories: `outside: "allow"` still warns for these. */
+export function isSystemPath(abs: string, win32: boolean = IS_WIN32): boolean {
+  const p = abs.replace(/\\/g, "/");
+  const under = (dir: string, s: string) => s === dir || s.startsWith(`${dir}/`);
+  if (win32) {
+    const l = p.toLowerCase();
+    return SYSTEM_DIRS_WIN.some((d) => under(d, l));
+  }
+  return SYSTEM_DIRS_POSIX.some((d) => under(d, p));
 }
 
 /** Ask id of a target matching the profile's `ask` globs (predicate-style, like `path.deny`). */
@@ -1539,11 +1634,36 @@ export async function runGate(
   let shadowOf: GateResult | undefined;
   /** Id of the v2.6 rule that decided (enforced or shadowed), for the journal's `rule` field. */
   let ruleOf: string | undefined;
+  /** 2.7: denies let through as warnings (`mode: "warn"`, an override, or `outside`). */
+  const warnings: string[] = [];
+  let relaxedKind: "warn" | "override" | undefined;
+  let relaxedCode: string | undefined;
+  const overrideReason = findOverrideReason(payload.input);
+  /** True when `d` is let through (and remembered as a warning); hard codes and asks never are. */
+  const relax = (d: GateDeny, p: GateProfile | undefined = rec?.profile): boolean => {
+    if (p === undefined || d.ask || isHardCode(p.hard, d.code)) return false;
+    let kind: "warn" | "override";
+    if (p.override && overrideReason !== undefined) kind = "override";
+    else if (p.mode === "warn") kind = "warn";
+    else return false;
+    if (relaxedKind !== "override") relaxedKind = kind;
+    relaxedCode ??= d.code;
+    const where = d.relPath === undefined ? "" : ` (${d.relPath})`;
+    const fix = d.fix === undefined ? "" : ` — fix: ${d.fix}`;
+    const msg =
+      kind === "override"
+        ? `AXIOM GATE OVERRIDE ${d.code}: ${d.message}${where} — allowed because the agent stated: "${overrideReason}"`
+        : `AXIOM GATE WARN ${d.code}: ${d.message}${where}${fix} — allowed (warn mode); if this was unintended, stop and fix it`;
+    warnings.push(msg);
+    if (RANK.warn <= RANK[level]) stderr.push(msg);
+    return true;
+  };
   const recorded = async (r: GateResult): Promise<GateResult> => {
     if (rec === undefined) return r;
     if (!rec.profile.record && !rec.profile.shadow) return r;
     try {
       const judged = r.decision === "allow" && shadowOf !== undefined ? shadowOf : r;
+      const relaxedAllow = judged.decision === "allow" && relaxedKind !== undefined;
       await appendDecision(rec.root, {
         v: 1,
         decided_at: new Date().toISOString(),
@@ -1553,14 +1673,22 @@ export async function runGate(
         ...hashArgs(payload.input),
         decision: judged.verdict === "ask" ? "ask" : judged.decision,
         ...(judged.code === undefined ? {} : { code: judged.code }),
+        ...(relaxedAllow && relaxedCode !== undefined ? { code: relaxedCode } : {}),
+        ...(relaxedAllow && relaxedKind !== undefined ? { relaxed: relaxedKind } : {}),
+        ...(relaxedAllow && relaxedKind === "override" && overrideReason !== undefined
+          ? { override_reason: overrideReason }
+          : {}),
         ...(judged.reason === undefined ? {} : { reason: judged.reason }),
         paths: [...new Set(judgedPaths)],
         profile: rec.source,
         ms: Math.round(judged.durationMs * 10) / 10,
         ...(rec.profile.shadow ? { shadow: true as const } : {}),
         // Shadow records carry the command so `guard-parity.mjs --replay` can diff it (S-1216).
-        ...(rec.profile.shadow && command !== undefined ? { command } : {}),
-        ...(ruleOf !== undefined && judged.code === ruleOf ? { rule: ruleOf } : {}),
+        ...((rec.profile.shadow || relaxedAllow) && command !== undefined ? { command } : {}),
+        ...(ruleOf !== undefined &&
+        (judged.code === ruleOf || (relaxedAllow && relaxedCode === ruleOf))
+          ? { rule: ruleOf }
+          : {}),
       });
     } catch (err) {
       log("debug", `decision journal: ${err instanceof Error ? err.message : String(err)}`);
@@ -1584,7 +1712,9 @@ export async function runGate(
       return undefined;
     }
     ruleOf = v.id;
-    return recorded(deny(verdictDeny(v)));
+    const d = verdictDeny(v);
+    if (relax(d)) return undefined;
+    return recorded(deny(d));
   };
 
   try {
@@ -1648,6 +1778,17 @@ export async function runGate(
             add(wt, await resolveGateTarget(wt, t, cwdReal));
             continue;
           }
+          if (profile.outside !== "deny") {
+            const supplied = t.rawPath.replace(/\\/g, "/");
+            const abs = path.isAbsolute(supplied) ? supplied : path.resolve(cwdReal, supplied);
+            if (profile.outside === "warn" || isSystemPath(abs)) {
+              const msg = `AXIOM GATE WARN ERR_CONTAINMENT: ${abs} is outside ${rootReal}${isSystemPath(abs) ? " (operating-system directory)" : ""} — allowed (outside: ${profile.outside})`;
+              warnings.push(msg);
+              if (RANK.warn <= RANK[level]) stderr.push(msg);
+            }
+            continue;
+          }
+          if (relax(err)) continue;
         }
         // Shell operands are heuristic: a token that is not a path (a URL, a glob, `.`)
         // must not deny the whole command. Real write tools keep the strict behaviour.
@@ -1663,22 +1804,28 @@ export async function runGate(
           // `git clean` / `reset --hard` on the root itself: deny only if the profile protects
           // anything — approximate by denying when the profile has a deny list.
           if (profile.deny.length > 0) {
-            throw new GateDeny("path.deny", "destructive git command on the whole tree", ".");
+            const d = new GateDeny("path.deny", "destructive git command on the whole tree", ".");
+            if (relax(d)) continue;
+            throw d;
           }
           if (profile.ask.length > 0) pendingAsk ??= askDeny(".");
           continue;
         }
+        if (err instanceof GateDeny && relax(err)) continue;
         throw err;
       }
     }
     let n = 0;
     for (const [root, resolved] of groups) {
       const p = await profileFor(root);
-      const verdict =
-        (await runGatePredicates(resolved, p)) ?? (await runSteerRequire(resolved, p));
-      if (verdict !== undefined) {
+      const steer = await runSteerRequire(resolved, p);
+      const found = [...(await gatePredicateDenies(resolved, p)), ...(steer ? [steer] : [])];
+      // A hard code anywhere wins over earlier relaxable findings.
+      const blocking =
+        found.find((d) => isHardCode(p.hard, d.code)) ?? found.find((d) => !relax(d, p));
+      if (blocking !== undefined) {
         await noteDeniedCreate(rootReal, extracted.cls, payload.toolName, resolved, root, profile);
-        return recorded(deny(verdict));
+        return recorded(deny(blocking));
       }
       pendingAsk ??= await runAskGlobs(resolved, p);
       n += resolved.length;
@@ -1696,7 +1843,8 @@ export async function runGate(
         profile.sessions,
       );
       if (v !== undefined) {
-        if (v.decision !== "ask" && !profile.shadow) {
+        const r = await ruleVerdict(v);
+        if (r !== undefined && v.decision !== "ask") {
           await noteDeniedCreate(
             rootReal,
             extracted.cls,
@@ -1706,7 +1854,6 @@ export async function runGate(
             profile,
           );
         }
-        const r = await ruleVerdict(v);
         if (r !== undefined) return r;
       }
     }
@@ -1741,6 +1888,10 @@ export async function runGate(
       (await claimSessionHint(rootReal, payload.sessionId))
     ) {
       hint = GATE_STEER_HINT;
+    }
+    if (warnings.length > 0) {
+      const w = warnings.join("\n");
+      hint = hint === undefined ? w : `${w}\n${hint}`;
     }
     return recorded(allow(`${n} target(s) passed (${extracted.cls})`, hint));
   } catch (err) {

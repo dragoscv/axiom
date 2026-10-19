@@ -34,6 +34,8 @@ export interface StatsBucket {
   deny: number;
   ask: number;
   shadowDiffs: number;
+  /** 2.7: allowed although a check fired (`warn` mode or an agent override). */
+  relaxed: number;
   p50: number | null;
   p95: number | null;
   codes: Record<string, number>;
@@ -88,7 +90,17 @@ function rank(sorted: readonly number[], q: number): number | null {
 }
 
 function emptyBucket(): StatsBucket {
-  return { total: 0, allow: 0, deny: 0, ask: 0, shadowDiffs: 0, p50: null, p95: null, codes: {} };
+  return {
+    total: 0,
+    allow: 0,
+    deny: 0,
+    ask: 0,
+    shadowDiffs: 0,
+    relaxed: 0,
+    p50: null,
+    p95: null,
+    codes: {},
+  };
 }
 
 /** One bucket over records: only allow/deny/ask decisions count; unknown decisions are ignored. */
@@ -101,6 +113,7 @@ export function summarizeDecisions(records: readonly DecisionRecord[]): StatsBuc
     b.total++;
     b[decision]++;
     if (r.shadow === true && decision !== "allow") b.shadowDiffs++;
+    if (r.relaxed !== undefined && decision === "allow") b.relaxed++;
     if (r.code !== undefined) b.codes[r.code] = (b.codes[r.code] ?? 0) + 1;
     if (typeof r.ms === "number" && Number.isFinite(r.ms)) ms.push(r.ms);
   }

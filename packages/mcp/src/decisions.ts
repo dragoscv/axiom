@@ -40,6 +40,13 @@ export interface DecisionRecord {
   rule?: string;
   /** Shadow mode only: the shell command text, for `scripts/guard-parity.mjs --replay`. */
   command?: string;
+  /**
+   * 2.7: the call was allowed although a check fired — `warn` (profile `mode: "warn"`) or
+   * `override` (the agent stated `axiom-override: <reason>`). `code` names the check.
+   */
+  relaxed?: "warn" | "override";
+  /** The reason the agent gave for an override. */
+  override_reason?: string;
 }
 
 /**

@@ -28,12 +28,13 @@ import {
   type GateProfile,
   type GateResult,
   type GateTarget,
+  gatePredicateDenies,
+  isHardCode,
   loadGateProfile,
   type NormalizedPayload,
   normalizePayload,
   type ResolvedGateTarget,
   resolveGateTarget,
-  runGatePredicates,
   sameRepoWorktreeRoot,
   type ToolClass,
 } from "./gate.js";
@@ -326,7 +327,14 @@ export async function postMain(argv: readonly string[], io: PostIo): Promise<Gat
                 ...(io.home === undefined ? {} : { home: io.home }),
               })
             ).profile;
-      verdict = await runGatePredicates(resolved, profile);
+      const found = await gatePredicateDenies(resolved, profile);
+      // 2.7 warn mode: only hard codes still block after the fact; the rest is a note.
+      verdict =
+        profile.mode === "warn" ? found.find((d) => isHardCode(profile.hard, d.code)) : found[0];
+      if (verdict === undefined && found[0] !== undefined) {
+        const f = found[0];
+        debug(`post: ${f.code} on ${f.relPath ?? "?"} allowed (warn mode)`);
+      }
     }
 
     let result: GateResult;
