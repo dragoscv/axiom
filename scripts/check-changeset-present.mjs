@@ -53,10 +53,15 @@ const changesets = exists(csDir)
 const changesetInDiff = [...changed].some(
   (f) => /^\.changeset\/.+\.md$/.test(f) && !f.endsWith("README.md"),
 );
+// After `changeset version` the entries are consumed into the package CHANGELOGs: a diff that
+// updates those changelogs carries its release notes (the release commit itself).
+const changelogInDiff = [...changed].some((f) => /^packages\/[^/]+\/CHANGELOG\.md$/.test(f));
 
-if (changesets.length > 0 || changesetInDiff) {
+if (changesets.length > 0 || changesetInDiff || changelogInDiff) {
   report("changeset-present", [], {
-    notes: [`${srcTouched.length} src file(s) changed, ${changesets.length} changeset(s) present`],
+    notes: [
+      `${srcTouched.length} src file(s) changed, ${changesets.length} changeset(s) present${changelogInDiff ? ", package CHANGELOGs updated" : ""}`,
+    ],
   });
 }
 
