@@ -448,8 +448,16 @@ jobs:
         run: |
           set -euo pipefail
           v=$(node -p 'require("./packages/mcp/package.json").version')
-          curl -fsSL "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest" | tee registry.json
-          node -e 'const r = JSON.parse(require("fs").readFileSync("registry.json","utf8")); const got = r.server?.version ?? r.version; if (got !== process.argv[1]) { console.error(`registry has ${got}, expected ${process.argv[1]}`); process.exit(1); }' "$v"
+          # The registry answers an occasional 5xx right after a publish (3.0.0: one HTTP 500 on a
+          # listing that was already live) - retry like the publish step instead of failing.
+          for i in 1 2 3 4 5 6; do
+            if curl -fsSL "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dragoscv%2Faxiom/versions/latest" -o registry.json \
+              && node -e 'const r = JSON.parse(require("fs").readFileSync("registry.json","utf8")); const got = r.server?.version ?? r.version; if (got !== process.argv[1]) { console.error(`registry has ${got}, expected ${process.argv[1]}`); process.exit(1); }' "$v"; then
+              cat registry.json; exit 0
+            fi
+            echo "listing check $i failed; retrying in 20 s"; sleep 20
+          done
+          echo "::error::registry listing for $v not confirmed after 6 attempts"; exit 1
 
   action-tag:
     # D-31 / S-1322: consumers pin `uses: dragoscv/axiom/action@v<major>`. Move that floating
