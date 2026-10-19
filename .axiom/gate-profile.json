@@ -18,7 +18,6 @@
   "maxBytes": 262144,
   "steer": "hint",
   "record": true,
-  "shadow": true,
   "commands": {
     "pack": "house"
   },
@@ -35,5 +34,14 @@
       "deploy"
     ],
     "untracked": true
-  }
+  },
+  "mode": "warn",
+  "override": true,
+  "outside": "allow",
+  "hard": [
+    "house.forcePush",
+    "house.resetHard",
+    "house.cleanForce",
+    "house.worktreeRemoveForce"
+  ]
 }

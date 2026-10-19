@@ -4,9 +4,9 @@
     "preToolUse": [
       {
         "type": "command",
-        "command": "axiom gate --stdin --format auto",
-        "bash": "axiom gate --stdin --format auto",
-        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "command": "axiom gate --stdin --fail-open --format auto",
+        "bash": "axiom gate --stdin --fail-open --format auto",
+        "powershell": "axiom.cmd gate --stdin --fail-open --format auto; exit $LASTEXITCODE",
         "timeoutSec": 15
       }
     ],
