@@ -24,6 +24,13 @@ export interface GlobMatcherOptions {
    * are case-insensitive: there `.ENV` IS `.env`, so a `.env` deny glob must catch it.
    */
   nocase?: boolean;
+  /** Platform whose filesystem default applies when `nocase` is absent (default: this one). */
+  platform?: NodeJS.Platform;
+}
+
+/** win32 and darwin default filesystems are case-insensitive. */
+export function caseInsensitivePlatform(platform: NodeJS.Platform): boolean {
+  return platform === "win32" || platform === "darwin";
 }
 
 /** Default `nocase` for path globs on this platform. */
@@ -41,7 +48,9 @@ export function globMatcher(
   if (globs === undefined || globs.length === 0) return () => whenEmpty;
   const m = picomatch(globs.map(escapeRouteGroups), {
     dot: true,
-    nocase: opts.nocase ?? DEFAULT_GLOB_NOCASE,
+    nocase:
+      opts.nocase ??
+      (opts.platform === undefined ? DEFAULT_GLOB_NOCASE : caseInsensitivePlatform(opts.platform)),
   });
   return (p) => m(p);
 }

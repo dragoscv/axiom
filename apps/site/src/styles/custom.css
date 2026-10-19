@@ -226,6 +226,17 @@ pre.mermaid,
   max-width: 100%;
   height: auto;
 }
+/* Edge labels: mermaid's theme paints them low-contrast on our paper (axe color-contrast). */
+:root[data-theme="light"] .starlight-aside a {
+  color: var(--ax-seal-deep);
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .labelBkg {
+  color: var(--sl-color-white) !important;
+  background-color: var(--ax-paper-2) !important;
+  fill: var(--sl-color-white) !important;
+}
 
 /* ---- Content polish -------------------------------------------------------------- */
 .sl-markdown-content a:not(:where(.not-content *)) {

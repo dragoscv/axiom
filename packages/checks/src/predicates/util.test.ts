@@ -1,7 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { findCardNumber, luhnValid } from "./content.js";
-import { escapeRouteGroups, globMatcher } from "./util.js";
+import {
+  caseInsensitivePlatform,
+  DEFAULT_GLOB_NOCASE,
+  escapeRouteGroups,
+  globMatcher,
+} from "./util.js";
 
 describe("escapeRouteGroups (S-408)", () => {
   it("escapes a plain parenthesised segment", () => {
@@ -46,6 +51,12 @@ describe("globMatcher case sensitivity follows the filesystem", () => {
     const m = globMatcher(["**/.env", ".env"], false);
     expect(m(".ENV")).toBe(false);
     expect(m(".env")).toBe(true);
+  });
+  it("the default follows the platform on every OS (win32/darwin insensitive, linux sensitive)", () => {
+    expect(globMatcher([".env"], false, { platform: "win32" })(".ENV")).toBe(true);
+    expect(globMatcher([".env"], false, { platform: "darwin" })(".ENV")).toBe(true);
+    expect(globMatcher([".env"], false, { platform: "linux" })(".ENV")).toBe(false);
+    expect(DEFAULT_GLOB_NOCASE).toBe(caseInsensitivePlatform(process.platform));
   });
   it("explicit nocase overrides the platform default both ways", () => {
     expect(globMatcher([".env"], false, { nocase: true })(".ENV")).toBe(true);

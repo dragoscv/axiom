@@ -376,8 +376,8 @@ describe("axiom doctor — resident daemon", () => {
     return (server.address() as AddressInfo).port;
   };
 
+  // POSIX only: Windows has no mode bits (the daemon sets an ACL instead).
   it.runIf(process.platform !== "win32")(
-    // POSIX only: Windows has no mode bits (the daemon sets an ACL instead).
     "a group-readable daemon.json warns instead of looking like no daemon",
     async () => {
       await mkdir(join(home.root, ".axiom"), { recursive: true });

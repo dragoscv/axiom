@@ -262,8 +262,8 @@ export const MUTANTS = [
     id: "glob-nocase-default",
     file: "packages/checks/src/predicates/util.ts",
     pkg: "packages/checks",
-    find: "nocase: opts.nocase ?? DEFAULT_GLOB_NOCASE,",
-    replace: "nocase: opts.nocase ?? false,",
+    find: '  return platform === "win32" || platform === "darwin";',
+    replace: "  return false;",
     why: "path globs default to case-insensitive on win32/darwin (.ENV is .env)",
   },
   {
