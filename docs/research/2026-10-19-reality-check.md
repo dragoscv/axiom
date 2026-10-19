@@ -194,3 +194,43 @@ The rest go to a later 3.x.
 
 Decisions and stories: PLAN.md D-41 onwards and S-1301 onwards (TRACKER.csv). This report records
 the state found on 2026-10-19; the tracker is authoritative for progress.
+
+## 8. Outcome (2026-10-20)
+
+Released as **3.0.0** (tag `v3.0.0` on 8ddce4c, release run 39307524208): 14/14 npm packages with
+provenance (incl. the five `@codai/axiom-hook-*` platform packages), GitHub release with 16 assets
+(binaries, vsix, `THIRD_PARTY_NOTICES.md`, Node licence, CycloneDX SBOM, SHA256SUMS + attestation),
+MCP Registry / Marketplace / Open VSX / Homebrew at 3.0.0, floating `v3` tag, docs site with the
+spec pages and `schemas/v3/*` live. CI green on ubuntu/windows/macos; mutation smoke 32/32 killed.
+
+| P0 | Status | Where |
+|---|---|---|
+| P0-1 daemon squatting | fixed: protocol 2 (per-start key, HMAC responses, nonce, pid check, 0600) | S-1304 |
+| P0-2 hard codes by order | fixed: every rule evaluated, hard wins; `git.destructiveTree` | S-1301 |
+| P0-3 override from content | fixed: prose fields / trailing comment only, ≥ 3 words | S-1302 |
+| P0-4 shell scan gaps | fixed: shared `shell-lex.ts`, semantic house rules (61 bypass cases) | S-1301 |
+| P0-5 case / 8.3 globs | fixed: nocase on win32/darwin, 8.3 segments refused | S-1303 |
+| P0-6 root `.` ordering | fixed: judged before containment | S-1303 |
+| P0-7 daemon roots | fixed: root checked after payload normalisation (421) | S-1304 |
+| P0-8 `.AXIOM` / 8.3 apply | fixed: `ERR_PATH_RESERVED_DIR` | S-1305 |
+| P0-9 journal backup escape | fixed: contained backups, `ERR_JOURNAL_CORRUPT` | S-1305 |
+| P0-10 unverified CAS ref | fixed: re-hash, `casGetUnverified` | S-1306 |
+| P0-11 strict profile skew | fixed: unknown keys warn, `version`, `ERR_PROFILE_VERSION`, never `--fail-open` | S-1307 |
+| P0-12 init without house pack | fixed: enforce + house + 4 hard codes | S-1307 |
+| P0-13 third-party notices | fixed: generated at prepack, release assets | S-1308 |
+| P0-14 dark-mode contrast | fixed: cloud axe on the v3 site = 0 violations (26 page×theme runs) | S-1320 |
+
+Every P1 in §2 is closed by S-1309..S-1322 (tracker notes per story). Decided rather than fixed:
+the `axiom` name stays with an `axgate` alias pending a trademark search by a lawyer (D-41);
+Authenticode signing waits for a quiet-box measurement (D-45); 2.x is unsupported after 3.0.0
+(D-46). The `checks` section of `axiom.json` is not yet read by `check`/`apply` (documented in
+`profiles.md`; the legacy `profiles/*.json` remain authoritative for checks).
+
+Consumers on 3.0.0: codai main faf6177d6, brivio dev c3f3056f5, metu main 13f8ff8 (+ the
+postToolUse hook), `axiom setup doctor` ok on all four repos. Agent impact in VS Code after the
+3.0.0 install: 7 PreToolUse NonBlockingError out of 7483 hook invocations, all in invocations that
+also ran the owner's `hook-pre.ps1` (20–38 s), none attributable to the gate alone.
+
+S-1219 (PowerShell guard cutover) stays open: the replay's 163 "diffs" were an artifact of the
+guard's new warn-by-default answers (fixed in guard-parity, 7700b8f); the cutover itself is
+time-gated to 2026-10-21 and needs the owner's rules ticket.
