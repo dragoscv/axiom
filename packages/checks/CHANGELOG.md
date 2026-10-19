@@ -1,5 +1,13 @@
 # @codai/axiom-checks
 
+## 2.7.0
+
+### Patch Changes
+
+- a1a9be3: `content.noSecrets` (`pii: true`): the e-mail detector no longer reports Google Cloud service-account addresses (`*@*.iam.gserviceaccount.com`, `*-compute@developer.gserviceaccount.com`, `*@appspot.gserviceaccount.com`) as personal data — they are machine identities. Look-alikes such as `x@gserviceaccount.com.evil.ro` are still flagged.
+- @codai/axiom-canon@2.7.0
+  - @codai/axiom-schema@2.7.0
+
 ## 2.6.1
 
 ### Patch Changes

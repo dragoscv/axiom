@@ -4,4 +4,4 @@ version = 4
 
 [[package]]
 name = "axiom-hook"
-version = "2.6.1"
+version = "2.7.0"

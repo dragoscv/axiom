@@ -1,5 +1,12 @@
 # @codai/axiom-plan
 
+## 2.7.0
+
+### Patch Changes
+
+- @codai/axiom-canon@2.7.0
+  - @codai/axiom-schema@2.7.0
+
 ## 2.6.1
 
 ### Patch Changes

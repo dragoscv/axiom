@@ -1,5 +1,24 @@
 # @codai/axiom-mcp
 
+## 2.7.0
+
+### Minor Changes
+
+- 6415a8c: Gate profile `ask` globs: a write (or shell operand) matching one is not denied but handed to the human — `path.ask` with `permissionDecision: "ask"` on `auto`/`claude`/`copilot`/`vscode`, a plain deny on formats without an ask prompt (fail-closed). Every deny wins (`deny`, `allow`, `noSecrets`, `maxBytes`, `steer: "require"`, session rules); `record`/`shadow` journal the verdict as `ask`. `axiom doctor` fails `bin.profile` when a profile uses `ask` but the global bin is older than 2.7.0 (its strict schema would deny every write).
+- 3970fb4: Gate profile relaxation knobs for autonomous agents (S-1221): `mode: "warn"` turns every deny into an allow whose reason reaches the agent as `additionalContext` (`AXIOM GATE WARN <code>`); `hard: [codes]` (exact, `prefix.*`, `*`) keeps denying in every mode and cannot be overridden; `override: true` lets the agent pass a non-hard deny by writing `axiom-override: <reason>` in the tool's explanation/goal/description/command; `outside: "deny"|"warn"|"allow"` decides targets beyond the root (`allow` still warns for operating-system directories). Relaxed calls are journaled with `relaxed: "warn"|"override"`, `code` and `override_reason`; `axiom stats` counts them as `relaxed`. A `--post` check in warn mode blocks only on hard codes. Defaults are unchanged (`enforce`, `deny`, no override); `axiom doctor` requires a global bin ≥ 2.7.0 for the new keys.
+
+### Patch Changes
+
+- a1a9be3: `content.noSecrets` (`pii: true`): the e-mail detector no longer reports Google Cloud service-account addresses (`*@*.iam.gserviceaccount.com`, `*-compute@developer.gserviceaccount.com`, `*@appspot.gserviceaccount.com`) as personal data — they are machine identities. Look-alikes such as `x@gserviceaccount.com.evil.ro` are still flagged.
+- Updated dependencies [a1a9be3]
+  - @codai/axiom-checks@2.7.0
+  - @codai/axiom-apply@2.7.0
+  - @codai/axiom-axm@2.7.0
+  - @codai/axiom-canon@2.7.0
+  - @codai/axiom-emitters-web@2.7.0
+  - @codai/axiom-plan@2.7.0
+  - @codai/axiom-schema@2.7.0
+
 ## 2.6.1
 
 ### Patch Changes
