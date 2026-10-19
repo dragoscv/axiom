@@ -6,6 +6,7 @@ dist/
 src/content/docs/*
 !src/content/docs/index.mdx
 public/brand/
+public/schemas/
 public/llms.txt
 public/llms-full.txt
 public/og.png

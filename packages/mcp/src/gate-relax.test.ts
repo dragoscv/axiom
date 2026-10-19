@@ -92,12 +92,15 @@ describe("gate 2.7: helpers", () => {
     expect(isHardCode([], "anything")).toBe(false);
   });
 
-  it("findOverrideReason reads prose fields, needs >= 8 chars, ignores file content", () => {
-    expect(findOverrideReason({ explanation: "x axiom-override: user asked for it" })).toBe(
-      "user asked for it",
+  it("findOverrideReason reads prose fields or a trailing shell comment, needs 3 words, ignores file content", () => {
+    expect(findOverrideReason({ explanation: "x axiom-override: the user asked for it" })).toBe(
+      "the user asked for it",
     );
-    expect(findOverrideReason({ command: "rm a # axiom-override: tmp scratch file" })).toBe(
-      "tmp scratch file",
+    expect(findOverrideReason({}, "rm a # axiom-override: removing a temporary scratch file")).toBe(
+      "removing a temporary scratch file",
+    );
+    expect(findOverrideReason({ command: "rm a # axiom-override: removing a scratch file" })).toBe(
+      undefined,
     );
     expect(findOverrideReason({ explanation: "axiom-override: short" })).toBeUndefined();
     expect(findOverrideReason({ content: "axiom-override: hidden in the file body" })).toBe(

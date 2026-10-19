@@ -11,6 +11,10 @@ import {
   TrustStoreSchema,
 } from "./manifest.js";
 
+/** Wall-clock upper bound, ×5 on CI or a loaded box (AXIOM_LOADED_BOX). */
+const perfBound = (ms: number): number =>
+  ms * (process.env.CI || process.env.AXIOM_LOADED_BOX ? 5 : 1);
+
 describe("compareUtf8", () => {
   it("orders by code point (UTF-8 byte order), not UTF-16 units", () => {
     expect(compareUtf8("a", "b")).toBe(-1);
@@ -129,7 +133,7 @@ describe("blobByteLength", () => {
       Math.floor((262_147 * 3) / 4),
     );
     expect(blobByteLength({ encoding: "base64", data: `YQ${"=".repeat(262_144)}` })).toBe(1);
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(perfBound(1_000));
   });
 });
 
@@ -160,7 +164,12 @@ describe("ManifestBundleSchema", () => {
     const r = ManifestBundleSchema.safeParse(b);
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues.some((i) => i.message.includes("exceeds"))).toBe(true);
+      const budget = r.error.issues.find((i) => i.path.join(".") === "blobs");
+      expect(budget?.code).toBe("custom");
+      expect((budget as { params?: Record<string, unknown> } | undefined)?.params).toMatchObject({
+        code: "ERR_BUNDLE_TOO_LARGE",
+        max: BUNDLE_BLOB_BYTES_MAX,
+      });
     }
   });
 

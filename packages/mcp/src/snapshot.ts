@@ -209,7 +209,7 @@ export async function snapshotRoot(
     counts: { files: files.length, bytes },
   };
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: "axiom.codai.ro/v3",
     kind: "RepoSnapshot",
     root: { kind: "relative" },
     snapshotDigest: canonicalDigestRef(body),

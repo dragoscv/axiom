@@ -268,7 +268,7 @@ describe("apply preconditions", () => {
   it("artifacts targeting .axiom/ are rejected", async () => {
     const root = await mkRoot();
     const r = await fsApply(makeBundle([{ path: ".axiom/lock", content: "x" }]), root);
-    expect(r.error?.code).toBe("ERR_CONTAINMENT");
+    expect(r.error?.code).toBe("ERR_PATH_RESERVED_DIR");
   });
 
   it("ERR_CHECKS_FAILED when preChecks verdict is not pass; nothing written", async () => {

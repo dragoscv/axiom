@@ -10,16 +10,26 @@
   reads or prints tokens. Idempotent: an existing identical relationship is reported, not
   duplicated (npm answers 409 → treated as OK).
 
+  Package list = every non-private packages/*/package.json, so it includes the five native
+  hook packages added in 3.0 (S-1318): @codai/axiom-hook-win32-x64, -linux-x64, -linux-arm64,
+  -darwin-x64, -darwin-arm64. A package must EXIST on npm before a trusted publisher can be
+  attached to it (release run 35322058007 404'd for exactly that), so each new name needs one
+  manual publish from a logged-in terminal first (a bin-less `0.0.0-bootstrap.0` under
+  `--tag bootstrap`, then deprecated, keeps `latest` free for the real 3.0.0).
+  -Only <substring> limits the run, e.g. `-Only axiom-hook-` for just the new packages.
+
 .EXAMPLE
   npm login
   pwsh -NoProfile -File scripts/npm-trust-all.ps1
   pwsh -NoProfile -File scripts/npm-trust-all.ps1 -ListOnly
+  pwsh -NoProfile -File scripts/npm-trust-all.ps1 -Only axiom-hook-
 #>
 param(
   [string]$Repo = 'dragoscv/axiom',
   # npm wants the bare file name under .github/workflows ("must be just a file not a path").
   [string]$Workflow = 'release.yml',
-  [switch]$ListOnly
+  [switch]$ListOnly,
+  [string]$Only = ''
 )
 $ErrorActionPreference = 'Stop'
 # `npm trust github ... --loglevel warn` mis-parses `warn` as a positional (EUSAGE); use the env var.
@@ -37,6 +47,7 @@ $pkgs = Get-ChildItem (Join-Path $root 'packages') -Directory | ForEach-Object {
   $p = Get-Content $pj -Raw | ConvertFrom-Json
   if ($p.private -eq $true) { return }
   if ($ignored -contains $p.name) { return }
+  if ($Only -and -not $p.name.Contains($Only)) { return }
   [pscustomobject]@{ name = $p.name; dir = $_.FullName; version = $p.version }
 }
 

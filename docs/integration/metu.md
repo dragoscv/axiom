@@ -1,12 +1,13 @@
-# metu ← AXIOM integration (S-306)
+# metu ← AXIOM integration
 
 *A profile built from `repo.requireCompanion` rules transcribed from metu's own skills, plus gate profile, MCP server and Copilot hook — with the proof runs.*
 
-**Status 2026-09-18:** wired and proven end-to-end in dry-run; files staged in
-`E:\gh\metu` (not committed — owner commits). Sibling of
+**Status:** wired and proven end-to-end in dry-run (2026-09-18). Sibling of
 [brivio.md](brivio.md); the difference is that metu has no guard runner, so the
 profile leans entirely on `repo.requireCompanion` rules transcribed from the
-repo's own skills.
+repo's own skills. The file list below is the 2.x layout; on 3.x the two policy files are still
+read (with a deprecation warning) and `axiom setup migrate --profile` folds them into one
+`.axiom/axiom.json` ([profiles.md](../reference/profiles.md)).
 
 ## What was added to metu
 
@@ -16,7 +17,7 @@ repo's own skills.
 | `.github/skills/{add-app-page,add-agent-tool,add-db-migration,add-inngest-function,add-integration,add-sdk-endpoint}/SKILL.md` | 5–7 line "Land it through AXIOM" footer appended to each, pointing at axiom-plan-apply and naming the `repo.requireCompanion` rule that enforces that skill's ripple. |
 | `.axiom/profiles/metu.json` | Profile `metu` extends `default`, `facts.allowRepo: true`, `allowGuards: false`. Checks: `repo.noOverwriteOf` (`.git/**`, `.axiom/**`, `.github/**`, `pnpm-lock.yaml`, `**/*.lock`, `**/drizzle/meta/**`, `.env*`, `**/.env*`), `content.noSecrets`, `path.deny` (`node_modules`, `.next`, `dist`, `.turbo`), `metu.ripple` = 8 `repo.requireCompanion` rules (below). |
 | `.axiom/gate-profile.json` | PreToolUse gate: deny `.git/**`, `.axiom/**`, `.github/**`, lockfiles, `.env*` at any depth, `node_modules`, `.next`, `dist`, `drizzle/**/meta/**`; `noSecrets`; `maxBytes` 262144. |
-| `.vscode/mcp.json` | Server `axiom`: stdio `node E:/gh/axiom/packages/mcp/dist/cli.js mcp --root ${workspaceFolder}` (→ `npx -y @codai/axiom-mcp` after the npm publish). `.vscode/` had no `mcp.json` before; `settings/launch/tasks/extensions` untouched. |
+| `.vscode/mcp.json` | Server `axiom`: stdio `npx -y @codai/axiom-mcp mcp --root ${workspaceFolder}`. `.vscode/` had no `mcp.json` before; `settings/launch/tasks/extensions` untouched. |
 | `.github/hooks/axiom-gate.json` | Copilot CLI PreToolUse hook → `axiom gate --stdin` via the global bin (5 s timeout; p50 157 ms). Same shape as brivio's; the gate resolves `<cwd>/.axiom/gate-profile.json` itself. |
 | `.gitignore` | `.axiom/*` runtime state ignored, `!.axiom/profiles/` + `!.axiom/gate-profile.json` tracked; `!.vscode/mcp.json` added (the file had `.vscode/*` ignoring everything not allow-listed). |
 
@@ -34,13 +35,13 @@ repo's own skills.
 | `apps/web/src/app/api/webhooks/**/route.ts` | `apps/web/src/proxy.ts` | add-integration §6 |
 
 The `(app)` route group was written as `\(app\)` because picomatch treats bare
-parentheses as an extglob group; since 2.2.0 (S-408) the matcher escapes plain
+parentheses as an extglob group; the matcher now escapes plain
 route groups itself, so `app/(app)/**` works as written and the manual escape
 remains valid. Existing repo files satisfy an `expect` (design: "at least one
 artifact **or** one existing repo file"), so rules whose companions are stable
 singletons (`client.ts`, `proxy.ts`, `_journal.json`) effectively only fire on a
 fresh clone; the per-feature test globs are what bite in practice. For
-schema → migration style rules set `mustChange: true` on the `expect` (2.2.0) so
+schema → migration style rules set `mustChange: true` on the `expect` so
 the companion has to be in the plan.
 
 ## End-to-end proof (VERIFIED 2026-09-18, metu tree untouched — dry-run only)
@@ -114,14 +115,8 @@ own colocated test.
 flagged it as `content.noSecrets.card` (a 16+-digit run looks like a PAN), so
 check → `fail` and apply → `status: "failed", error.code: "ERR_CHECKS_FAILED"`
 with nothing written. Changing the fixture to `'ws_fresh_test'` made it pass.
-**Fixed in 2.2.0 (S-408):** `card` now requires a Luhn-valid, non-repeated digit
+**Since fixed:** `card` now requires a Luhn-valid, non-repeated digit
 run outside any UUID, so the zero-UUID fixture passes as-is.
-
-## Next (owner)
-
-1. Review + commit the staged metu files (explicit paths; shared clone).
-2. After `@codai/axiom-mcp@2.0.0` is on npm, switch `.vscode/mcp.json` and
-  `.github/hooks/axiom-gate.json` to `npx -y @codai/axiom-mcp …`.
 
 ---
 

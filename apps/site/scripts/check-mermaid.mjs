@@ -10,6 +10,10 @@
  * build were green. Fix pattern: quote the label (`|"…"|`, `["…"]`) and write `--` as
  * `&#8209;&#8209;`.
  *
+ * Accessibility (WCAG 2.2 1.1.1): every diagram must declare `accTitle:` and `accDescr:` so the
+ * rendered SVG carries a title and description for screen readers. A diagram missing either
+ * fails, the same as a parse error. `docs/research/**` is not published and only has to parse.
+ *
  * Runs in `pnpm --filter @codai/axiom-site build` (before `astro build`). Exit 1 on any error.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -26,7 +30,11 @@ for (const k of ["window", "document", "navigator", "DOMParser", "Element", "HTM
 const here = dirname(fileURLToPath(import.meta.url));
 const siteDir = resolve(here, "..");
 const repoRoot = resolve(siteDir, "..", "..");
-const roots = [join(repoRoot, "docs"), join(siteDir, "src", "content", "docs", "index.mdx")];
+const roots = [
+  join(repoRoot, "docs"),
+  join(repoRoot, "README.md"),
+  join(siteDir, "src", "content", "docs", "index.mdx"),
+];
 
 function* walk(p) {
   const st = statSync(p);
@@ -45,10 +53,8 @@ const blocks = [];
 for (const root of roots) {
   for (const file of walk(root)) {
     const text = readFileSync(file, "utf8");
-    const re = /```mermaid[^\n]*\n([\s\S]*?)```/g;
-    let m;
     let idx = 0;
-    while ((m = re.exec(text)) !== null) {
+    for (const m of text.matchAll(/```mermaid[^\n]*\n([\s\S]*?)```/g)) {
       idx++;
       const line = text.slice(0, m.index).split("\n").length;
       blocks.push({ file: relative(repoRoot, file), line, idx, code: m[1] });
@@ -58,6 +64,17 @@ for (const root of roots) {
 
 let failed = 0;
 for (const b of blocks) {
+  const published = !/^docs[\\/]research[\\/]/.test(b.file);
+  const missing = published
+    ? ["accTitle", "accDescr"].filter((k) => !new RegExp(`^\\s*${k}\\s*:\\s*\\S`, "m").test(b.code))
+    : [];
+  if (missing.length > 0) {
+    failed++;
+    console.error(
+      `FAIL  ${b.file}:${b.line} (diagram #${b.idx}) - missing ${missing.join(" and ")}: add 'accTitle: <title>' and 'accDescr: <one sentence>' after the diagram type line`,
+    );
+    continue;
+  }
   try {
     await mermaid.parse(b.code, { suppressErrors: false });
   } catch (err) {
@@ -68,7 +85,11 @@ for (const b of blocks) {
 }
 await win.happyDOM?.close?.();
 if (failed > 0) {
-  console.error(`check-mermaid: ${failed}/${blocks.length} diagram(s) do not parse with mermaid ${mermaid.version ?? ""}`.trim());
+  console.error(
+    `check-mermaid: ${failed}/${blocks.length} diagram(s) lack accTitle/accDescr or do not parse with mermaid ${mermaid.version ?? ""}`.trim(),
+  );
   process.exit(1);
 }
-console.error(`OK    check-mermaid: ${blocks.length} diagram(s) parse with mermaid ${mermaid.version ?? ""}`.trim());
+console.error(
+  `OK    check-mermaid: ${blocks.length} diagram(s) parse with mermaid ${mermaid.version ?? ""} and declare accTitle + accDescr`.trim(),
+);

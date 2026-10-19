@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { AxiomConfigFileSchema } from "./config.js";
 import { ProfileSchema } from "./profile.js";
 
 const valid = {
-  apiVersion: "axiom.dev/v2",
+  apiVersion: "axiom.codai.ro/v3",
   kind: "Profile",
   name: "default",
   checks: [{ id: "no-secrets", predicate: "content.noSecrets", params: {} }],
@@ -43,5 +44,22 @@ describe("ProfileSchema", () => {
     const { checks: _c, ...noChecks } = valid;
     expect(ProfileSchema.safeParse(noChecks).success).toBe(false);
     expect(ProfileSchema.safeParse({ ...valid, guards: [] }).success).toBe(false);
+  });
+
+  it("D-41: v2 profiles keep parsing next to v3", () => {
+    expect(ProfileSchema.safeParse({ ...valid, apiVersion: "axiom.dev/v2" }).success).toBe(true);
+    expect(ProfileSchema.safeParse({ ...valid, apiVersion: "axiom.dev/v1" }).success).toBe(false);
+  });
+});
+
+describe("AxiomConfigFileSchema", () => {
+  it("D-42: keeps unknown keys (reported by the loader, never fatal)", () => {
+    const r = AxiomConfigFileSchema.parse({ version: 3, gate: {}, future: 1 });
+    expect(r).toEqual({ version: 3, gate: {}, future: 1 });
+  });
+  it("rejects mistyped known keys", () => {
+    expect(AxiomConfigFileSchema.safeParse({ extends: "x" }).success).toBe(false);
+    expect(AxiomConfigFileSchema.safeParse({ version: 0 }).success).toBe(false);
+    expect(AxiomConfigFileSchema.safeParse({ gate: [] }).success).toBe(false);
   });
 });

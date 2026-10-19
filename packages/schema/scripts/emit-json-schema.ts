@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   ApplyResultSchema,
+  AxiomConfigFileSchema,
   CheckReportSchema,
   JournalSchema,
   ManifestBodySchema,
@@ -31,6 +32,7 @@ const targets: ReadonlyArray<readonly [string, z.ZodType]> = [
   ["Profile", ProfileSchema],
   ["Journal", JournalSchema],
   ["RepoSnapshot", RepoSnapshotSchema],
+  ["AxiomConfig", AxiomConfigFileSchema],
 ];
 
 for (const [name, schema] of targets) {
@@ -40,7 +42,7 @@ for (const [name, schema] of targets) {
     unrepresentable: "any",
   });
   const doc = {
-    $id: `https://axiom.dev/schemas/v2/${name}.schema.json`,
+    $id: `https://dragoscv.github.io/axiom/schemas/v3/${name}.schema.json`,
     title: name,
     ...json,
   };

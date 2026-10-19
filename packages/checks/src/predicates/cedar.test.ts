@@ -244,7 +244,8 @@ describe("expr.cedar predicate through runChecks", () => {
     });
     expect(r.verdict).toBe("fail");
     expect(r.findings.map((f) => f.path)).toEqual([".env"]);
-    expect(r.findings[0]?.message).toMatch(/denied by cedar policy policy0/);
+    expect(r.findings[0]?.id).toBe("expr.cedar");
+    expect(r.findings[0]?.facts).toMatchObject({ mode: "forbid", reason: ["policy0"] });
   });
 
   it("permit mode denies everything not explicitly permitted", async () => {
@@ -258,7 +259,8 @@ describe("expr.cedar predicate through runChecks", () => {
     expect(r.verdict).toBe("fail");
     expect(r.findings.map((f) => f.path)).toEqual([".env", "old.js"]);
     expect(r.findings[0]?.facts.reason).toEqual([]);
-    expect(r.findings[0]?.message).toMatch(/default deny/);
+    expect(r.findings[0]?.facts.mode).toBe("permit");
+    expect(r.findings[0]?.facts.__provider).toBeUndefined();
   });
 
   it("re-labels denials with the check severity (warn → verdict pass)", async () => {
@@ -324,6 +326,7 @@ describe("expr.cedar predicate through runChecks", () => {
   });
 
   it("fails closed when the content provider throws", async () => {
+    const boom = new Error("blob store down");
     const ctx: FactContext = {
       manifest: bundle.manifest,
       bundle,
@@ -337,17 +340,18 @@ describe("expr.cedar predicate through runChecks", () => {
           signed: false,
         },
         content: async () => {
-          throw new Error("blob store down");
+          throw boom;
         },
         profile: { allowRepo: false, allowGuards: false },
       },
     };
+    // the provider's own error propagates unchanged (the runner turns it into verdict error)
     await expect(
       exprCedar.run(ctx, {
         policies: 'forbid(principal, action, resource) when { resource.text like "*" };',
         mode: "forbid",
       }),
-    ).rejects.toThrow(/blob store down/);
+    ).rejects.toBe(boom);
   });
 });
 
@@ -370,7 +374,8 @@ describe("expr.cedar without the optional dependency", () => {
     });
     expect(r.verdict).toBe("error");
     expect(r.findings[0]?.facts.code).toBe("ERR_PROVIDER_FAILED");
-    expect(r.findings[0]?.message).toMatch(/@cedar-policy\/cedar-wasm/);
+    expect(r.findings[0]?.facts.__provider).toBe(true);
+    expect(r.findings).toHaveLength(1);
   });
 
   it("resolves the real module again after the seam is reset", async () => {

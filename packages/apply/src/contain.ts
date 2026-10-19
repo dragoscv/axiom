@@ -51,6 +51,44 @@ export interface ResolvedTarget {
   parentReal: string;
 }
 
+/** AXIOM's own state directory; artifacts may never write into it, under any alias. */
+export const RESERVED_DIR = ".axiom";
+
+/** First path segment equals `.axiom` after NFC + lowercase (`.AXIOM/x`, `.Axiom/x`, …). */
+export function isReservedAxiomPath(relPath: string): boolean {
+  const first = relPath.split("/")[0] ?? "";
+  return first.normalize("NFC").toLowerCase() === RESERVED_DIR;
+}
+
+/**
+ * Refuse a target inside AXIOM's state directory: by name (case/normalisation-insensitive) and,
+ * when `axiomReal` (realpath of `<root>/.axiom`) is known, by the resolved parent — which catches
+ * aliases the name check cannot see (Windows 8.3 short names such as `AXIOM~1`).
+ */
+export function checkReservedDir(relPath: string, parentReal?: string, axiomReal?: string): void {
+  const byName = isReservedAxiomPath(relPath);
+  const byRealpath =
+    parentReal !== undefined && axiomReal !== undefined && isContained(axiomReal, parentReal);
+  if (byName || byRealpath) {
+    throw new AxiomError("ERR_PATH_RESERVED_DIR", "artifacts may not target .axiom/", {
+      path: relPath,
+      details: { via: byName ? "name" : "realpath" },
+    });
+  }
+}
+
+/** realpath.native of `<rootReal>/.axiom`, or undefined when it does not exist. */
+export async function reservedDirReal(rootReal: string): Promise<string | undefined> {
+  try {
+    let real = await realpathNative(nsPath(path.join(rootReal, RESERVED_DIR)));
+    if (IS_WIN32 && real.startsWith("\\\\?\\")) real = real.slice(4);
+    return real;
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
 /**
  * §4.1-4: walk each existing directory segment with `lstat`; symlink/junction →
  * ERR_SYMLINK_IN_PATH. The realpath of the deepest existing ancestor must be
@@ -118,8 +156,22 @@ export async function checkTargetType(abs: string, relPath: string, op: Artifact
   }
 }
 
-/** §4.1-3: probe once whether the FS under `root` is case-insensitive. */
-export async function probeCaseInsensitive(root: string): Promise<boolean> {
+/** Platform default used when probing would have to create `.axiom/` (dry-run on a fresh root). */
+export const DEFAULT_CASE_INSENSITIVE: boolean =
+  process.platform === "win32" || process.platform === "darwin";
+
+/**
+ * §4.1-3: probe once whether the FS under `root` is case-insensitive. With `create: false` and no
+ * `.axiom/` under the root, nothing is written and the platform default is returned (read-only
+ * dry-run must not create AXIOM state in a repo that has none).
+ */
+export async function probeCaseInsensitive(
+  root: string,
+  opts: { create?: boolean } = {},
+): Promise<boolean> {
+  if (opts.create === false && (await lstatOrNull(path.join(root, RESERVED_DIR))) === null) {
+    return DEFAULT_CASE_INSENSITIVE;
+  }
   const dir = path.join(root, ".axiom", "tmp");
   await fs.mkdir(dir, { recursive: true });
   const probe = path.join(dir, `CaseProbe-${process.pid}-${Date.now()}`);
@@ -138,15 +190,17 @@ export async function probeCaseInsensitive(root: string): Promise<boolean> {
 }
 
 /**
- * On a case-insensitive FS an artifact `Foo.ts` must not silently overwrite an
- * existing `foo.ts` (op=create) — compare against on-disk sibling names.
+ * On a case-insensitive FS an artifact `Foo.ts` must not silently write through an existing
+ * `foo.ts` (or an NFD-spelled sibling of an NFC name) — for every op, compare against on-disk
+ * sibling names. `details.kind` is `"case"` or `"normalization"`. With `caseInsensitive: false`
+ * only normalisation twins are refused (two visually identical names are never intended).
  */
 export async function checkOnDiskCaseCollision(
   abs: string,
   relPath: string,
-  op: ArtifactOp,
+  _op?: ArtifactOp,
+  caseInsensitive = true,
 ): Promise<void> {
-  if (op !== "create") return;
   const dir = path.dirname(abs);
   const base = path.basename(abs);
   let names: string[];
@@ -158,12 +212,14 @@ export async function checkOnDiskCaseCollision(
   const lower = base.normalize("NFC").toLowerCase();
   for (const n of names) {
     if (n !== base && n.normalize("NFC").toLowerCase() === lower) {
+      const kind = n.normalize("NFC") === base.normalize("NFC") ? "normalization" : "case";
+      if (kind === "case" && !caseInsensitive) continue;
       throw new AxiomError(
         "ERR_PATH_CASE_COLLISION",
         "artifact collides with existing on-disk name",
         {
           path: relPath,
-          details: { existing: n },
+          details: { existing: n, kind },
         },
       );
     }

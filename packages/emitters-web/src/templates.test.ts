@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GOLDEN_PARAMS } from "./fixtures.js";
-import { listTemplates, WEB_EMITTER_VERSION, webEmitter } from "./index.js";
+import {
+  emitters,
+  generatedBanner,
+  listTemplates,
+  WEB_EMITTER_VERSION,
+  webEmitter,
+} from "./index.js";
 
 const goldenDir = join(import.meta.dirname, "__golden__");
 const NAMES = Object.keys(webEmitter.templates).sort();
@@ -29,6 +35,16 @@ describe("web emitter", () => {
     ]);
     for (const [, description] of listTemplates()) expect(description.length).toBeGreaterThan(20);
     expect(Object.keys(GOLDEN_PARAMS).sort()).toEqual(NAMES);
+    expect(emitters).toEqual([webEmitter]);
+  });
+
+  it("every generated banner names the current WEB_EMITTER_VERSION (no hard-coded copy)", () => {
+    expect(generatedBanner("x")).toContain(`(web@${WEB_EMITTER_VERSION})`);
+    for (const name of NAMES) {
+      const out = render(name, GOLDEN_PARAMS[name]);
+      for (const m of out.matchAll(/\(web@([0-9.]+)\)/g))
+        expect(m[1], name).toBe(WEB_EMITTER_VERSION);
+    }
   });
 
   it.each(NAMES)("%s renders byte-identically to its golden file", async (name) => {

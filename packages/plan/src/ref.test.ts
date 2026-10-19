@@ -1,6 +1,6 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sha256Hex } from "@codai/axiom-canon";
 import { type AxiomError, isAxiomError } from "@codai/axiom-schema";
@@ -57,6 +57,37 @@ describe("resolveRef", () => {
     );
     expect(bytes).toEqual(BODY);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("poisoned CAS entry under the pinned digest → ERR_DIGEST_MISMATCH, never the bytes (resolveRef and compilePlan)", async () => {
+    const root = await tmp();
+    const p = casPath(root, DIGEST.slice("sha256:".length));
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, "EVIL");
+    const fetchImpl = okFetch();
+    const err = await expectAxiom(
+      resolveRef({ uri: URI, digest: DIGEST }, { root, allowNet: false, fetchImpl, path: "v.bin" }),
+      "ERR_DIGEST_MISMATCH",
+    );
+    expect(err.details?.expected).toBe(DIGEST);
+    expect(err.details?.actual).toBe(`sha256:${sha256Hex("EVIL")}`);
+    expect(err.path).toBe("v.bin");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expectAxiom(
+      compilePlan(
+        {
+          apiVersion: "axiom.dev/v2",
+          kind: "Plan",
+          name: "refpoison",
+          intent: "x",
+          artifacts: [
+            { path: "a.txt", op: "create", source: { type: "ref", uri: URI, digest: DIGEST } },
+          ],
+        },
+        { root },
+      ),
+      "ERR_DIGEST_MISMATCH",
+    );
   });
 
   it("net disabled → ERR_NET_DISABLED with host, uri redacted", async () => {

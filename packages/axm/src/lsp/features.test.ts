@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseAxm } from "@codai/axiom-axm";
 import { builtinRegistry } from "@codai/axiom-checks";
 import { describe, expect, it } from "vitest";
 import { CompletionItemKind, DiagnosticSeverity, SymbolKind } from "vscode-languageserver";
+import { parseAxm } from "../index.js";
 import {
   computeCompletions,
   computeDiagnostics,
@@ -18,7 +18,7 @@ import { LineIndex, scan } from "./scan.js";
 import { KEYWORDS, PREDICATE_IDS, PREDICATES } from "./vocabulary.js";
 
 const NOTES = readFileSync(
-  join(import.meta.dirname, "..", "..", "axm", "examples", "notes.axm"),
+  join(import.meta.dirname, "..", "..", "examples", "notes.axm"),
   "utf8",
 ).replace(/\r\n/g, "\n");
 

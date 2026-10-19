@@ -41,6 +41,8 @@ Globs everywhere are [picomatch](https://github.com/micromatch/picomatch) with
 
 ```mermaid
 flowchart TD
+  accTitle: How a check verdict is computed
+  accDescr: How runChecks gathers facts, runs each predicate and turns provider failures into error verdicts instead of passes.
   S["runChecks bundle · profile · root?"] --> P{"preImage present<br/>and root given?"}
   P -- drifted --> E[verdict: error<br/>manifest.preImage ERR_PREIMAGE_CHANGED]
   P -- verified / unverified --> L[for each CheckRef in merged order]
@@ -613,7 +615,7 @@ A worked profile that combines three expressions:
 
 ```json
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "Profile",
   "name": "web-cel",
   "extends": "default",
@@ -777,9 +779,12 @@ Adds, on top of everything in `default`:
 
 ## Custom profiles and `extends`
 
-A profile is a JSON file `<root>/.axiom/profiles/<name>.json` matching the
-`Profile` schema ([plan-format.md](../reference/plan-format.md#profile)); its `name` must
-equal the file stem. Resolution (`loadProfile`):
+A profile matches the `Profile` schema ([plan-format.md](../reference/plan-format.md#profile)).
+Since 3.0 repository profiles live in the `checks` section of `.axiom/axiom.json`, and `extends`
+also takes relative files, the built-in packs and npm `@codai/axiom-pack-*` packages; the 2.x
+layout — one file `<root>/.axiom/profiles/<name>.json` per profile, `name` equal to the file stem —
+is still read with a deprecation warning (`axiom setup migrate --profile` converts it). File
+shapes and discovery: [profiles.md](../reference/profiles.md). Resolution (`loadProfile`):
 
 1. Search directories are tried in order, then the built-ins.
 2. `extends` chains are resolved parent-first; a cycle or a missing parent is
@@ -792,7 +797,7 @@ equal the file stem. Resolution (`loadProfile`):
 
 ```json
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "Profile",
   "name": "web",
   "extends": "strict",

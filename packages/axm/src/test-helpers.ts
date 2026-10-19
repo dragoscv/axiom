@@ -1,4 +1,4 @@
-import type { Plan } from "@codai/axiom-schema";
+import { API_VERSION, type Plan } from "@codai/axiom-schema";
 import * as fc from "fast-check";
 
 const HEX = "0123456789abcdef";
@@ -95,4 +95,4 @@ export const planArb: fc.Arbitrary<Plan> = fc
     checks: fc.uniqueArray(check, { maxLength: 3, selector: (c) => c.id }),
     metadata: jsonObject,
   })
-  .map((p) => ({ apiVersion: "axiom.dev/v2" as const, kind: "Plan" as const, ...p }) as Plan);
+  .map((p) => ({ apiVersion: API_VERSION, kind: "Plan" as const, ...p }) as Plan);

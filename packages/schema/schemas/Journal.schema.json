@@ -1,5 +1,5 @@
 {
-  "$id": "https://axiom.dev/schemas/v2/Journal.schema.json",
+  "$id": "https://dragoscv.github.io/axiom/schemas/v3/Journal.schema.json",
   "title": "Journal",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
@@ -39,7 +39,28 @@
             ]
           },
           "backup": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Relative POSIX path, NFC, no reserved names"
+          },
+          "preImage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "Lowercase hex-encoded sha256"
+              },
+              {
+                "type": "string",
+                "const": "absent"
+              }
+            ]
+          },
+          "postImage": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Lowercase hex-encoded sha256"
           },
           "done": {
             "type": "boolean"

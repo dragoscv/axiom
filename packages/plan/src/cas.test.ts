@@ -1,9 +1,10 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
+import { isAxiomError } from "@codai/axiom-schema";
 import { afterEach, describe, expect, it } from "vitest";
-import { casGet, casHas, casPath, casPut } from "./cas.js";
+import { casGet, casGetUnverified, casHas, casPath, casPut } from "./cas.js";
 
 let root: string;
 afterEach(async () => {
@@ -41,5 +42,21 @@ describe("cas", () => {
     const bytes = new TextEncoder().encode("race");
     const hexes = await Promise.all(Array.from({ length: 8 }, () => casPut(root, bytes)));
     expect(new Set(hexes).size).toBe(1);
+  });
+
+  it("casGet re-hashes: a poisoned entry is ERR_DIGEST_MISMATCH; casGetUnverified returns raw bytes", async () => {
+    root = await mkdtemp(join(tmpdir(), "axiom-cas-"));
+    const hex = sha256Hex("GOOD");
+    const p = casPath(root, hex);
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, "EVIL");
+    let code: string | undefined;
+    try {
+      await casGet(root, hex);
+    } catch (err) {
+      code = isAxiomError(err) ? err.code : "not-axiom";
+    }
+    expect(code).toBe("ERR_DIGEST_MISMATCH");
+    expect(new TextDecoder().decode(await casGetUnverified(root, hex))).toBe("EVIL");
   });
 });

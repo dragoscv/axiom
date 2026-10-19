@@ -78,6 +78,40 @@ export interface LoadProfileOptions {
   searchDirs?: readonly string[];
   /** Defaults to the three built-in profiles. */
   builtins?: Readonly<Record<string, Profile>>;
+  /**
+   * The merged `checks` section of `.axiom/axiom.json` (3.0, D-42), as returned by the MCP
+   * package's `loadAxiomConfig` — injected rather than read here so `checks` stays free of the
+   * file/pack resolution (and of any `@codai/*` dependency beyond schema + canon). It is the
+   * repo profile: `Profile` fields, `apiVersion`/`kind` optional, `name` defaulting to
+   * {@link AXIOM_CONFIG_PROFILE_NAME}. It answers a request for its own `name` AND for
+   * `default` (the repo policy is the repo's default); its `extends` chain resolves through
+   * `searchDirs` and the builtins as usual. `undefined` = no axiom.json (legacy behaviour).
+   */
+  config?: unknown;
+}
+
+/** `name` of the axiom.json `checks` profile when the section does not declare one. */
+export const AXIOM_CONFIG_PROFILE_NAME = "axiom";
+
+function parseConfigProfile(raw: unknown): Profile {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new AxiomError("ERR_INVALID_PROFILE", "axiom.json `checks` must be an object");
+  }
+  const section = raw as Record<string, unknown>;
+  // A section that says nothing about checks (`{}` — e.g. a gate-only axiom.json) must not
+  // resolve to an EMPTY profile, which would be weaker than having no file at all.
+  const implicit = !("checks" in section) && !("extends" in section) ? { extends: "default" } : {};
+  return parseProfile(
+    {
+      apiVersion: API_VERSION,
+      kind: "Profile",
+      name: AXIOM_CONFIG_PROFILE_NAME,
+      checks: [],
+      ...implicit,
+      ...section,
+    },
+    ".axiom/axiom.json#checks",
+  );
 }
 
 async function readOne(name: string, opts: LoadProfileOptions): Promise<Profile> {
@@ -134,6 +168,15 @@ export async function loadProfile(name: string, opts: LoadProfileOptions = {}): 
   const chain: Profile[] = [];
   const seen = new Set<string>();
   let cur: string | undefined = name;
+  if (opts.config !== undefined) {
+    const leaf = parseConfigProfile(opts.config);
+    if (name === leaf.name || name === "default") {
+      // The leaf is the config itself; its parents resolve normally (a parent may share the
+      // leaf's name — `default` extending the builtin `default` — like a file shadowing a builtin).
+      chain.unshift(leaf);
+      cur = leaf.extends;
+    }
+  }
   while (cur !== undefined) {
     if (seen.has(cur)) {
       throw new AxiomError("ERR_INVALID_PROFILE", `profile extends cycle at "${cur}"`, {

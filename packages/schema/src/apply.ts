@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DigestRefSchema, DigestSchema } from "./digest.js";
+import { DigestRefSchema, DigestSchema, Sha256HexSchema } from "./digest.js";
 import { ERROR_CODES } from "./errors.js";
 import { RelPathSchema } from "./path.js";
 import { ApiVersionSchema, ArtifactOpSchema } from "./plan.js";
@@ -80,11 +80,27 @@ export const JournalPhaseSchema = z.enum([
   "rolled-back",
 ]);
 
+/** Every journal backup lives under this prefix (the engine adds `<digest hex>/<path>`). */
+export const JOURNAL_BACKUP_PREFIX = ".axiom/backup/";
+
+/**
+ * A step's `backup` is a relative POSIX path under `.axiom/backup/` — never absolute, never `..`.
+ * The engine additionally pins it to `.axiom/backup/<this journal's hex>/<step.path>` at rollback.
+ */
+export const JournalBackupPathSchema = RelPathSchema.refine(
+  (p) => p.startsWith(JOURNAL_BACKUP_PREFIX) && p.length > JOURNAL_BACKUP_PREFIX.length,
+  { message: "ERR_JOURNAL_CORRUPT" },
+);
+
 export const JournalStepSchema = z
   .object({
     path: RelPathSchema,
     op: ArtifactOpSchema,
-    backup: z.string().optional(),
+    backup: JournalBackupPathSchema.optional(),
+    /** sha256 of the target before commit, or `absent` (recorded before phase 2). */
+    preImage: z.union([Sha256HexSchema, z.literal("absent")]).optional(),
+    /** sha256 the commit writes (create/overwrite); rollback's drift check compares against it. */
+    postImage: Sha256HexSchema.optional(),
     done: z.boolean(),
   })
   .strict();

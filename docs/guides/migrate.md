@@ -1,15 +1,20 @@
-# `axiom migrate v1` — v1 manifest → v2 Plan
+# `axiom setup migrate v1` — v1 manifest → Plan
 
-*Lift an AXIOM 1.0.x manifest into a v2 Plan: every path and byte preserved, everything v2 cannot express listed in `metadata.migration.dropped`.*
+*Lift an AXIOM 1.0.x manifest into a current Plan: every path and byte preserved, everything the Plan cannot express listed in `metadata.migration.dropped`.*
 
-`axiom migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--name <kebab>] [--overwrite]`
+`axiom setup migrate v1 <manifest.json> [-o plan.json] [--profile default] [--cas <root>] [--content <dir>] [--name <kebab>] [--overwrite]`
 
-Lifts an AXIOM 1.0.x `manifest.json` into a v2 `Plan` (S-305). The output validates against
-`PlanSchema`, compiles with `axiom compile` when the file bytes are available, and preserves
+Lifts an AXIOM 1.0.x `manifest.json` into a `Plan` (written with `apiVersion: axiom.codai.ro/v3`
+by 3.x; old verb `axiom migrate v1`). The output validates against
+`PlanSchema`, compiles with `axiom plan compile` when the file bytes are available, and preserves
 every file path and every byte: the sha256 of each v1 artifact equals the v2 artifact digest after
 compile. Everything v2 cannot represent is listed in `metadata.migration.dropped` with a reason —
 nothing is dropped silently, and nothing that is hashed carries a clock value (PLAN.md §2,
 invariant 1).
+
+Converting 2.x policy files (`.axiom/gate-profile.json`, `.axiom/profiles/*.json`) into the 3.0
+`.axiom/axiom.json` is a different subcommand, `axiom setup migrate --profile`, documented in
+[profiles.md](../reference/profiles.md).
 
 The same logic is exported as a pure function for programmatic use:
 
@@ -101,11 +106,11 @@ Stdout is JSON: with `-o`, the report plus `out`; without it, `{ plan, report }`
 ## Example
 
 ```text
-$ axiom migrate v1 out-budget.manifest.json -o plan.json
+$ axiom setup migrate v1 out-budget.manifest.json -o plan.json
 { "ok": true, "artifacts": { "total": 4, "inline": 3, "cas": 0, "unresolved": 0, "skipped": 1 },
   "checks": 2, "dropped": [ … ], "warnings": [], "out": "plan.json" }
-$ axiom compile plan.json -o bundle.json
-$ axiom apply bundle.json --root . --dry-run
+$ axiom plan compile plan.json -o bundle.json
+$ axiom plan apply bundle.json --root . --dry-run
 ```
 
 Fixtures used by the round-trip test live in `packages/mcp/fixtures/v1/` (an inline-content

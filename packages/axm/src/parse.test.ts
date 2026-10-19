@@ -39,6 +39,12 @@ describe("golden fixture", () => {
     expect(r.plan).toStrictEqual(golden);
   });
 
+  it("D-41: .axm compiles to the canonical v3 apiVersion; a v2 plan re-formats to v3", () => {
+    expect(parseAxm(fixture).plan?.apiVersion).toBe("axiom.codai.ro/v3");
+    const v2 = { ...golden, apiVersion: "axiom.dev/v2" } as Plan;
+    expect(parseAxm(formatAxm(v2)).plan).toStrictEqual(golden);
+  });
+
   it("compile-through: parseAxm → compilePlan yields a stable manifestDigest", async () => {
     const plan = parseAxm(fixture).plan;
     expect(plan).toBeDefined();
@@ -64,7 +70,7 @@ describe("EBNF productions", () => {
   it("header: wrong version string → error pointing at the string", () => {
     const d = firstError('axiom "1"\nplan p { intent "x" }');
     expect(d.range.start).toEqual({ line: 1, column: 7 });
-    expect(d.message).toMatch(/version/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
   });
 
   it("planDecl: name may be a keyword-looking Ident; two plans → error on the second", () => {
@@ -75,8 +81,13 @@ describe("EBNF productions", () => {
   });
 
   it("intent: required, at most once", () => {
-    expect(firstError(wrap(ART)).message).toMatch(/intent/);
-    expect(firstError(minimal('intent "again"')).message).toMatch(/duplicate intent/);
+    const missing = firstError(wrap(ART));
+    expect(missing.code).toBe("ERR_INVALID_PLAN");
+    expect(missing.range.start).toEqual({ line: 2, column: 6 });
+    const dup = firstError(minimal('intent "again"'));
+    expect(dup.code).toBe("ERR_INVALID_PLAN");
+    expect(dup.range.start).toEqual({ line: 8, column: 1 });
+    expect(errors(minimal())).toEqual([]);
   });
 
   it("profile: defaults to `default`, accepts any Ident", () => {
@@ -90,9 +101,12 @@ describe("EBNF productions", () => {
       parseAxm(minimal("capabilities [fs, net, secret, ai, compute, git]")).plan?.capabilities,
     ).toEqual(["fs", "net", "secret", "ai", "compute", "git"]);
     const d = firstError(minimal("capabilities [fs, sudo]"));
-    expect(d.message).toMatch(/unknown capability "sudo"/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
     expect(d.range.start).toEqual({ line: 8, column: 19 });
-    expect(firstError(minimal("capabilities [fs, fs]")).message).toMatch(/duplicate capability/);
+    const dup = firstError(minimal("capabilities [fs, fs]"));
+    expect(dup.code).toBe("ERR_INVALID_PLAN");
+    expect(dup.range.start).toEqual({ line: 8, column: 19 });
+    expect(errors(minimal("capabilities [fs, net]"))).toEqual([]);
     expect(errors(minimal("capabilities [fs,]")).length).toBeGreaterThan(0);
   });
 
@@ -124,7 +138,6 @@ describe("EBNF productions", () => {
   it("artifact: duplicate path → ERR_INVALID_PLAN at the second path literal", () => {
     const d = firstError(wrap(`intent "x"\n${ART}\n${ART}`));
     expect(d.code).toBe("ERR_INVALID_PLAN");
-    expect(d.message).toMatch(/duplicate artifact path "a.txt"/);
     expect(d.range.start).toEqual({ line: 8, column: 10 });
   });
 
@@ -133,18 +146,18 @@ describe("EBNF productions", () => {
       "ERR_INVALID_PLAN",
     );
     const d = firstError(wrap('intent "x"\nartifact "a" { mode 0644 }'));
-    expect(d.message).toMatch(/source is required/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
     expect(d.range.start).toEqual({ line: 4, column: 14 });
-    expect(
-      firstError(
-        wrap('intent "x"\nartifact "a" { inline <<E\nE\n cas "sha256:' + "b".repeat(64) + '" }'),
-      ).message,
-    ).toMatch(/exactly one source/);
+    const two = firstError(
+      wrap(`intent "x"\nartifact "a" { inline <<E\nE\n cas "sha256:${"b".repeat(64)}" }`),
+    );
+    expect(two.code).toBe("ERR_INVALID_PLAN");
+    expect(two.range.start).toEqual({ line: 6, column: 2 });
   });
 
   it("artifact: invalid mode literal, invalid op, bad path → errors with positions", () => {
     const m = firstError(wrap('intent "x"\nartifact "a" { mode 0600 inline <<E\nE\n }'));
-    expect(m.message).toMatch(/mode must be 0644 or 0755/);
+    expect(m.code).toBe("ERR_INVALID_PLAN");
     expect(m.range.start).toEqual({ line: 4, column: 21 });
     expect(
       errors(wrap('intent "x"\nartifact "a" { op rename inline <<E\nE\n }')).length,
@@ -223,7 +236,7 @@ describe("EBNF productions", () => {
     const word = firstError(
       wrap('intent "x"\nartifact "a" { patch unified missing <<P\n-x\n+y\nP\n }'),
     );
-    expect(word.message).toMatch(/absent/);
+    expect(word.code).toBe("ERR_INVALID_PLAN");
     expect(word.range.start).toEqual({ line: 4, column: 30 });
   });
 
@@ -246,15 +259,19 @@ describe("EBNF productions", () => {
   it("check: params that are not JSON → error at the block", () => {
     const d = firstError(minimal("check a using content.noSecrets {oops}"));
     expect(d.range.start).toEqual({ line: 8, column: 33 });
-    expect(d.message).toMatch(/check params/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
   });
 
   it("meta: object required; array → error; duplicate → error", () => {
     expect(parseAxm(minimal('meta {"k":[1,{"n":null}]}')).plan?.metadata).toEqual({
       k: [1, { n: null }],
     });
-    expect(firstError(minimal("meta [1]")).message).toMatch(/object/);
-    expect(firstError(minimal("meta {}\nmeta {}")).message).toMatch(/duplicate meta/);
+    const arr = firstError(minimal("meta [1]"));
+    expect(arr.code).toBe("ERR_INVALID_PLAN");
+    expect(arr.range.start).toEqual({ line: 8, column: 6 });
+    const dup = firstError(minimal("meta {}\nmeta {}"));
+    expect(dup.code).toBe("ERR_INVALID_PLAN");
+    expect(dup.range.start).toEqual({ line: 9, column: 1 });
   });
 
   it("comments are skipped everywhere", () => {
@@ -264,15 +281,15 @@ describe("EBNF productions", () => {
     expect(p?.intent).toBe("x");
   });
 
-  it("parse error carries Chevrotain's expected-token message and an exact position", () => {
+  it("parse error carries ERR_INVALID_PLAN and an exact position", () => {
     const d = firstError('axiom "2"\nplan p {\n  intent 42\n}');
-    expect(d.message).toMatch(/Expecting token of type/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
     expect(d.range.start).toEqual({ line: 3, column: 10 });
   });
 
   it("unexpected end of input → position after the last token", () => {
     const d = firstError('axiom "2"\nplan p {\n  intent "x"');
-    expect(d.message).toMatch(/end of input/);
+    expect(d.code).toBe("ERR_INVALID_PLAN");
     expect(d.range.start).toEqual({ line: 3, column: 13 });
   });
 

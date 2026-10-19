@@ -18,6 +18,10 @@ import { exists, makeBundle, mkRoot, readText } from "./test-helpers.js";
 
 const DEAD_PID = 999_999;
 
+/** Wall-clock upper bound, ×5 on CI or a loaded box (AXIOM_LOADED_BOX). Lower bounds stay exact. */
+const perfBound = (ms: number): number =>
+  ms * (process.env.CI || process.env.AXIOM_LOADED_BOX ? 5 : 1);
+
 function fsApply(
   bundle: ManifestBundle,
   root: string,
@@ -250,8 +254,8 @@ describe("S-703 fair lock queue", () => {
       }),
     );
     const t0 = Date.now();
-    const lock = await acquireLock(root, "sha256:me", 2000);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    const lock = await acquireLock(root, "sha256:me", perfBound(2000));
+    expect(Date.now() - t0).toBeLessThan(perfBound(2000));
     await lock.release();
     expect(await exists(root, `.axiom/queue/${name}`)).toBe(false);
   });

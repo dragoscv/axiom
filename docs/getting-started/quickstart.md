@@ -15,6 +15,8 @@ Every verb below except hooks also works with `npx -y @codai/axiom-mcp <verb>` i
 
 ```mermaid
 flowchart LR
+  accTitle: Quickstart path
+  accDescr: Install the bin, run setup init, watch a deny, explain it, then undo a session.
   P[plan.json] -->|axiom compile| B[bundle.json<br/>manifestDigest]
   B -->|axiom check| R[CheckReport<br/>pass]
   B -->|"axiom apply &#8209;&#8209;dry-run"| D[unified diff]
@@ -24,18 +26,23 @@ flowchart LR
 
 ## 1. Wire the repo — `axiom init` + `axiom doctor`
 
-`axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode] [--profile-name <name>] [--force] [--json]`
+`axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline|kiro|opencode] [--profile-name <name>] [--force] [--dry-run] [--json]`
 writes everything a harness needs in one idempotent step. `--root` defaults to the current
 directory. With `--harness auto` (the default) it picks one harness per marker directory present
-— `.github` → copilot, `.claude` → claude, `.codex` → codex, `.vscode` → vscode — and falls back
-to copilot + vscode when none exists.
+— `.github` → copilot, `.claude` → claude, `.codex` → codex, `.vscode` → vscode, `.cursor` →
+cursor, `.windsurf`/`.devin` → windsurf, `.gemini` → gemini, `.junie` → junie, `.clinerules` →
+cline, `.kiro` → kiro, `.opencode` → opencode — and falls back to copilot + vscode when none
+exists. `--dry-run` prints the unified diff of every file it would write and writes nothing. ACP
+clients (Zed, …) need no file: run the agent behind `axiom acp-proxy`
+([harnesses.md § ACP](../integration/harnesses.md#acp-agent-client-protocol)).
 
 | File | Written for | How |
 |---|---|---|
 | `.vscode/mcp.json` | every harness | merged: adds `servers.axiom` (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}`), keeps every other server |
-| `.github/hooks/axiom-gate.json` | copilot, vscode | whole file: `preToolUse` → `command`/`bash` `axiom gate --stdin --format auto`, `powershell` `axiom.cmd … ; exit $LASTEXITCODE`, `timeoutSec: 15` ([hooks.md](hooks.md#wiring)) |
-| `.claude/settings.json` | claude | merged: appends one `hooks.PreToolUse` entry (`matcher: "Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|PowerShell"`, `axiom gate --stdin --format claude`, `timeout: 15`, `onFailure: "block"`), keeps the rest |
-| — | codex | nothing: Codex has no PreToolUse hook API; `init` prints a note pointing at [harnesses.md § Codex](../integration/harnesses.md#codex) |
+| `.github/hooks/axiom-gate.json` | copilot, vscode | whole file: `preToolUse` → `command` `axiom gate --stdin --format auto`, `bash`/`powershell` the same call with an exit mapping (0/2 pass through, a crash or missing node → 2), `timeoutSec: 15` ([hooks.md](hooks.md#wiring)) |
+| `.claude/settings.json` | claude | merged: appends one `hooks.PreToolUse` entry (`matcher: "Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|PowerShell"`, `axiom gate --stdin --format claude`, `timeout: 15`, `onFailure: "block"`) and the `PostToolUse` check, keeps the rest |
+| `.codex/hooks.json` + `.codex/config.toml` | codex | merged `PreToolUse` + `PostToolUse` (`--format codex`); `[mcp_servers.axiom]` appended when absent ([harnesses.md § Codex](../integration/harnesses.md#codex)) |
+| `.cursor/hooks.json`, `.devin/` or `.windsurf/hooks.json`, `.gemini/settings.json`, `.junie/mcp/mcp.json`, `.clinerules/hooks/PreToolUse(.ps1)`, `.kiro/hooks/axiom-gate.json`, `.opencode/plugins/axiom-gate.js` | cursor, windsurf, gemini, junie, cline, kiro, opencode | one file per harness — the exact shapes are in [harnesses.md](../integration/harnesses.md) |
 | `.axiom/profiles/<name>.json` | always | whole file: a repo profile `extends: "default"` with `repo.noOverwriteOf` (`.git/**`, `.axiom/**`, `.github/**`, lockfiles, `.env*`), `content.noSecrets`, `path.deny` (`node_modules`, `.next`, `dist`, `.turbo`) |
 | `.axiom/gate-profile.json` | always | whole file: the gate's deny list, `noSecrets: true`, `pii: false`, `maxBytes: 262144` ([hooks.md § Profile file](hooks.md#profile-file)) |
 | `.gitignore` | always | appends the missing lines of `.axiom/*`, `!.axiom/profiles/`, `!.axiom/gate-profile.json` (keeps the file's line endings) |

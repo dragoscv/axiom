@@ -1,9 +1,12 @@
-# brivio ← AXIOM integration (S-306)
+# brivio ← AXIOM integration
 
 *Profile with `guard.external` running brivio's own guard suite, a full-suite task profile, the gate profile and the Copilot hook — with the end-to-end proof runs.*
 
-**Status 2026-09-18:** wired and proven end-to-end in dry-run; files staged in
-`E:\gh\brivio` (not committed — owner commits). ADR: `brivio/docs/adr/0200-axiom-write-gate.md`.
+**Status:** wired and proven end-to-end in dry-run (2026-09-18). ADR:
+`brivio/docs/adr/0200-axiom-write-gate.md`. The file list below is the 2.x layout brivio was
+wired with; on 3.x the two policy files are still read (with a deprecation warning) and
+`axiom setup migrate --profile` folds them into one `.axiom/axiom.json`
+([profiles.md](../reference/profiles.md)).
 
 ## What was added to brivio
 
@@ -12,14 +15,15 @@
 | `scripts/axiom-guard-adapter.mjs` | `guard.external` adapter: reads the bundle from stdin, runs `scripts/run-guards.mjs --quiet <names>` (spawn, args array, no shell), maps `FAILED <guard>` headers / `FAIL` lines to AXIOM findings `brivio.<guard>`, prints `{ok, findings}`; always exit 0, 55 s internal cap. |
 | `.axiom/profiles/brivio.json` | Profile `brivio` extends `default`: `repo.noOverwriteOf` (`.github/**`, lockfiles, `drizzle/**/meta/**`), `repo.requireCompanion` transcribed from `.copilot-ripple.json` (gateway route → mcp tools + CLI + TS/PHP SDK + OpenAPI; openapi.ts → JSON; actions → test; db schema → migration), `content.noSecrets`, `guard.external` running the 7 change-set-relevant guards (see below). |
 | `.axiom/gate-profile.json` | PreToolUse gate: deny `.git/**`, `.axiom/**`, lockfiles, `.env*`, `node_modules`, `drizzle/**/meta/**`; `noSecrets`. |
-| `.github/hooks/axiom-gate.json` | Copilot CLI hook registration → `axiom gate --stdin` via the global bin (`npm install -g @codai/axiom-mcp`; p50 157 ms). Not `npx`: p50 7.8 s warm, over the 5 s fail-open timeout. |
+| `.github/hooks/axiom-gate.json` | Copilot CLI hook registration → `axiom gate --stdin` (the 3.0 noun form is `axiom hook gate`, byte-identical) via the global bin (`npm install -g @codai/axiom-mcp`; p50 157 ms). Not `npx`: p50 7.8 s warm, over the 5 s fail-open timeout. |
 | `.gitignore` | `.axiom/*` runtime state ignored; `profiles/` and `gate-profile.json` tracked. |
 
 ## Why only 7 guards in `guard.external`
 
-**Until 2.1.x** `guard.external` capped `timeoutMs` at 60 000 and brivio's full suite (~75 guards)
-takes well over that on this machine; `check-untracked-imports` alone is 64 s. The `brivio` profile
-therefore runs the 7 change-set-relevant guards synchronously. Measured per guard (host under load):
+brivio's full suite (~75 guards) takes far longer than a synchronous check should;
+`check-untracked-imports` alone is 64 s. The `brivio` profile therefore runs the 7
+change-set-relevant guards synchronously and leaves the full suite to a task (below). Measured per
+guard (host under load):
 
 | guard | wall |
 |---|---|
@@ -36,12 +40,13 @@ The full suite still runs in brivio's own pre-commit / CI; AXIOM runs the subset
 that speaks to a *change-set* (tenant scoping, audit, i18n, egress, SDK ripple,
 route boundaries, test quality).
 
-### Full suite as a task (2.2.0, S-406 / D-24)
+### Full suite as a task
 
 `.axiom/profiles/brivio-full.json` extends `brivio` and overrides `brivio.guards` with **all**
-guards (`args: []`), `timeoutMs: 900000` (the new 15 min cap) and
-`env.AXIOM_GUARD_ADAPTER_TIMEOUT_MS=880000` (the adapter's internal cap, previously hard-wired to 55 s).
-Run it as a task so the client's per-call timeout is irrelevant:
+guards (`args: []`), `timeoutMs: 900000` (the 15 min cap) and
+`env.AXIOM_GUARD_ADAPTER_TIMEOUT_MS=880000` (the adapter's internal cap). Run it as a task so the
+client's per-call timeout is irrelevant (the task tools are in the `full` toolset — start the
+server with `--tools full`):
 
 ```
 axiom_check_start { bundle, root: "E:/gh/brivio", profile: "brivio-full" }   → { taskId, status: "working", pollIntervalMs: 2000 }
@@ -90,13 +95,10 @@ assertions in brivio (or drop `vacuous-assertions` from the profile's `args`
 until they are fixed) and step 2/3 go green; the guard runner and the other
 six guards all returned `ok`.
 
-## Next (owner)
+## MCP server
 
-1. Review + commit the staged brivio files (explicit paths; shared clone).
-2. Fix the 4 vacuous assertions, re-run step 2.
-3. After `@codai/axiom-mcp@2.0.0` is on npm, switch `.github/hooks/axiom-gate.json`
-   to the global `axiom` bin (done 2026-09-19) and add `.vscode/mcp.json` server `axiom`
-   (`npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` — fine for a long-lived server).
+`.vscode/mcp.json` server `axiom`: `npx -y @codai/axiom-mcp mcp --root ${workspaceFolder}` —
+`npx` is fine for a long-lived server; add `--tools full` for the task tools above.
 
 ---
 

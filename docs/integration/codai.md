@@ -2,7 +2,7 @@
 
 *How codai's SWE harness routes every write through the gate by default, the Copilot wiring, and the agent-core tool registration with risk classes.*
 
-codai (`E:\gh\codai`) is the first consumer of AXIOM v2. Three touch points, in order of maturity:
+codai (`E:\gh\codai`) is the first consumer of AXIOM. Three touch points, in order of maturity:
 
 | surface | status | where (in codai) |
 |---|---|---|
@@ -25,14 +25,15 @@ buildPlanFromEdits(root, edits, {taskId, intent})   // pure: Plan with final con
    → {manifestDigest, status, files}
 ```
 
-Plan shape produced (`PlanSchema`, `apiVersion: axiom.dev/v2`): POSIX paths, `op: create` for files
+Plan shape produced (`PlanSchema`; codai's builder writes `apiVersion: axiom.dev/v2`, which 3.x
+still accepts on read — new objects carry `axiom.codai.ro/v3`): POSIX paths, `op: create` for files
 absent on disk / `overwrite` for existing, `source: {type: inline, encoding: utf8}` holding the
 **final** text, `name: swe-<taskId>` kebab-cased to `PlanNameSchema`, `profile: default`.
 
 Contract points that matter to AXIOM:
 
 - The three packages are loaded with dynamic `import()`; a resolution failure surfaces as
-   `AxiomUnavailableError` ("install @codai/axiom-{plan,checks,apply}@^2.0.0"). Nothing in codai
+   `AxiomUnavailableError` ("install @codai/axiom-{plan,checks,apply}"). Nothing in codai
    imports them statically, so codai typechecks without them installed.
 - codai types the results with local minimal interfaces (`bundle.manifestDigest`, `report.verdict`,
    `result.{manifestDigest,status,files,error}`). Renaming any of those fields in
@@ -54,18 +55,18 @@ before `apply` is called.
 `.vscode/mcp.json` in codai:
 
 ```json
-{ "servers": { "axiom": { "type": "stdio", "command": "node",
-   "args": ["E:/gh/axiom/packages/mcp/dist/cli.js", "mcp", "--root", "${workspaceFolder}"] } } }
+{ "servers": { "axiom": { "type": "stdio", "command": "npx",
+   "args": ["-y", "@codai/axiom-mcp", "mcp", "--root", "${workspaceFolder}"] } } }
 ```
 
-Local `dist` until 2.0.0 is on npm, then `npx @codai/axiom-mcp mcp --root <ws>`. Roots are an
+Add `"--tools", "full"` to serve all 19 tools instead of the 6 `core` ones. Roots are an
 explicit allowlist — there is no `cwd` fallback.
 
 ## 3. Registering AXIOM's tools in codai agent-core (S-113)
 
 codai's agent-core keeps its tool catalogue in `packages/agent-core/spec/` and gates every call
 through `APPROVAL_MATRIX[autonomy][risk]` with `RiskClass = READ | ACT | SENSITIVE`
-(`packages/agent-core/src/index.ts`). AXIOM ships the same information for its 17 MCP tools as
+(`packages/agent-core/src/index.ts`). AXIOM ships the same information for all 19 of its MCP tools as
 **`packages/mcp/spec/codai-tools.json`**, generated from the MCP registry by
 `pnpm --filter @codai/axiom-mcp build:spec` and pinned by `tools-spec.test.ts`.
 
@@ -103,14 +104,15 @@ drops straight into an OpenAI/Anthropic `function.parameters` field.
 
 | tool | risk | reason |
 |---|---|---|
-| `axiom_plan_validate`, `axiom_manifest_verify`, `axiom_check`, `axiom_check_start`, `axiom_task_get`, `axiom_apply_dry_run`, `axiom_manifest_diff`, `axiom_axm_parse`, `axiom_roots_list`, `axiom_repo_snapshot` | READ | `readOnlyHint: true` — touch no files |
+| `axiom_plan_validate`, `axiom_manifest_verify`, `axiom_check`, `axiom_check_start`, `axiom_task_get`, `axiom_apply_dry_run`, `axiom_manifest_diff`, `axiom_axm_parse`, `axiom_roots_list`, `axiom_status`, `axiom_repo_snapshot` | READ | `readOnlyHint: true` — touch no files |
 | `axiom_plan_compile`, `axiom_plan_begin`, `axiom_plan_add`, `axiom_plan_seal`, `axiom_task_cancel` | ACT | write only under `<root>/.axiom/` (CAS blobs with `store: cas`, stored manifest when a `root` is given) or mutate server-process state; never the working tree |
-| `axiom_apply`, `axiom_rollback` | SENSITIVE | `destructiveHint: true` — rewrite files in the root (2PC, journaled) |
+| `axiom_apply`, `axiom_write`, `axiom_rollback` | SENSITIVE | `destructiveHint: true` — rewrite files in the root (2PC, journaled) |
 
 ### Wiring it into a codai harness
 
 1. Start the server with an explicit root allowlist (there is no `cwd` fallback):
-   `npx @codai/axiom-mcp mcp --root <workspace>`.
+   `npx @codai/axiom-mcp mcp --root <workspace> --tools full` (the rows cover all 19 tools; without
+   `--tools full` only the 6 `core` ones are served).
 2. At tool-registration time, read `node_modules/@codai/axiom-mcp/spec/codai-tools.json` (it is in
    the package `files`) and push each entry into the model-facing tool list; look up `risk` from the
    same entry when deciding `needsApproval(risk, autonomy)`.
@@ -121,7 +123,7 @@ drops straight into an OpenAI/Anthropic `function.parameters` field.
    `axiom_apply_dry_run`/`axiom_plan_compile`, so an approval prompt can show the digest it is about
    to commit.
 
-## 4. Default-on evidence (S-414, 2026-09-20)
+## 4. Default-on evidence (2026-09-20)
 
 The write step is a pure function of (tree, edits); if the gate produces the same bytes as plain
 fs writes, nothing downstream (tests, diff, verifier) can differ except through a rejection. So the

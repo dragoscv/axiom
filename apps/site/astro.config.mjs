@@ -1,5 +1,6 @@
 // @ts-check
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import mermaid from "astro-mermaid";
@@ -22,6 +23,27 @@ const axmGrammar = {
   displayName: "AXIOM plan",
 };
 
+/**
+ * Starlight's injected 404 route always emits `<link rel="canonical">` (+ `og:url`) pointing at
+ * `/axiom/404/`, which tells crawlers a not-found page is a real document. There is no config
+ * switch for it, so the built page is rewritten: canonical/og:url dropped, `noindex` added.
+ */
+const noindex404 = {
+  name: "axiom-404-noindex",
+  hooks: {
+    /** @param {{ dir: URL }} options */
+    "astro:build:done": ({ dir }) => {
+      const file = fileURLToPath(new URL("404.html", dir));
+      if (!existsSync(file)) return;
+      const html = readFileSync(file, "utf8")
+        .replace(/<link rel="canonical"[^>]*>/g, "")
+        .replace(/<meta property="og:url"[^>]*>/g, "")
+        .replace(/<head>/, '<head><meta name="robots" content="noindex">');
+      writeFileSync(file, html);
+    },
+  },
+};
+
 export default defineConfig({
   site,
   base,
@@ -36,7 +58,17 @@ export default defineConfig({
       favicon: "/favicon.svg",
       lastUpdated: true,
       social: [{ icon: "github", label: "GitHub", href: repo }],
-      customCss: ["./src/styles/custom.css"],
+      // Self-hosted fonts (@fontsource): no request to Google Fonts, so no visitor IP leaves the site.
+      customCss: [
+        "@fontsource/instrument-serif/400.css",
+        "@fontsource/instrument-serif/400-italic.css",
+        "@fontsource/inter/400.css",
+        "@fontsource/inter/500.css",
+        "@fontsource/inter/600.css",
+        "@fontsource/jetbrains-mono/400.css",
+        "@fontsource/jetbrains-mono/500.css",
+        "./src/styles/custom.css",
+      ],
       head: [
         { tag: "meta", attrs: { property: "og:type", content: "website" } },
         { tag: "meta", attrs: { property: "og:image", content: `${site}${base}/og.png` } },
@@ -51,7 +83,22 @@ export default defineConfig({
         },
         { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
         { tag: "meta", attrs: { name: "twitter:image", content: `${site}${base}/og.png` } },
-        { tag: "meta", attrs: { name: "theme-color", content: "#fbf7ef" } },
+        {
+          tag: "meta",
+          attrs: {
+            name: "theme-color",
+            content: "#fbf7ef",
+            media: "(prefers-color-scheme: light)",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "theme-color",
+            content: "#17181c",
+            media: "(prefers-color-scheme: dark)",
+          },
+        },
       ],
       expressiveCode: {
         themes: ["github-light", "github-dark-default"],
@@ -70,17 +117,10 @@ export default defineConfig({
         { label: "Guides", items: [{ autogenerate: { directory: "guides" } }] },
         { label: "Reference", items: [{ autogenerate: { directory: "reference" } }] },
         { label: "Integrations", items: [{ autogenerate: { directory: "integration" } }] },
-        {
-          label: "Design & research",
-          items: [
-            { label: "Design", items: [{ autogenerate: { directory: "design" } }] },
-            {
-              label: "Research",
-              collapsed: true,
-              items: [{ autogenerate: { directory: "research" } }],
-            },
-          ],
-        },
+        // docs/spec/** keeps its exact URIs (sync-docs sets `slug`): they are predicate types.
+        { label: "Specifications", items: [{ autogenerate: { directory: "spec" } }] },
+        // docs/research/** is not published (sync-docs EXCLUDE_DIRS) — it links to GitHub.
+        { label: "Design", items: [{ autogenerate: { directory: "design" } }] },
       ],
       plugins: [
         starlightGitHubAlerts(),
@@ -90,5 +130,6 @@ export default defineConfig({
         }),
       ],
     }),
+    noindex404,
   ],
 });

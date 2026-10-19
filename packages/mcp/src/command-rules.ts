@@ -8,9 +8,21 @@
  * Rules that need filesystem or git state (leases, agentq marks, stale-script markers, dirty tree)
  * live in other modules; the dirty-tree deploy rule is exported separately as `HOUSE_DEPLOY_RULE`
  * so the gate fires it only when a git-state fact says the tree is dirty.
+ *
+ * v3: the destructive git rules (force push, push delete, reset --hard, clean -f, worktree remove
+ * --force, stash drop/clear) and `house.undecodable` are matched SEMANTICALLY through `shell-lex`
+ * — every simple command the string runs, nested interpreters included, with quotes, escapes,
+ * call operators and global git options normalised. Their `pattern` only documents the shape.
  */
 import { z } from "zod";
 import type { RuleVerdict } from "./gate-verdict.js";
+import {
+  type CommandUnit,
+  commandUnits,
+  normalizeGit,
+  programBase,
+  UNDECODABLE,
+} from "./shell-lex.js";
 
 const MAX_REGEX_CHARS = 500;
 const DEFAULT_ID = "command.deny";
@@ -101,6 +113,12 @@ export const HOUSE_PACK: readonly CommandRule[] = [
     reason: "Force-push rewrites remote history, --force-with-lease included; ask the user first.",
   },
   {
+    id: "house.pushDelete",
+    pattern: String.raw`git\s+push\s[^\n]*?(?:--delete|-d\b|\s:\S)`,
+    reason:
+      "git push --delete / <remote> :<ref> deletes a remote branch or tag; ask the user first.",
+  },
+  {
     id: "house.resetHard",
     pattern: String.raw`git\s+reset\s+--hard`,
     reason: "git reset --hard destroys uncommitted work, including other agents'; ask first.",
@@ -128,6 +146,13 @@ export const HOUSE_PACK: readonly CommandRule[] = [
     pattern: String.raw`${GIT_OPTS}\s+stash\s+push\b(?:(?!\s--\s)[^\n])*\s--\s[^\n]*?\s-[mquakp]\b`,
     reason: "git stash push: flags after `--` are treated as paths, nothing is stashed.",
     fix: "git stash push -m '<msg>' -- <path>",
+  },
+  {
+    id: "house.stashDrop",
+    pattern: String.raw`${GIT_OPTS}\s+stash\s+(?:drop|clear)(?:\s|$)`,
+    reason:
+      "git stash drop/clear deletes stash entries for good; in a shared clone they are usually another agent's.",
+    fix: "git stash list; git stash show -p stash@{N}  # ask before dropping",
   },
   {
     id: "house.stashBare",
@@ -165,6 +190,13 @@ export const HOUSE_PACK: readonly CommandRule[] = [
     fix: AGENTQ_COMMIT,
   },
   {
+    id: "house.worktreeRemoveForce",
+    pattern: String.raw`\bgit\b[^;|&]*\bworktree\s+remove\b[^;|&]*(?:--force|-f\b)`,
+    reason:
+      "git worktree remove --force follows Windows junctions into their targets and discards uncommitted work.",
+    fix: `${WORKTREE} remove -Path <dir>`,
+  },
+  {
     id: "house.worktreeRawRemove",
     pattern: String.raw`\bgit\b[^;|&]*\bworktree\s+(?:remove|move)\b`,
     unless: VIA_TOOL,
@@ -177,13 +209,6 @@ export const HOUSE_PACK: readonly CommandRule[] = [
     unless: VIA_TOOL,
     reason: "Raw git worktree add; worktrees are fixed, leased slots (ADR 0001).",
     fix: `${AGENTQ} lease -Purpose '<why>' [-Branch <b>] [-Ref <sha>]`,
-  },
-  {
-    id: "house.worktreeRemoveForce",
-    pattern: String.raw`\bgit\b[^;|&]*\bworktree\s+remove\b[^;|&]*(?:--force|-f\b)`,
-    reason:
-      "git worktree remove --force follows Windows junctions into their targets and discards uncommitted work.",
-    fix: `${WORKTREE} remove -Path <dir>`,
   },
   {
     id: "house.playwrightLocal",
@@ -199,6 +224,14 @@ export const HOUSE_PACK: readonly CommandRule[] = [
     reason:
       "Builds run through the queue wrapper; two concurrent builds corrupt shared incremental state.",
     fix: `${RUN_BUILD} -Command '<cmd>'`,
+  },
+  {
+    id: "house.undecodable",
+    pattern: UNDECODABLE,
+    reason:
+      "The command runs a nested command AXIOM cannot read (an undecodable -EncodedCommand, or nesting deeper than 3 levels).",
+    fix: "decode the command and run it plainly",
+    decision: "ask",
   },
 ];
 
@@ -235,69 +268,174 @@ function compile(rule: CommandRule): Compiled {
   return c;
 }
 
-/** Shell words of one segment; quotes group and are removed, backslashes stay literal. */
-function shellWords(segment: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inWord = false;
-  let quote: string | undefined;
-  for (const ch of segment) {
-    if (quote !== undefined) {
-      if (ch === quote) quote = undefined;
-      else cur += ch;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-      inWord = true;
-    } else if (ch === " " || ch === "\t" || ch === "\r") {
-      if (inWord) out.push(cur);
-      cur = "";
-      inWord = false;
-    } else {
-      cur += ch;
-      inWord = true;
-    }
+/** The parsed command, computed once per evaluation and only when a rule needs it. */
+class Parsed {
+  #units: CommandUnit[] | undefined;
+  #git: GitCall[] | undefined;
+  readonly command: string;
+  constructor(command: string) {
+    this.command = command;
   }
-  if (inWord) out.push(cur);
-  return out;
+  get units(): CommandUnit[] {
+    this.#units ??= commandUnits(this.command);
+    return this.#units;
+  }
+  /** Every git invocation with a subcommand, under every shell reading, nested ones included. */
+  get git(): GitCall[] {
+    if (this.#git === undefined) {
+      const out: GitCall[] = [];
+      for (const u of this.units) {
+        for (const v of u.variants) {
+          const g = normalizeGit(v);
+          if (g?.sub !== undefined) out.push({ sub: g.sub, args: g.args });
+        }
+      }
+      this.#git = out;
+    }
+    return this.#git;
+  }
 }
 
-const ENV_ASSIGN = /^(?:\$env:)?[A-Za-z_][A-Za-z0-9_]*=/i;
-const SEGMENT_SPLIT = /;|&&|\|\|?|\r?\n/;
-const EXE_SUFFIX = /\.(?:exe|cmd)$/i;
-
-function programName(word: string): string {
-  const slash = Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\"));
-  return word.slice(slash + 1).replace(EXE_SUFFIX, "");
+interface GitCall {
+  sub: string;
+  args: string[];
 }
 
-function argvMatches(argv: readonly string[], command: string, caseSensitive: boolean): boolean {
+function argvMatches(argv: readonly string[], parsed: Parsed, caseSensitive: boolean): boolean {
   const norm = (s: string): string => (caseSensitive ? s : s.toLowerCase());
-  for (const segment of command.split(SEGMENT_SPLIT)) {
-    const all = shellWords(segment);
-    let start = 0;
-    while (start < all.length) {
-      const w = all[start] as string;
-      if (w !== "sudo" && !ENV_ASSIGN.test(w)) break;
-      start++;
-    }
-    const words = all.slice(start);
-    if (words.length < argv.length) continue;
-    const ok = argv.every((want, i) => {
-      if (want === "*") return true;
-      const got = words[i] as string;
-      return norm(i === 0 ? programName(got) : got) === norm(want);
-    });
-    if (ok) return true;
-  }
-  return false;
+  return parsed.units.some((u) =>
+    u.variants.some(
+      (words) =>
+        words.length >= argv.length &&
+        argv.every((want, i) => {
+          if (want === "*") return true;
+          const got = words[i] ?? "";
+          return norm(i === 0 ? programBase(got) : got) === norm(want);
+        }),
+    ),
+  );
 }
 
-function ruleMatches(rule: CommandRule, command: string): boolean {
+// ------------------------------------------------------------------- semantic git matchers --
+
+interface GitArgs {
+  /** Options before `--` (long ones as written, `--name[=value]`). */
+  opts: string[];
+  /** Non-option words, `--` excluded. */
+  positionals: string[];
+}
+
+function splitArgs(args: readonly string[], valueOpts: ReadonlySet<string> = NO_VALUE): GitArgs {
+  const opts: string[] = [];
+  const positionals: string[] = [];
+  let ended = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (ended || a === "-" || !a.startsWith("-")) {
+      positionals.push(a);
+    } else if (a === "--") {
+      ended = true;
+    } else {
+      opts.push(a);
+      if (valueOpts.has(a)) i++;
+    }
+  }
+  return { opts, positionals };
+}
+
+const NO_VALUE: ReadonlySet<string> = new Set();
+const PUSH_VALUE_OPTS: ReadonlySet<string> = new Set([
+  "-o",
+  "--push-option",
+  "--repo",
+  "--receive-pack",
+  "--exec",
+]);
+
+/** `--name` / `--name=v`, where git accepts any unambiguous prefix of `full` (≥ `min` chars). */
+function longOpt(arg: string, full: string, min: number): boolean {
+  if (!arg.startsWith("--")) return false;
+  const name = arg.slice(2).split("=")[0] ?? "";
+  return name.length >= min && full.startsWith(name);
+}
+
+/** A short-option cluster (`-f`, `-uf`, `-fdx`) containing `letter`. */
+function shortHas(arg: string, letter: string): boolean {
+  return /^-[A-Za-z0-9]+$/.test(arg) && arg.slice(1).includes(letter);
+}
+
+function isForcePush(g: GitCall): boolean {
+  if (g.sub !== "push") return false;
+  const { opts, positionals } = splitArgs(g.args, PUSH_VALUE_OPTS);
+  const forced = opts.some(
+    (o) => longOpt(o, "force-with-lease", 3) || longOpt(o, "mirror", 2) || shortHas(o, "f"),
+  );
+  return forced || positionals.some((p) => p.startsWith("+"));
+}
+
+function isPushDelete(g: GitCall): boolean {
+  if (g.sub !== "push") return false;
+  const { opts, positionals } = splitArgs(g.args, PUSH_VALUE_OPTS);
+  if (opts.some((o) => longOpt(o, "delete", 3) || shortHas(o, "d"))) return true;
+  // `<remote> :<ref>` / `+:<ref>` pushes "nothing" onto the ref, i.e. deletes it.
+  return positionals.slice(1).some((p) => p.replace(/^\+/, "").startsWith(":"));
+}
+
+function isResetHard(g: GitCall): boolean {
+  return g.sub === "reset" && splitArgs(g.args).opts.some((o) => longOpt(o, "hard", 2));
+}
+
+function isCleanForce(g: GitCall): boolean {
+  if (g.sub !== "clean") return false;
+  return splitArgs(g.args).opts.some((o) => longOpt(o, "force", 1) || shortHas(o, "f"));
+}
+
+function isWorktreeRemoveForce(g: GitCall): boolean {
+  if (g.sub !== "worktree") return false;
+  const { opts, positionals } = splitArgs(g.args);
+  if (positionals[0]?.toLowerCase() !== "remove") return false;
+  return opts.some((o) => longOpt(o, "force", 1) || shortHas(o, "f"));
+}
+
+function isStashDrop(g: GitCall): boolean {
+  if (g.sub !== "stash") return false;
+  const action = splitArgs(g.args).positionals[0]?.toLowerCase();
+  return action === "drop" || action === "clear";
+}
+
+type Semantic = (parsed: Parsed) => boolean;
+const onGit =
+  (pred: (g: GitCall) => boolean): Semantic =>
+  (parsed) =>
+    parsed.git.some(pred);
+
+/**
+ * House rules matched through shell-lex instead of their regex. Keyed by rule id, applied only to
+ * the `HOUSE_PACK` objects themselves (a user rule reusing an id keeps its own pattern).
+ */
+const SEMANTIC: ReadonlyMap<string, Semantic> = new Map([
+  ["house.forcePush", onGit(isForcePush)],
+  ["house.pushDelete", onGit(isPushDelete)],
+  ["house.resetHard", onGit(isResetHard)],
+  ["house.cleanForce", onGit(isCleanForce)],
+  ["house.worktreeRemoveForce", onGit(isWorktreeRemoveForce)],
+  ["house.stashDrop", onGit(isStashDrop)],
+  ["house.undecodable", (parsed: Parsed) => parsed.units.some((u) => u.text === UNDECODABLE)],
+]);
+const HOUSE_SET: ReadonlySet<CommandRule> = new Set(HOUSE_PACK);
+
+function semanticFor(rule: CommandRule): Semantic | undefined {
+  return HOUSE_SET.has(rule) && rule.id !== undefined ? SEMANTIC.get(rule.id) : undefined;
+}
+
+function ruleMatches(rule: CommandRule, parsed: Parsed): boolean {
   if (rule.pattern === undefined && rule.argv === undefined) return false;
   const c = compile(rule);
-  if (c.unless?.test(command)) return false;
-  if (c.pattern && !c.pattern.test(command)) return false;
-  if (rule.argv && !argvMatches(rule.argv, command, rule.caseSensitive === true)) return false;
+  if (c.unless?.test(parsed.command)) return false;
+  const semantic = semanticFor(rule);
+  if (semantic !== undefined) return semantic(parsed);
+  if (c.pattern && !c.pattern.test(parsed.command)) return false;
+  if (rule.argv && !argvMatches(rule.argv, parsed, rule.caseSensitive === true)) return false;
   return true;
 }
 
@@ -309,25 +447,35 @@ function verdictFor(rule: CommandRule): RuleVerdict {
 }
 
 /**
- * First matching rule wins: `cfg.deny` in order, then the pack. Never throws: a rule that cannot
- * be evaluated (a regex that fails to compile at runtime) refuses the command — fail closed.
+ * EVERY matching rule, in order: `cfg.deny`, then the pack. The gate denies when any verdict is a
+ * hard one, so a softer rule matching first can no longer shadow a hard rule. Never throws: a rule
+ * that cannot be evaluated (a regex that fails to compile at runtime, a parse failure) adds a
+ * `command.deny` verdict at its position — fail closed.
  */
-export function evaluateCommand(command: string, cfg: CommandsConfig): RuleVerdict | undefined {
+export function evaluateCommandRules(command: string, cfg: CommandsConfig): RuleVerdict[] {
   const lists: readonly (readonly CommandRule[])[] =
     cfg.pack === "house" ? [cfg.deny, HOUSE_PACK] : [cfg.deny];
+  const parsed = new Parsed(command);
+  const out: RuleVerdict[] = [];
   for (const list of lists) {
     for (const rule of list) {
       let hit: boolean;
       try {
-        hit = ruleMatches(rule, command);
+        hit = ruleMatches(rule, parsed);
       } catch {
-        return {
+        out.push({
           id: DEFAULT_ID,
           reason: `command rule ${rule.id ?? "(unnamed)"} could not be evaluated (invalid pattern); refusing the command`,
-        };
+        });
+        continue;
       }
-      if (hit) return verdictFor(rule);
+      if (hit) out.push(verdictFor(rule));
     }
   }
-  return undefined;
+  return out;
+}
+
+/** First matching rule (see `evaluateCommandRules`), or `undefined`. */
+export function evaluateCommand(command: string, cfg: CommandsConfig): RuleVerdict | undefined {
+  return evaluateCommandRules(command, cfg)[0];
 }

@@ -4,8 +4,10 @@ import { canonicalize } from "./jcs.js";
 import {
   AGENT_DECISION_V0_1,
   AXIOM_APPLY_ATTESTATION_V1,
+  AXIOM_APPLY_ATTESTATION_V1_LEGACY,
   AXIOM_BUILD_TYPE,
   AXIOM_BUILDER_ID,
+  AXIOM_SPEC_BASE,
   argsHash,
   type BuildAgentDecisionInput,
   type BuildApplyAttestationInput,
@@ -16,6 +18,23 @@ import {
   IN_TOTO_STATEMENT_V1,
   SLSA_PROVENANCE_V1,
 } from "./statement.js";
+
+describe("D-41 spec URIs", () => {
+  it("every AXIOM URI lives under the docs site; the 2.x apply URI stays exported", () => {
+    for (const u of [
+      AXIOM_APPLY_ATTESTATION_V1,
+      AXIOM_BUILD_TYPE,
+      AXIOM_BUILDER_ID,
+      AGENT_DECISION_V0_1,
+    ]) {
+      expect(u.startsWith(`${AXIOM_SPEC_BASE}/`)).toBe(true);
+    }
+    expect(AXIOM_APPLY_ATTESTATION_V1).toBe(
+      "https://dragoscv.github.io/axiom/spec/attestation/apply/v1",
+    );
+    expect(AXIOM_APPLY_ATTESTATION_V1_LEGACY).toBe("https://axiom.dev/attestation/apply/v1");
+  });
+});
 
 const base: BuildStatementInput = {
   subjectName: "blog",
@@ -157,7 +176,9 @@ describe("buildAgentDecisionStatement (Phase 8)", () => {
     const s = buildAgentDecisionStatement(input);
     expect(s._type).toBe(IN_TOTO_STATEMENT_V1);
     expect(s.predicateType).toBe(AGENT_DECISION_V0_1);
-    expect(AGENT_DECISION_V0_1).toBe("https://auxidus.dev/attestation/agent-decision/v0.1");
+    expect(AGENT_DECISION_V0_1).toBe(
+      "https://dragoscv.github.io/axiom/spec/attestation/agent-decision/v0.1",
+    );
     expect(s.subject).toEqual([
       { name: "Write", digest: { sha256: input.args_hash.slice("sha256:".length) } },
     ]);

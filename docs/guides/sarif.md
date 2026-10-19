@@ -1,13 +1,13 @@
-# SARIF export — `axiom check --format sarif`
+# SARIF export — `axiom plan check --format sarif`
 
 *Turn a `CheckReport` into a SARIF 2.1.0 log and upload it to GitHub code scanning (S-1214).*
 
-`axiom check <bundle.json> --root <dir> --format sarif` runs the same checks as `--json` and
+`axiom plan check <bundle.json> --root <dir> --format sarif` runs the same checks as `--json` and
 prints one SARIF 2.1.0 log on stdout instead of the `CheckReport`. Exit codes do not change:
 `0` pass, `1` findings / fail (the log is still complete), `2` structural error.
 
 ```sh
-axiom check .axiom/manifests/<hex>.json --root . --format sarif > axiom.sarif
+axiom plan check .axiom/manifests/<hex>.json --root . --format sarif > axiom.sarif
 ```
 
 ## Mapping

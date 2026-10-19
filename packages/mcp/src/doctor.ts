@@ -3,13 +3,13 @@
  * with a message and a fix hint. Read-only apart from spawning the gate (which never writes).
  * Exit contract (cli-main): 0 when no check failed, 2 when any did — warnings never fail.
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { journalStatus, lockStatus, verifyChain } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
-import { HEALTH_PATH, readDaemonState } from "./daemon-proto.js";
+import { DAEMON_PROTOCOL, HEALTH_PATH, readDaemonState } from "./daemon-proto.js";
 import { GateProfileSchema } from "./gate.js";
 import { findHookLogs, type HookLogStats, readHookLogStats } from "./hooklog.js";
 import {
@@ -75,6 +75,13 @@ export type GateProbe = (
 ) => Promise<{ ms: number; exit: number; denied?: boolean }>;
 
 export const HOOK_LOG_P95_WARN_MS = 4000;
+/** `failopen.copilot` stays a warning only when the gate p95 exceeds this share of the timeout. */
+export const FAILOPEN_WARN_SHARE = 0.5;
+/** VS Code / Copilot CLI default when a hook entry declares no timeout. */
+export const COPILOT_DEFAULT_TIMEOUT_SEC = 30;
+
+/** Locates `node` on PATH (absolute path) or `undefined`. */
+export type NodeLocator = () => Promise<string | undefined>;
 
 export interface DoctorOptions {
   root: string;
@@ -93,6 +100,8 @@ export interface DoctorOptions {
   healthFetch?: HealthFetcher;
   /** Explicit VS Code hook log files (skips the locator). */
   hookLogs?: readonly string[] | undefined;
+  /** Test seam for `node.onPath`. */
+  locateNode?: NodeLocator;
 }
 
 function check(id: string, status: CheckStatus, message: string, hint?: string): DoctorCheck {
@@ -179,7 +188,9 @@ export function stripJsonc(text: string): string {
   return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
-async function readJsonFile(abs: string): Promise<{ doc?: unknown; error?: string } | undefined> {
+export async function readJsonFile(
+  abs: string,
+): Promise<{ doc?: unknown; error?: string } | undefined> {
   let text: string;
   try {
     text = await readFile(abs, "utf8");
@@ -194,7 +205,7 @@ async function readJsonFile(abs: string): Promise<{ doc?: unknown; error?: strin
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
+export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -218,10 +229,28 @@ function copilotHookExecOnly(doc: unknown): boolean {
   return gate.length > 0 && gate.every(isExecOnlyGateEntry);
 }
 
-function hookList(doc: unknown, event: string): unknown[] {
+export function hookList(doc: unknown, event: string): unknown[] {
   if (!isRecord(doc) || !isRecord(doc.hooks)) return [];
   const list = doc.hooks[event];
   return Array.isArray(list) ? list : [];
+}
+
+/**
+ * The effective timeout (ms) of the Copilot gate hook entries in `.github/hooks/axiom-gate.json`:
+ * the smallest declared `timeoutSec` (or `timeout`, seconds), the harness default when an entry
+ * declares none, `undefined` when no gate entry exists.
+ */
+export function copilotHookTimeoutMs(doc: unknown): number | undefined {
+  const entries = hookList(doc, "preToolUse").filter(
+    (h) =>
+      isRecord(h) && !isCopilotPostEntry(h) && copilotHookWired({ hooks: { preToolUse: [h] } }),
+  ) as Record<string, unknown>[];
+  if (entries.length === 0) return undefined;
+  const secs = entries.map((e) => {
+    const v = typeof e.timeoutSec === "number" ? e.timeoutSec : e.timeout;
+    return typeof v === "number" && v > 0 ? v : COPILOT_DEFAULT_TIMEOUT_SEC;
+  });
+  return Math.min(...secs) * 1000;
 }
 
 function gateHookNoNpx(h: unknown): boolean {
@@ -651,6 +680,14 @@ async function checkDaemon(
     return check("daemon", "ok", "no resident daemon (hooks run in-process)");
   }
   const where = `${state.host}:${state.port}`;
+  if (state.protocol < DAEMON_PROTOCOL || state.key === undefined) {
+    return check(
+      "daemon",
+      "warn",
+      `daemon.json names a protocol ${state.protocol}${state.key === undefined ? " keyless" : ""} daemon (pid ${state.pid} at ${where}): current clients ignore it and every hook runs in-process`,
+      `restart the daemon (protocol ${DAEMON_PROTOCOL}): axiom serve --hook --root <dir>`,
+    );
+  }
   let res: { status: number; body: unknown };
   try {
     res = await fetchHealth(state);
@@ -691,7 +728,7 @@ async function checkDaemon(
 }
 
 /** Gate profile keys newer than 2.4 and the first version whose strict schema knows each. */
-const VERSIONED_KEYS: ReadonlyArray<readonly [string, string]> = [
+export const VERSIONED_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["steer", STEER_MIN_VERSION],
   ["steerGlobs", STEER_MIN_VERSION],
   ["record", STEER_MIN_VERSION],
@@ -700,17 +737,26 @@ const VERSIONED_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["hard", ASK_MIN_VERSION],
   ["override", ASK_MIN_VERSION],
   ["outside", ASK_MIN_VERSION],
+  ["version", "3.0.0"],
 ];
+
+/** Keys of a gate profile document that need a newer bin, and the highest version they need. */
+export function profileVersionNeeds(doc: unknown): { used: string[]; need?: string } {
+  if (!isRecord(doc)) return { used: [] };
+  const usedKeys = VERSIONED_KEYS.filter(([k]) => doc[k] !== undefined);
+  if (usedKeys.length === 0) return { used: [] };
+  return {
+    used: usedKeys.map(([k]) => k),
+    need: usedKeys.map(([, v]) => v).reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b)),
+  };
+}
 
 async function checkSteerCompat(root: string, bin: Bin): Promise<DoctorCheck | undefined> {
   const gp = await readJsonFile(path.join(root, INIT_FILES.gateProfile));
   if (gp === undefined || !isRecord(gp.doc)) return undefined;
-  const doc = gp.doc;
-  const usedKeys = VERSIONED_KEYS.filter(([k]) => doc[k] !== undefined);
-  if (usedKeys.length === 0) return undefined;
+  const { used, need } = profileVersionNeeds(gp.doc);
+  if (need === undefined) return undefined;
   if (bin?.version === undefined) return undefined;
-  const used = usedKeys.map(([k]) => k);
-  const need = usedKeys.map(([, v]) => v).reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
   if (compareVersions(bin.version, need) >= 0) {
     return check(
       "bin.profile",
@@ -754,7 +800,7 @@ async function checkHookLog(
   opts: DoctorOptions,
   root: string,
   copilotWired: boolean,
-): Promise<DoctorCheck | undefined> {
+): Promise<{ check?: DoctorCheck; p95?: number }> {
   const files =
     opts.hookLogs ??
     (await findHookLogs({
@@ -762,25 +808,40 @@ async function checkHookLog(
       ...(opts.appData === undefined ? {} : { appData: opts.appData }),
       ...(opts.platform === undefined ? {} : { platform: opts.platform }),
     }));
-  if (files.length === 0) return undefined;
+  if (files.length === 0) return {};
   const stats = await readHookLogStats(files, root);
-  if (stats.runs > 0) return hookLogCheck(stats);
+  if (stats.runs > 0) return { check: hookLogCheck(stats), p95: stats.p95 };
   if (copilotWired && stats.preToolUseRuns >= GATE_SILENT_MIN_RUNS) {
-    return check(
-      "hook.log.vscode",
-      "fail",
-      `${stats.preToolUseRuns} PreToolUse hook runs for this workspace in the newest VS Code log session, 0 of them the axiom gate — VS Code is not running ${INIT_FILES.copilotHook}`,
-      "axiom init (2.5.2+ writes command/bash/powershell), trust the workspace, then Developer: Reload Window",
-    );
+    return {
+      check: check(
+        "hook.log.vscode",
+        "fail",
+        `${stats.preToolUseRuns} PreToolUse hook runs for this workspace in the newest VS Code log session, 0 of them the axiom gate — VS Code is not running ${INIT_FILES.copilotHook}`,
+        "axiom init (2.5.2+ writes command/bash/powershell), trust the workspace, then Developer: Reload Window",
+      ),
+    };
   }
-  return undefined;
+  return {};
 }
 
-async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
+interface LatencyContext {
+  /** gate.profile already failed: a denied benign write is that failure, not a glob problem. */
+  profileFailed: boolean;
+  /** Hook timeout in ms; `timeoutSource` undefined = assumed default. */
+  timeoutMs: number;
+  timeoutSource?: string;
+}
+
+async function checkLatency(
+  opts: DoctorOptions,
+  ctx: LatencyContext,
+): Promise<{ check: DoctorCheck; p95?: number }> {
   const probe =
     opts.probe ?? (opts.gateCommand === undefined ? undefined : spawnGateProbe(opts.gateCommand));
   if (probe === undefined) {
-    return check("gate.latency", "warn", "cannot locate this CLI's entry; latency not measured");
+    return {
+      check: check("gate.latency", "warn", "cannot locate this CLI's entry; latency not measured"),
+    };
   }
   const payload = JSON.stringify({
     hook_event_name: "PreToolUse",
@@ -799,27 +860,150 @@ async function checkLatency(opts: DoctorOptions): Promise<DoctorCheck> {
       if (r.denied === true) denied = true;
     }
   } catch (err) {
-    return check("gate.latency", "fail", `gate probe did not run: ${(err as Error).message}`);
+    return {
+      check: check("gate.latency", "fail", `gate probe did not run: ${(err as Error).message}`),
+    };
   }
   const p = Math.round(p95(samples));
-  const msg = `gate --stdin p95 ${p} ms over ${GATE_PROBE_RUNS} runs (hook timeout ${GATE_HOOK_TIMEOUT_MS} ms)`;
-  if (p > GATE_P95_FAIL_MS) {
-    return check(
-      "gate.latency",
-      "fail",
-      msg,
-      "the harness will kill the hook and fail OPEN; check machine load / antivirus on node",
-    );
+  const where = ctx.timeoutSource === undefined ? "assumed" : `from ${ctx.timeoutSource}`;
+  const msg = `gate --stdin p95 ${p} ms over ${GATE_PROBE_RUNS} runs (hook timeout ${ctx.timeoutMs} ms, ${where})`;
+  // 80 % of the real timeout, capped by the absolute budget (cold starts under load).
+  const failAt = Math.min(GATE_P95_FAIL_MS, Math.round(ctx.timeoutMs * 0.8));
+  if (p > failAt) {
+    return {
+      check: check(
+        "gate.latency",
+        "fail",
+        msg,
+        "the harness will kill the hook and fail OPEN; check machine load / antivirus on node",
+      ),
+      p95: p,
+    };
   }
   if (denied || !exits.has(0)) {
+    if (ctx.profileFailed) {
+      return {
+        check: check(
+          "gate.latency",
+          "ok",
+          `${msg}; benign-write check skipped (gate.profile is invalid, see above)`,
+        ),
+        p95: p,
+      };
+    }
+    return {
+      check: check(
+        "gate.latency",
+        "warn",
+        `${msg}; a benign Write was denied (exit ${[...exits].join(",")}${denied ? ", deny JSON" : ""})`,
+        "check .axiom/gate-profile.json deny/allow globs",
+      ),
+      p95: p,
+    };
+  }
+  return { check: check("gate.latency", "ok", msg), p95: p };
+}
+
+/**
+ * `failopen.copilot` is a fact about the harness, not a fault: it stays a warning only when the
+ * measured gate p95 (probe or VS Code log, whichever is worse) exceeds half the hook timeout.
+ */
+function rateCopilotFailOpen(
+  c: DoctorCheck,
+  p95Ms: number | undefined,
+  timeoutMs: number,
+): DoctorCheck {
+  if (p95Ms === undefined) return c;
+  const limit = Math.round(timeoutMs * FAILOPEN_WARN_SHARE);
+  if (p95Ms > limit) {
     return check(
-      "gate.latency",
+      c.id,
       "warn",
-      `${msg}; a benign Write was denied (exit ${[...exits].join(",")}${denied ? ", deny JSON" : ""})`,
-      "check .axiom/gate-profile.json deny/allow globs",
+      `${c.message}; gate p95 ${p95Ms} ms is above 50% of the hook timeout ${timeoutMs} ms`,
+      c.hint,
     );
   }
-  return check("gate.latency", "ok", msg);
+  return check(
+    c.id,
+    "ok",
+    `info: ${INIT_FILES.copilotHook}: Copilot harnesses fail open on a hook timeout (no fail-closed knob); gate p95 ${p95Ms} ms is within 50% of the hook timeout ${timeoutMs} ms`,
+  );
+}
+
+/** `where node` / `which node` without a shell. */
+export function defaultNodeLocator(): NodeLocator {
+  return () =>
+    new Promise((resolve) => {
+      execFile(
+        process.platform === "win32" ? "where" : "which",
+        ["node"],
+        { timeout: 5000, windowsHide: true },
+        (err, stdout) => {
+          if (err !== null) {
+            resolve(undefined);
+            return;
+          }
+          resolve(
+            String(stdout)
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .find((l) => l !== ""),
+          );
+        },
+      );
+    });
+}
+
+/** A hook command that runs the gate through the npm shim (`axiom`, `axiom.cmd`), not `axiom-hook`. */
+export const SHIM_GATE_RE = /(?<![-\w])axiom(?:\.cmd|\.ps1)?\s+gate\b/;
+
+const SHIM_HOOK_FILES = [
+  INIT_FILES.copilotHook,
+  INIT_FILES.claudeSettings,
+  INIT_FILES.cursorHooks,
+  INIT_FILES.devinHooks,
+  INIT_FILES.windsurfHooks,
+  INIT_FILES.codexHooks,
+  INIT_FILES.geminiSettings,
+  INIT_FILES.clineHook,
+  INIT_FILES.clineHookPs1,
+] as const;
+
+/**
+ * The npm shim (`axiom.cmd`, the POSIX `#!/usr/bin/env node` link) needs `node` on the PATH the
+ * harness gives the hook; a native exe (single executable) does not.
+ */
+async function checkNodeOnPath(
+  root: string,
+  bin: Bin,
+  locateNode: NodeLocator,
+): Promise<DoctorCheck | undefined> {
+  let shimFile: string | undefined;
+  for (const rel of SHIM_HOOK_FILES) {
+    const text = await readFile(path.join(root, rel), "utf8").catch(() => undefined);
+    if (text !== undefined && SHIM_GATE_RE.test(text) && !NPX_RE.test(text)) {
+      shimFile = rel;
+      break;
+    }
+  }
+  if (shimFile === undefined || bin === undefined) return undefined;
+  if (/\.exe$/i.test(bin.path)) {
+    return check("node.onPath", "ok", `global axiom is a native executable (${bin.path})`);
+  }
+  const node = await locateNode();
+  if (node !== undefined) return check("node.onPath", "ok", `node at ${node}`);
+  return check(
+    "node.onPath",
+    "fail",
+    `${shimFile} runs the gate through the npm shim ${bin.path}, but node is not on PATH: the hook cannot start and the harness fails open`,
+    "add node to the PATH the editor/agent inherits, or install the native client (axiom init --daemon)",
+  );
+}
+
+async function hookTimeout(root: string): Promise<{ ms: number; source?: string }> {
+  const r = await readJsonFile(path.join(root, INIT_FILES.copilotHook));
+  const ms = r?.doc === undefined ? undefined : copilotHookTimeoutMs(r.doc);
+  return ms === undefined ? { ms: GATE_HOOK_TIMEOUT_MS } : { ms, source: INIT_FILES.copilotHook };
 }
 
 async function checkProfiles(root: string): Promise<DoctorCheck[]> {
@@ -918,7 +1102,9 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
   checks.push(...hookChecks);
   const copilotWired = hookChecks.some((c) => c.id === "hook.copilot");
   const hookLog = await checkHookLog(opts, root, copilotWired);
-  if (hookLog !== undefined) checks.push(hookLog);
+  if (hookLog.check !== undefined) checks.push(hookLog.check);
+  const nodeCheck = await checkNodeOnPath(root, bin, opts.locateNode ?? defaultNodeLocator());
+  if (nodeCheck !== undefined) checks.push(nodeCheck);
   checks.push(await checkDaemon(root, home, platform, opts.healthFetch ?? defaultHealthFetch()));
 
   const lock = await lockStatus(root);
@@ -979,6 +1165,22 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
   // Dynamic: elicit-audit imports stripJsonc from this module.
   const { auditElicitationHooks } = await import("./elicit-audit.js");
   checks.push(...(await auditElicitationHooks(root, home)));
-  checks.push(await checkLatency(opts));
+  const timeout = await hookTimeout(root);
+  const latency = await checkLatency(opts, {
+    profileFailed: checks.some((c) => c.id === "gate.profile" && c.status === "fail"),
+    timeoutMs: timeout.ms,
+    ...(timeout.source === undefined ? {} : { timeoutSource: timeout.source }),
+  });
+  checks.push(latency.check);
+  const fo = checks.findIndex((c) => c.id === "failopen.copilot");
+  const worst = [latency.p95, hookLog.p95].filter((x): x is number => x !== undefined);
+  const existing = checks[fo];
+  if (existing !== undefined) {
+    checks[fo] = rateCopilotFailOpen(
+      existing,
+      worst.length === 0 ? undefined : Math.max(...worst),
+      timeout.ms,
+    );
+  }
   return { root, ok: !checks.some((c) => c.status === "fail"), checks };
 }

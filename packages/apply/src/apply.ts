@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { canonicalDigestRef } from "@codai/axiom-canon";
 import {
@@ -21,8 +22,11 @@ import {
 import { resolveContent } from "./blobs.js";
 import {
   checkOnDiskCaseCollision,
+  checkReservedDir,
   checkTargetType,
+  isReservedAxiomPath,
   probeCaseInsensitive,
+  reservedDirReal,
   resolveContained,
   validateArtifactPaths,
 } from "./contain.js";
@@ -96,6 +100,14 @@ export interface ApplyOptions {
 
 export const JOURNAL_FSYNC_EVERY = 32;
 export const DEFAULT_KEEP_BACKUPS = 3;
+
+export interface RollbackOptions {
+  /**
+   * Roll back even when a target no longer holds what the manifest wrote (a later human or
+   * agent edit would be overwritten). Default `false` → `ERR_PREIMAGE_CHANGED`.
+   */
+  force?: boolean;
+}
 
 function hexOf(d: DigestRef): string {
   return d.slice("sha256:".length);
@@ -230,6 +242,121 @@ async function chainTerminal(rootReal: string, journal: Journal): Promise<void> 
 }
 
 /**
+ * A journal is input from disk — anyone who can write `.axiom/journal/` can plant one. Before any
+ * rollback moves a byte: every step path must be a contained, non-`.axiom` target, and every
+ * `backup` must be exactly `.axiom/backup/<this journal's hex>/<step.path>` and contained.
+ * Violation → `ERR_JOURNAL_CORRUPT`, nothing touched.
+ */
+async function validateJournal(rootReal: string, j: Journal): Promise<void> {
+  const prefix = `.axiom/backup/${hexOf(j.manifestDigest)}/`;
+  const axiomReal = await reservedDirReal(rootReal);
+  const forged = new Set(["ERR_CONTAINMENT", "ERR_SYMLINK_IN_PATH", "ERR_PATH_RESERVED_DIR"]);
+  for (const step of j.steps) {
+    try {
+      if (isReservedAxiomPath(step.path)) {
+        throw new AxiomError("ERR_PATH_RESERVED_DIR", "journal step targets .axiom/", {
+          path: step.path,
+        });
+      }
+      if (step.backup !== undefined && step.backup !== `${prefix}${step.path}`) {
+        throw new AxiomError("ERR_CONTAINMENT", "backup is outside this journal's backup set", {
+          path: step.path,
+        });
+      }
+      const { parentReal } = await resolveContained(rootReal, step.path);
+      checkReservedDir(step.path, parentReal, axiomReal);
+      if (step.backup !== undefined) await resolveContained(rootReal, step.backup);
+    } catch (err) {
+      if (!(err instanceof AxiomError)) throw err;
+      // e.g. ERR_TARGET_TYPE (a parent became a file): not an escape; the replay reports it.
+      if (!forged.has(err.code)) continue;
+      throw new AxiomError("ERR_JOURNAL_CORRUPT", "journal step fails containment", {
+        path: step.path,
+        cause: err,
+        details: { digest: j.manifestDigest, backup: step.backup ?? null, reason: err.code },
+      });
+    }
+  }
+}
+
+/**
+ * A done step that replaced or deleted an existing file needs its backup. Pruned (keepBackups)
+ * or deleted by hand → `ERR_ROLLBACK` before anything moves; never a silent half-rollback.
+ * Skipped in `rolling-back`: steps already restored have legitimately consumed their backup.
+ */
+async function assertBackupsPresent(rootReal: string, j: Journal): Promise<void> {
+  if (j.phase === "rolling-back") return;
+  for (const step of j.steps) {
+    if (!step.done || step.op === "create") continue;
+    const existed = step.preImage !== undefined && step.preImage !== "absent";
+    if (step.backup === undefined && !existed) continue;
+    const present =
+      step.backup !== undefined &&
+      (await lstatOrNull(path.join(rootReal, ...step.backup.split("/")))) !== null;
+    if (!present) {
+      throw new AxiomError("ERR_ROLLBACK", "pre-image backup is missing (pruned?)", {
+        path: step.path,
+        details: {
+          digest: j.manifestDigest,
+          backup: step.backup ?? null,
+          reason: "backup-missing",
+        },
+      });
+    }
+  }
+}
+
+/** What a done step left on disk: `step.postImage`, else the applied marker's digest. */
+async function expectedPostImages(
+  rootReal: string,
+  j: Journal,
+): Promise<Map<string, string | undefined>> {
+  const fromMarker = new Map<string, string>();
+  try {
+    const raw: unknown = JSON.parse(
+      await fs.readFile(nsPath(appliedPath(rootReal, j.manifestDigest)), "utf8"),
+    );
+    const parsed = ApplyResultSchema.safeParse(raw);
+    if (parsed.success) {
+      for (const f of parsed.data.files) {
+        if (f.digest !== undefined) fromMarker.set(f.path, f.digest.sha256);
+      }
+    }
+  } catch {
+    // no marker (committing journal) → postImage only
+  }
+  const out = new Map<string, string | undefined>();
+  for (const s of j.steps) {
+    out.set(s.path, s.op === "delete" ? "absent" : (s.postImage ?? fromMarker.get(s.path)));
+  }
+  return out;
+}
+
+/** Done steps whose target no longer holds what the commit wrote → `ERR_PREIMAGE_CHANGED`. */
+async function assertNoDrift(rootReal: string, j: Journal): Promise<void> {
+  if (j.phase !== "committed" && j.phase !== "committing") return;
+  const expected = await expectedPostImages(rootReal, j);
+  const drifted: { path: string; expected: string; actual: string }[] = [];
+  for (const s of j.steps) {
+    const exp = expected.get(s.path);
+    if (!s.done || exp === undefined) continue; // pre-2.8 journal without a known post-image
+    const actual = await fileDigestOrAbsent(path.join(rootReal, ...s.path.split("/")));
+    if (actual !== exp) drifted.push({ path: s.path, expected: exp, actual });
+  }
+  const first = drifted[0];
+  if (first !== undefined) {
+    throw new AxiomError(
+      "ERR_PREIMAGE_CHANGED",
+      "target changed after apply; rollback would overwrite it (pass force to override)",
+      {
+        path: first.path,
+        details: { phase: "rollback", expected: first.expected, actual: first.actual, drifted },
+      },
+    );
+  }
+}
+
+/**
  * Scoped rollback of one journal: replay `steps` in reverse. Uses the presence
  * of the staged file as the discriminator for "was the rename performed" so it
  * is correct both in-process and after a crash (a step's `done` flag may not
@@ -237,6 +364,8 @@ async function chainTerminal(rootReal: string, journal: Journal): Promise<void> 
  */
 async function rollbackJournal(rootReal: string, journal: Journal): Promise<Journal> {
   let j = journal;
+  await validateJournal(rootReal, j);
+  await assertBackupsPresent(rootReal, j);
   if (j.phase !== "rolling-back") j = await setPhase(rootReal, j, "rolling-back");
   const stg = stagingDir(rootReal, j.manifestDigest);
   for (let i = j.steps.length - 1; i >= 0; i--) {
@@ -253,7 +382,10 @@ async function rollbackJournal(rootReal: string, journal: Journal): Promise<Jour
     if (step.op === "create") {
       if (renamed) await fs.rm(nsPath(target), { force: true });
     } else if (step.op === "overwrite") {
-      if (renamed && backupAbs !== undefined && backupExists) {
+      if (renamed && step.preImage === "absent") {
+        // overwrite of a file that did not exist: there is no backup, undo it like a create
+        await fs.rm(nsPath(target), { force: true });
+      } else if (renamed && backupAbs !== undefined && backupExists) {
         await renameRetry(backupAbs, target, step.path);
       } else if (!renamed && backupAbs !== undefined && backupExists) {
         // backup taken but rename never happened → target is still the original
@@ -270,14 +402,35 @@ async function rollbackJournal(rootReal: string, journal: Journal): Promise<Jour
   return out;
 }
 
-/** CLI entry: roll back an applied/committing manifest by digest. Returns the final journal. */
-export async function rollback(root: string, digest: DigestRef): Promise<Journal> {
+/**
+ * CLI entry: roll back an applied/committing manifest by digest. Returns the final journal.
+ *
+ * - no journal → `ERR_NOT_FOUND`; journal only `staged` (nothing committed) → `ERR_NOT_FOUND`.
+ * - already `rolled-back` → no-op, the journal is returned unchanged (a second rollback must
+ *   never delete what a later apply wrote).
+ * - a target edited after apply → `ERR_PREIMAGE_CHANGED` unless `force: true`.
+ * - a needed backup pruned → `ERR_ROLLBACK`; a planted/forged journal → `ERR_JOURNAL_CORRUPT`.
+ *   All three refuse before anything moves.
+ */
+export async function rollback(
+  root: string,
+  digest: DigestRef,
+  options: RollbackOptions = {},
+): Promise<Journal> {
   const rootReal = await realRoot(root);
   return withLock(rootReal, digest, async () => {
     const j = await readJournal(rootReal, digest);
     if (j === undefined) {
       throw new AxiomError("ERR_NOT_FOUND", "no journal for digest", { details: { digest } });
     }
+    if (j.phase === "rolled-back") return j;
+    if (j.phase === "staged") {
+      throw new AxiomError("ERR_NOT_FOUND", "journal never reached commit; nothing to roll back", {
+        details: { digest, phase: j.phase },
+      });
+    }
+    await validateJournal(rootReal, j);
+    if (options.force !== true) await assertNoDrift(rootReal, j);
     const out = await rollbackJournal(rootReal, j);
     await fs.rm(appliedPath(rootReal, digest), { force: true });
     return out;
@@ -294,7 +447,14 @@ export async function recoverIfNeeded(rootReal: string): Promise<DigestRef[]> {
   const recovered: DigestRef[] = [];
   for (const j of journals) {
     if (j.phase === "committing" || j.phase === "rolling-back") {
-      await rollbackJournal(rootReal, j);
+      try {
+        await rollbackJournal(rootReal, j);
+      } catch (err) {
+        // A forged/inconsistent journal is reported like a corrupt one (`status`, `rollback`),
+        // never acted on — validation runs before anything moves.
+        if (err instanceof AxiomError && err.code === "ERR_JOURNAL_CORRUPT") continue;
+        throw err;
+      }
       await fs.rm(appliedPath(rootReal, j.manifestDigest), { force: true });
       recovered.push(j.manifestDigest);
     } else if (j.phase === "staged") {
@@ -321,15 +481,18 @@ async function prepare(
   reapply = false,
   /** Root whose `.axiom/cas` holds CAS blobs (PR mode: the shared root, not the worktree). */
   casRoot: string = rootReal,
+  /** Staging directory override (dry-run on a root without `.axiom/` stages in os.tmpdir()). */
+  stgOverride?: string,
 ): Promise<Prepared> {
   const { manifest, manifestDigest } = bundle;
   validateArtifactPaths(manifest.artifacts);
   for (const a of manifest.artifacts) {
-    if (a.path === ".axiom" || a.path.startsWith(".axiom/")) {
-      throw new AxiomError("ERR_CONTAINMENT", "artifacts may not target .axiom/", { path: a.path });
-    }
+    checkReservedDir(a.path);
   }
-  const caseInsensitive = await probeCaseInsensitive(rootReal);
+  const caseInsensitive = await probeCaseInsensitive(rootReal, {
+    create: stgOverride === undefined,
+  });
+  const axiomReal = await reservedDirReal(rootReal);
 
   // S-402: a manifest compiled against a tree names that tree. On a FIRST apply the
   // declared pre-images must still hold; a re-apply (marker present) is exempt — the
@@ -351,9 +514,11 @@ async function prepare(
   // Containment + target type + pre-image capture, all before any write.
   const files: StagedFile[] = [];
   for (const a of manifest.artifacts) {
-    const { abs } = await resolveContained(rootReal, a.path);
+    const { abs, parentReal } = await resolveContained(rootReal, a.path);
+    // Name aliases the string check cannot see (8.3 `AXIOM~1`, case-insensitive volumes).
+    checkReservedDir(a.path, parentReal, axiomReal);
     await checkTargetType(abs, a.path, reapply && a.op === "create" ? "overwrite" : a.op);
-    if (caseInsensitive) await checkOnDiskCaseCollision(abs, a.path, a.op);
+    await checkOnDiskCaseCollision(abs, a.path, a.op, caseInsensitive);
     const preImage = await fileDigestOrAbsent(abs);
     // A drifted `create` is committed as an overwrite so the foreign pre-image is backed up.
     const op: ArtifactOp =
@@ -372,7 +537,7 @@ async function prepare(
   }
 
   // Staging tree.
-  const stg = stagingDir(rootReal, manifestDigest);
+  const stg = stgOverride ?? stagingDir(rootReal, manifestDigest);
   await rmrf(stg);
   await fs.mkdir(nsPath(stg), { recursive: true });
   for (const [i, a] of manifest.artifacts.entries()) {
@@ -551,8 +716,13 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
    * the parameter deliberately shadows the outer root so the body is mode-agnostic). CAS
    * blobs are read from `casRoot`. Caller holds the shared root's lock.
    */
-  const runEngine = async (rootReal: string, casRoot: string): Promise<ApplyResult> => {
-    await recoverIfNeeded(rootReal);
+  const runEngine = async (
+    rootReal: string,
+    casRoot: string,
+    /** Dry-run on a root without `.axiom/`: stage in os.tmpdir(), write nothing under the root. */
+    tmpStaging?: string,
+  ): Promise<ApplyResult> => {
+    if (tmpStaging === undefined) await recoverIfNeeded(rootReal);
 
     // Idempotency (design §apply): applied marker + on-disk match → noop; marker but
     // drifted files → re-apply, reporting which artifacts were re-written.
@@ -581,9 +751,10 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
         mode === "dry-run",
         drifted !== undefined,
         casRoot,
+        tmpStaging,
       );
     } catch (err) {
-      await rmrf(stagingDir(rootReal, bundle.manifestDigest));
+      await rmrf(tmpStaging ?? stagingDir(rootReal, bundle.manifestDigest));
       return fail(rootReal, err);
     }
     const { staged } = prepared;
@@ -620,11 +791,11 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     }
 
     // Phase 1 complete → journal `staged`, fsynced.
-    const steps: JournalStep[] = staged.files.map((f) => ({
-      path: f.path,
-      op: f.op,
-      done: false,
-    }));
+    const steps: JournalStep[] = staged.files.map((f) => {
+      const s: JournalStep = { path: f.path, op: f.op, preImage: f.preImage, done: false };
+      if (f.op !== "delete" && f.digest !== undefined) s.postImage = f.digest;
+      return s;
+    });
     let journal = newJournal(bundle.manifestDigest, steps);
     const journalFile = await writeJournal(rootReal, journal);
 
@@ -663,6 +834,16 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
   if (mode === "dry-run") {
     // Read-only: never registers an intent, never fails ERR_CONFLICT.
     try {
+      if ((await lstatOrNull(axiomDir(sharedRoot))) === null) {
+        // No AXIOM state to protect or recover: no lock, staging outside the repo (S-rc3 P2:
+        // a preview must not create `.axiom/{queue,staging,tmp}` in a repo that had none).
+        const tmp = await fs.mkdtemp(path.join(tmpdir(), "axiom-dry-"));
+        try {
+          return finalize(await runEngine(sharedRoot, sharedRoot, path.join(tmp, "staging")));
+        } finally {
+          await rmrf(tmp);
+        }
+      }
       return finalize(
         await withLock(
           sharedRoot,

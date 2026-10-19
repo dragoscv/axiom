@@ -45,6 +45,7 @@ const base = (over: Partial<DoctorOptions> = {}): DoctorOptions => ({
   locateBin: bin,
   home: home.root,
   hookLogs: [],
+  locateNode: async () => "/usr/bin/node",
   ...over,
 });
 const byId = (r: Awaited<ReturnType<typeof runDoctor>>, id: string) =>
@@ -342,18 +343,19 @@ describe("axiom doctor — resident daemon", () => {
     server = undefined;
   });
 
-  const writeState = async (port: number, roots: string[], token?: string) => {
+  const writeState = async (port: number, roots: string[], token?: string, protocol: 1 | 2 = 2) => {
     await mkdir(join(home.root, ".axiom"), { recursive: true });
     await writeFile(
       join(home.root, ".axiom", "daemon.json"),
       JSON.stringify({
-        protocol: 1,
+        protocol,
         pid: 4242,
         host: "127.0.0.1",
         port,
         version: "9.9.9",
         roots,
         startedAt: "2026-10-14T00:00:00Z",
+        ...(protocol === 2 ? { key: "ab".repeat(32) } : {}),
         ...(token === undefined ? {} : { token }),
       }),
     );
@@ -377,7 +379,7 @@ describe("axiom doctor — resident daemon", () => {
     expect(await statusOf("daemon")).toBe("ok");
   });
 
-  it("a live daemon serving the parent dir → ok; protocol header + bearer token sent", async () => {
+  it("a live daemon serving the parent dir → ok; protocol 2 header, no bearer sent", async () => {
     const seen: Record<string, string | undefined>[] = [];
     const parent = join(repo.root, "..");
     const port = await listen([parent], seen);
@@ -385,7 +387,7 @@ describe("axiom doctor — resident daemon", () => {
     const d = byId(await runDoctor(base()), "daemon");
     expect(d?.status).toBe("ok");
     expect(d?.message).toContain("4242");
-    expect(seen).toEqual([{ url: "/v1/health", protocol: "1", auth: "Bearer tok" }]);
+    expect(seen).toEqual([{ url: "/v1/health", protocol: "2", auth: undefined }]);
   });
 
   it("a daemon that does not serve this root warns", async () => {
@@ -550,8 +552,9 @@ describe("axiom doctor — fail-open audit (S-1203) and post-write wiring (S-120
       await runInit({ root: repo.root, harness, profileName: "demo", force: true });
     }
     const r = await runDoctor(base());
+    // copilot: info-level ("ok") while the gate p95 stays within 50 % of the hook timeout.
     expect(idsWith(r, "failopen.")).toEqual([
-      ["failopen.copilot", "warn"],
+      ["failopen.copilot", "ok"],
       ["failopen.windsurf", "warn"],
       ["failopen.codex", "warn"],
       ["failopen.gemini", "warn"],
@@ -579,5 +582,98 @@ describe("axiom doctor — fail-open audit (S-1203) and post-write wiring (S-120
     const missing = byId(await runDoctor(base()), "hook.post.claude");
     expect(missing?.status).toBe("warn");
     expect(missing?.hint).toBe("axiom init --upgrade");
+  });
+});
+
+describe("axiom doctor — 3.0 refinements (D-45)", () => {
+  const copilotWith = (timeoutSec: number | undefined) =>
+    put(".github/hooks/axiom-gate.json", {
+      version: 1,
+      hooks: {
+        preToolUse: [
+          {
+            type: "command",
+            command: "axiom gate --stdin --format auto",
+            ...(timeoutSec === undefined ? {} : { timeoutSec }),
+          },
+        ],
+      },
+    });
+
+  it("reports the hook file's real timeout and judges latency against it", async () => {
+    await copilotWith(2);
+    const r = await runDoctor(base({ probe: async () => ({ ms: 1700, exit: 0 }) }));
+    const lat = byId(r, "gate.latency");
+    expect(lat?.message).toContain("hook timeout 2000 ms");
+    // 1700 > 80 % of 2000 → fail even though it is far below the old 4 s budget.
+    expect(lat?.status).toBe("fail");
+    await copilotWith(undefined);
+    const def = byId(await runDoctor(base()), "gate.latency");
+    expect(def?.message).toContain("hook timeout 30000 ms");
+    expect(def?.status).toBe("ok");
+  });
+
+  it("failopen.copilot: ok (info) under 50 % of the timeout, warn above it", async () => {
+    await copilotWith(1);
+    expect(await statusOf("failopen.copilot", { probe: async () => ({ ms: 400, exit: 0 }) })).toBe(
+      "ok",
+    );
+    expect(await statusOf("failopen.copilot", { probe: async () => ({ ms: 600, exit: 0 }) })).toBe(
+      "warn",
+    );
+  });
+
+  it("a denied probe is not blamed on globs when gate.profile already failed", async () => {
+    await put(".axiom/gate-profile.json", '{"deny":"x"}');
+    const r = await runDoctor(base({ probe: async () => ({ ms: 5, exit: 0, denied: true }) }));
+    expect(byId(r, "gate.profile")?.status).toBe("fail");
+    expect(byId(r, "gate.latency")?.status).toBe("ok");
+    expect(byId(r, "gate.latency")?.hint).toBeUndefined();
+  });
+
+  it("node.onPath: fail when a shim hook runs and node is missing; ok with node or a native exe", async () => {
+    await copilotWith(15);
+    expect(await statusOf("node.onPath", { locateNode: async () => undefined })).toBe("fail");
+    expect(await statusOf("node.onPath")).toBe("ok");
+    expect(
+      await statusOf("node.onPath", {
+        locateNode: async () => undefined,
+        locateBin: async () => ({ path: "C:/bin/axiom.exe", version: "9.9.9" }),
+      }),
+    ).toBe("ok");
+    // axiom-hook (native thin client) is not the shim → no check.
+    await put(".github/hooks/axiom-gate.json", {
+      version: 1,
+      hooks: { preToolUse: [{ type: "command", command: "axiom-hook gate --stdin" }] },
+    });
+    expect(await statusOf("node.onPath", { locateNode: async () => undefined })).toBeUndefined();
+  });
+
+  it("a protocol-1 or keyless daemon.json warns: restart the daemon (protocol 2)", async () => {
+    await mkdir(join(home.root, ".axiom"), { recursive: true });
+    const state = {
+      pid: 1,
+      host: "127.0.0.1",
+      port: 1,
+      version: "2.6.0",
+      roots: [repo.root],
+      startedAt: "2026-10-14T00:00:00Z",
+    };
+    await writeFile(
+      join(home.root, ".axiom", "daemon.json"),
+      JSON.stringify({ ...state, protocol: 1, token: "t" }),
+    );
+    const d = byId(
+      await runDoctor(
+        base({
+          healthFetch: async () => {
+            throw new Error("must not be called");
+          },
+        }),
+      ),
+      "daemon",
+    );
+    expect(d?.status).toBe("warn");
+    expect(d?.hint).toMatch(/protocol 2/);
   });
 });

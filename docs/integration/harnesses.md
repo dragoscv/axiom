@@ -1,4 +1,4 @@
-# Harnesses: Claude Code, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline
+# Harnesses: Claude Code, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline, Kiro, OpenCode, ACP
 
 *One matrix for wiring AXIOM into each coding-agent harness — the MCP server config and the PreToolUse hook — with the per-harness facts that decide the shape.*
 
@@ -10,6 +10,8 @@ is the deep reference for the gate; this page is the copy-paste matrix.
 
 ```mermaid
 flowchart LR
+  accTitle: Harness wiring
+  accDescr: Each supported harness calls axiom gate through its own hook file and output contract.
   subgraph harnesses
     CC[Claude Code]
     CP[Copilot CLI]
@@ -20,9 +22,15 @@ flowchart LR
     GM[Gemini CLI]
     JU[Junie CLI]
     CL[Cline]
+    KI[Kiro]
+    OC[OpenCode]
+    ACP[ACP clients · Zed]
   end
   CC & CP & VS & CX & CU & GM & JU & CL -->|stdio MCP| SRV[axiom mcp --root repo]
-  CC & CP & VS & CX & CU & WS & GM & JU & CL -->|"PreToolUse · --format"| GATE[axiom gate --stdin]
+  CC & CP & VS & CX & CU & WS & GM & JU & CL & KI -->|"PreToolUse · --format"| GATE[axiom gate --stdin]
+  OC -->|"plugin tool.execute.before"| GATE
+  ACP -->|"session/request_permission"| PX[axiom acp-proxy]
+  PX --> ENG
   CC -.->|"type: http"| D[axiom serve --hook]
   GATE -.->|"daemon first"| D
   SRV --> ENG[compile · check · apply]
@@ -41,10 +49,11 @@ flowchart LR
 
 ## `axiom init` does the repo-level wiring
 
-Run `axiom init` in the repository root (`--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline`,
+Run `axiom init` in the repository root (`--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline|kiro|opencode`,
 default `auto` = one harness per marker directory `.github` / `.claude` / `.codex` / `.vscode` /
-`.cursor` / `.windsurf` or `.devin` / `.gemini` / `.junie` / `.clinerules`, none → copilot +
-vscode). It writes the **repo-scoped** files of this matrix, never the user-level ones
+`.cursor` / `.windsurf` or `.devin` / `.gemini` / `.junie` / `.clinerules` / `.kiro` /
+`.opencode`, none → copilot + vscode). `axiom init --dry-run` prints the unified diff of every
+file it would write and writes nothing. It writes the **repo-scoped** files of this matrix, never the user-level ones
 (`~/.claude.json`, `~/.copilot/mcp-config.json`, `~/.codex/config.toml`, `~/.junie/config.json`,
 Devin's `mcp_config.json`):
 
@@ -55,10 +64,13 @@ Devin's `mcp_config.json`):
 | VS Code | `.github/hooks/axiom-gate.json` (same file — VS Code ignores `exec`-only entries) | `.vscode/mcp.json` — `servers.axiom` merged in, `npx -y @codai/axiom-mcp@2 mcp --root ${workspaceFolder}` |
 | Codex | `.codex/hooks.json` — `PreToolUse` merged in ([§ Codex](#codex)) | `.codex/config.toml` — `[mcp_servers.axiom]` appended only when absent |
 | Cursor | `.cursor/hooks.json` — `preToolUse` + `beforeShellExecution`, `failClosed: true` | `.cursor/mcp.json` |
-| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` | user-level only — a note |
+| Windsurf / Devin | `.devin/hooks.json` (if `.devin/` exists) else `.windsurf/hooks.json` — `pre_write_code`, `pre_run_command`, `pre_mcp_tool_use` | user-level only — a note |
 | Gemini CLI | `.gemini/settings.json` — `hooks.BeforeTool` merged in | same file, `mcpServers.axiom` |
-| Junie | none in the project (Junie CLI runs hooks only from `~/.junie/config.json`) — a note with the snippet | `.junie/mcp/mcp.json` (+ an AXIOM section in `.junie/guidelines.md`) |
+| Junie | none in the project (Junie CLI runs hooks only from `~/.junie/config.json`) — a note with the snippet, pinned to this repo with `--root` | `.junie/mcp/mcp.json` (+ an AXIOM section in `.junie/guidelines.md`) |
 | Cline | `.clinerules/hooks/PreToolUse` (sh, 0755) + `PreToolUse.ps1` | none — Cline's MCP settings are user-level (a note) |
+| Kiro | `.kiro/hooks/axiom-gate.json` — `PreToolUse`, matcher `write\|shell\|@mcp` ([§ Kiro](#kiro)) | none — `.kiro/settings/mcp.json` by hand (a note) |
+| OpenCode | `.opencode/plugins/axiom-gate.js` — a dependency-free plugin ([§ OpenCode](#opencode)) | none — `mcp` in `opencode.json` by hand (a note) |
+| ACP clients (Zed, …) | none — run the agent behind `axiom acp-proxy` ([§ ACP](#acp-agent-client-protocol)) | the agent's own MCP config |
 
 Plus, for every harness, `.axiom/profiles/<repo-name>.json`, `.axiom/gate-profile.json` (with
 `"steer": "hint"` since 2.5.0 — allowed writes get a once-per-session pointer to `axiom_write`) and the
@@ -81,14 +93,25 @@ the daemon is down and denies in the harness's format when neither can run.
 |---|---|---|---|---|
 | MCP config file | `.mcp.json` (project) / `~/.claude.json` | `~/.copilot/mcp-config.json` or `copilot mcp add` | `.vscode/mcp.json` | `~/.codex/config.toml` |
 | MCP entry shape | `mcpServers.axiom { command, args }` | `mcpServers.axiom { type: "local", command, args, tools }` | `servers.axiom { type: "stdio", command, args }` | `[mcp_servers.axiom] command, args` |
-| Hook file | `.claude/settings.json` (project) / `~/.claude/settings.json` | `.github/hooks/*.json` (repo) / `~/.copilot/hooks/*.json` | `.github/hooks/*.json` **and** `.claude/settings.json` (both loaded) | none — no hook API |
-| Hook event | `PreToolUse` with regex `matcher` | `preToolUse`, **no matcher** (fires on every tool; the gate filters in < 1 ms) | `PreToolUse`, `{ type: "command", command, timeoutSec }` | — |
-| Payload | `{ session_id, cwd, hook_event_name, tool_name, tool_input, tool_use_id }` | `{ timestamp, cwd, toolName, toolArgs }` — **`toolArgs` is a JSON string** | `tool_name` / `tool_input` (snake_case, unlike the CLI) | — |
-| Deny signal read | stdout `hookSpecificOutput.permissionDecision` (exit `0`), or exit `2` | stdout `permissionDecision` (exit `0`); any non-zero / crash = deny | stdout JSON deny on exit `0`, or exit `2`; **exit `1` is only a warning** | — |
-| Hook timeout → | proceeds through normal permission flow (**fail open**) | **fail open** | **fail open** | — |
+| Hook file | `.claude/settings.json` (project) / `~/.claude/settings.json` | `.github/hooks/*.json` (repo) / `~/.copilot/hooks/*.json` | depends on the agent target (table below) | `.codex/hooks.json` (trusted project) / `~/.codex/hooks.json`, or `[hooks]` in `config.toml` |
+| Hook event | `PreToolUse` with regex `matcher` | `preToolUse`; an optional `matcher` exists, `init` writes none (the gate filters every tool in < 1 ms) | `PreToolUse`, `{ type: "command", command, timeoutSec }` | `PreToolUse` with regex `matcher` (shell + unified exec = `Bash`, `apply_patch` also `Edit`/`Write`) |
+| Payload | `{ session_id, cwd, hook_event_name, tool_name, tool_input, tool_use_id }` | `{ timestamp, cwd, toolName, toolArgs }` — **`toolArgs` is a JSON string** | `tool_name` / `tool_input` (snake_case, unlike the CLI) | Claude-like; `apply_patch` carries the V4A patch in `tool_input.command` |
+| Deny signal read | stdout `hookSpecificOutput.permissionDecision` (exit `0`), or exit `2` | stdout `permissionDecision` (exit `0`); any non-zero / crash = deny | stdout JSON deny on exit `0`, or exit `2`; **exit `1` is only a warning** | `hookSpecificOutput` deny (exit `0`) or exit `2`; **`ask` is not supported → AXIOM sends a deny** |
+| Hook timeout → | proceeds through normal permission flow (**fail open**) | **fail open** | **fail open** | reported as a hook failure, tool continues (**fail open**) |
 | Per-tool auto-approve | `permissions.allow: ["mcp__axiom__axiom_apply"]` | `--allow-tool 'axiom(axiom_apply)'` | `chat.tools.global.autoApprove` / UI | `[mcp_servers.axiom.tools.axiom_apply] approval_mode` |
 | Tool that forces a prompt | `_meta["anthropic/requiresUserInteraction"]` honoured — set on `axiom_apply` / `axiom_write` since 2.6.0, a hook `allow` cannot skip it; `destructiveHint` | `destructiveHint` | `destructiveHint` → confirm dialog | approval policy |
 | Human confirm step ([S-1206](../guides/human-confirm.md)) | MCP elicitation form (digest + typed `digest12`) — supported (`Elicitation` / `ElicitationResult` hooks exist; `axiom doctor` fails if one is configured) | elicitation form when the client declares the capability, else the confirmDigest echo (`--require-human` refuses) | same rule; `chat.tools.global.autoApprove: true` → `axiom doctor` warns | same rule |
+
+**VS Code agent targets.** A VS Code chat session runs on one of several agent harnesses, and
+each reads a different hook file. Only the fields `command`, `bash`, `powershell` (and
+`windows`/`linux`/`osx`) are read by the Local harness — an `exec`/`args` entry is skipped:
+
+| VS Code agent target | Hook files read | What blocks | Failure path |
+|---|---|---|---|
+| **Local** (default Copilot agent in the editor) | `.github/hooks/*.json`, `.claude/settings.json`, `~/.copilot/hooks`, `~/.claude/settings.json` | JSON deny on exit `0`, or exit `2` | timeout / crash / other exit = warning, tool runs — `init`'s `powershell` and `bash` forms map every non-0/2 exit (node missing, crash) to `2` |
+| **Copilot** (Copilot CLI / Agent Host session) | `.github/hooks/*.json`, `~/.copilot/hooks` | JSON deny; any non-zero exit or crash = deny | timeout fails open |
+| **Claude** (Claude Code session) | `.claude/settings.json`, `~/.claude/settings.json` | as Claude Code | `onFailure: "block"` makes it fail closed |
+| **Codex** (Codex session) | `.codex/hooks.json`, `~/.codex/hooks.json` | as Codex | fail open |
 
 The gate emits **one** deny document that every column reads
 (`hookSpecificOutput{…}` + flat `permissionDecision` + `axiom{ verdict, code, path, toolClass }`),
@@ -97,17 +120,17 @@ and reads both payload casings, so a single hook config serves whichever harness
 `2` into `1`, and VS Code lets the tool run on `1`. Harnesses that read only the exit code
 need `--deny-exit 2`; since 2.5.0 the harnesses below get their own `--format`.
 
-### Five more harnesses (2.5.0, verified 2026-10-14)
+### More harnesses (2.5.0 / 3.0, verified 2026-10-14 and 2026-10-19)
 
-| | Cursor | Windsurf / Devin Cascade | Gemini CLI | Junie (CLI) | Cline (VS Code) |
-|---|---|---|---|---|---|
-| Hook file | `.cursor/hooks.json` (+ user `~/.cursor/hooks.json`, enterprise) | `.devin/hooks.json` (legacy `.windsurf/hooks.json`), user `~/.codeium/windsurf/hooks.json` | `.gemini/settings.json` (+ user, system) | `~/.junie/config.json` only (project hooks ignored by default; the IDE plugin runs none) | `.clinerules/hooks/PreToolUse` (+ `.ps1` on Windows), global `~/Documents/Cline/Hooks/` |
-| Event | `preToolUse` (matcher `Write\|Delete\|Shell`) + `beforeShellExecution` | `pre_write_code`, `pre_run_command` (no matcher) | `BeforeTool`, regex matcher on tool name | `PreToolUse`, matcher = tool name | executable named after the event |
-| Deny contract read | `{"permission":"deny"}` or exit 2 | **exit 2 only** | `{"decision":"deny"}` or exit 2; non-JSON stdout = allow | `{"decision":"deny"}` or exit 2; invalid JSON = allow | `{"cancel":true}` — **exit code ignored** |
-| Fail-closed option | `failClosed: true` per hook (init sets it) | none — the gate itself exits 2 | none | none for PreToolUse | none — init's scripts print a cancel when `axiom` cannot run |
-| Timeout unit | seconds | not configurable | **milliseconds** | seconds | fixed 30 s |
-| `--format` | `cursor` (allow prints `{"permission":"allow"}`) | `windsurf` | `gemini` | `junie` | `cline` |
-| Note | Cursor also runs Claude hooks from `.claude/settings.json` by default → with both wired the gate runs twice (harmless) | hooks do not load in Restricted Mode | project hooks are fingerprinted; a changed command warns | — | tick **Enable Hooks** in Cline's settings |
+| | Cursor | Windsurf / Devin Cascade | Gemini CLI | Junie (CLI) | Cline (VS Code) | Kiro | OpenCode |
+|---|---|---|---|---|---|---|---|
+| Hook file | `.cursor/hooks.json` (+ user `~/.cursor/hooks.json`, enterprise) | `.devin/hooks.json` (legacy `.windsurf/hooks.json`), user `~/.codeium/windsurf/hooks.json` | `.gemini/settings.json` (+ user, system) | `~/.junie/config.json` only (project hooks ignored by default; the IDE plugin runs none) | `.clinerules/hooks/PreToolUse` (+ `.ps1` on Windows), global `~/Documents/Cline/Hooks/` | `.kiro/hooks/*.json` (+ CLI V3 global `~/.kiro/hooks/`) | plugin file in `.opencode/plugins/` (+ `~/.config/opencode/plugins/`) |
+| Event | `preToolUse` (matcher `Write\|Delete\|Shell`) + `beforeShellExecution` | `pre_write_code`, `pre_run_command`, `pre_mcp_tool_use` (no matcher) | `BeforeTool`, regex matcher on tool name | `PreToolUse`, matcher = tool name | executable named after the event | `PreToolUse`, matcher = tool id / category (`read`, `write`, `shell`, `web`, `spec`) / `@mcp` / regex | `tool.execute.before(input, output)` |
+| Deny contract read | `{"permission":"deny"}` or exit 2 | **exit 2 only** | `{"decision":"deny"}` or exit 2; non-JSON stdout = allow | `{"decision":"deny"}` / `"ask"` or exit 2; invalid JSON = allow | `{"cancel":true}` — **exit code ignored** | **any non-zero exit** (stderr goes to the agent) | the hook **throws** |
+| Fail-closed option | `failClosed: true` per hook (init sets it) | none — `init`'s commands map a crash to exit 2 | none | none for PreToolUse | none — init's scripts print a cancel when `axiom` cannot run | built in: a crash is a non-zero exit | built in: the plugin throws on crash, missing bin and a 15 s timeout |
+| Timeout unit | seconds | not configurable | **milliseconds** | seconds | fixed 30 s | seconds (default 60) | plugin-side 15 s |
+| `--format` | `cursor` (allow prints `{"permission":"allow"}`) | `windsurf` | `gemini` | `junie` | `cline` | `kiro` | `claude` (parsed by the plugin) |
+| Note | Cursor also runs Claude hooks from `.claude/settings.json` by default → with both wired the gate runs twice (harmless). The `preToolUse` payload of the **Write** tool (which key holds the path) is *unverified* against a live Cursor; `beforeShellExecution` is | hooks do not load in Restricted Mode | project hooks are fingerprinted; a changed command warns | `init` pins `--root` in the user-level snippet | tick **Enable Hooks** in Cline's settings | file and task triggers run in the IDE and CLI V3, not in Kiro Web | MCP tools reach the hook too |
 
 ## Claude Code
 
@@ -124,16 +147,26 @@ need `--deny-exit 2`; since 2.5.0 the harnesses below get their own `--format`.
 }
 ```
 
-**Hook** — `.claude/settings.json` (project) or `~/.claude/settings.json`:
+**Hook** — `.claude/settings.json` (project) or `~/.claude/settings.json`; `axiom init` merges
+exactly this:
 
+<!-- init:claude -->
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "axiom gate --stdin", "timeout": 5 }
+          { "type": "command", "command": "axiom gate --stdin --format claude", "timeout": 15, "onFailure": "block" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "axiom gate --stdin --post --format claude", "timeout": 15 }
         ]
       }
     ]
@@ -141,10 +174,11 @@ need `--deny-exit 2`; since 2.5.0 the harnesses below get their own `--format`.
 }
 ```
 
-`timeout` is in seconds. The matcher keeps the hook off `Read`; drop `Bash` in on purpose if you
-want the shell scan (`"matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash"`). Claude reads
-`hookSpecificOutput` (the top-level `decision`/`reason` shape is deprecated); since v2.1.214 an
-exit `2` with schema-invalid JSON still blocks. A timed-out hook does **not** block.
+`timeout` is in seconds. The matcher keeps the hook off `Read` and includes both shell tools
+(Claude names it `PowerShell` on Windows without Git Bash). Claude reads `hookSpecificOutput`
+(the top-level `decision`/`reason` shape is deprecated); since v2.1.214 an exit `2` with
+schema-invalid JSON still blocks. Without `onFailure: "block"` (Claude Code ≥ 2.1.295) a
+timed-out, crashed or non-0/2 hook does **not** block; with it, all of those block.
 
 **Auto-approve the read-only tools, keep the prompt on apply:**
 
@@ -171,8 +205,10 @@ exit `2` with schema-invalid JSON still blocks. A timed-out hook does **not** bl
 }
 ```
 
-**Hook** — `.github/hooks/axiom-gate.json` (repo) or `~/.copilot/hooks/axiom-gate.json` (user):
+**Hook** — `.github/hooks/axiom-gate.json` (repo) or `~/.copilot/hooks/axiom-gate.json` (user);
+`axiom init` writes exactly this file:
 
+<!-- init:copilot -->
 ```json
 {
   "version": 1,
@@ -181,8 +217,17 @@ exit `2` with schema-invalid JSON still blocks. A timed-out hook does **not** bl
       {
         "type": "command",
         "command": "axiom gate --stdin --format auto",
-        "bash": "axiom gate --stdin --format auto",
-        "powershell": "axiom.cmd gate --stdin --format auto; exit $LASTEXITCODE",
+        "bash": "axiom gate --stdin --format auto; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc",
+        "powershell": "axiom.cmd gate --stdin --format auto; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }",
+        "timeoutSec": 15
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "axiom gate --stdin --post --format auto",
+        "bash": "axiom gate --stdin --post --format auto",
+        "powershell": "axiom.cmd gate --stdin --post --format auto; exit $LASTEXITCODE",
         "timeoutSec": 15
       }
     ]
@@ -192,10 +237,13 @@ exit `2` with schema-invalid JSON still blocks. A timed-out hook does **not** bl
 
 `exec`/`args` also works in Copilot CLI but makes VS Code skip the entry silently, so `init`
 (≥ 2.5.2) never writes it and migrates the old exec-only file.
-There is **no matcher** — the hook fires on every tool call and must be cheap for non-writes (the
+Copilot CLI accepts an optional `matcher`, but VS Code Local ignores it, so `init` writes none —
+the hook fires on every tool call and must be cheap for non-writes (the
 gate returns in well under a millisecond for `grep_search`, `list_dir`, …). `toolArgs` arrives as
 a JSON *string*; the gate parses it. Any non-zero exit or crash is a deny, so fail-closed costs
-nothing here; a **timeout** still fails open.
+nothing here; a **timeout** still fails open. The `bash`/`powershell` forms turn every exit other
+than the gate's own `0`/`2` (node not installed, `axiom` not on `PATH`, a crash) into `2`, so the
+VS Code Local harness — which blocks only on `2` — blocks too.
 
 **Per-tool approval:** `copilot --allow-tool 'axiom(axiom_plan_compile)' --allow-tool 'axiom(axiom_check)'`
 and leave `axiom_apply` to prompt. The Copilot SDK sees the same `toolName`/`toolArgs` in its
@@ -221,7 +269,9 @@ callbacks.
 plus the user-level `~/.copilot/hooks` and `~/.claude/settings.json`, so the Copilot file above
 works unchanged (`powershell` maps to Windows, `bash` to Linux/macOS, `command` is the fallback).
 On Windows VS Code runs it through `powershell.exe -Command`, which is why the entry calls
-`axiom.cmd` and ends `; exit $LASTEXITCODE` (otherwise exit 2 becomes 1, a non-blocking warning).
+`axiom.cmd` and ends `; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }`
+(otherwise exit 2 becomes 1, a non-blocking warning, and a missing node lets the tool run).
+Which file a session reads depends on its agent target — see the table under [Matrix](#matrix).
 Observed 2026-08-31: VS Code sends **`tool_name` / `tool_input`** (snake_case) while the CLI sends
 camelCase — a hook that read only one casing silently failed open 790 times; the gate reads both.
 Sub-agents start in sub-directories (`apps/web`); the gate walks up to the repository root so
@@ -245,20 +295,199 @@ approval_mode = "always"        # keep the human on the destructive tool
 `axiom init --harness codex` appends this table to the project `.codex/config.toml` (with
 `--root .`) only when it has no `[mcp_servers.axiom]` yet.
 
-**Hook** (Codex hooks, 2026; `.codex/hooks.json` or `[hooks]` in `config.toml`, user or trusted
-project; each new or changed hook must be reviewed once with `/hooks`):
+**Hook** (Codex hooks; `.codex/hooks.json` or `[hooks]` in `config.toml`, user or trusted
+project; each new or changed hook must be reviewed once with `/hooks`). `axiom init` merges
+exactly this:
 
+<!-- init:codex -->
 ```json
-{ "hooks": { "PreToolUse": [ { "matcher": "^(Bash|apply_patch|Edit|Write)$",
-  "hooks": [ { "type": "command", "command": "axiom gate --stdin --format codex",
-               "commandWindows": "axiom gate --stdin --format codex", "timeout": 10, "statusMessage": "AXIOM gate" } ] } ] } }
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
+        "hooks": [
+          { "type": "command", "command": "axiom gate --stdin --format codex",
+            "commandWindows": "axiom.cmd gate --stdin --format codex", "timeout": 10, "statusMessage": "AXIOM gate" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
+        "hooks": [
+          { "type": "command", "command": "axiom gate --stdin --post --format codex",
+            "commandWindows": "axiom.cmd gate --stdin --post --format codex", "timeout": 10, "statusMessage": "AXIOM post-write check" }
+        ]
+      }
+    ]
+  }
+}
 ```
 
+`commandWindows` (TOML `command_windows`) is the bare `axiom.cmd` call: Codex does not wrap it in
+`powershell -Command`, so a `; exit $LASTEXITCODE` suffix would reach the gate as arguments.
 File edits arrive as `tool_name: "apply_patch"` with the raw V4A patch in `tool_input.command`;
 the gate parses its `*** Update|Add|Delete File:` headers and `+` lines like Copilot's
 `apply_patch`. Codex honours the `hookSpecificOutput` deny (exit 0) or exit 2; a timeout or
-crash lets the call proceed. The V4A text can also go through the transaction as a `patch`
+crash lets the call proceed. Codex does not support `permissionDecision: "ask"`, so a profile
+`ask` glob is answered with a deny there. The V4A text can also go through the transaction as a `patch`
 source ([plan-format.md § Patch sources](../reference/plan-format.md#patch-sources)).
+
+## Cursor
+
+`axiom init --harness cursor` writes `.cursor/hooks.json` (and `.cursor/mcp.json`):
+
+<!-- init:cursor -->
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      { "command": "axiom gate --stdin --format cursor", "matcher": "Write|Delete|Shell", "timeout": 10, "failClosed": true }
+    ],
+    "beforeShellExecution": [
+      { "command": "axiom gate --stdin --format cursor", "timeout": 10, "failClosed": true }
+    ]
+  }
+}
+```
+
+`failClosed: true` makes a crash, timeout, non-zero exit or empty output block. The gate reads
+the `preToolUse` path from the usual keys (`file_path`, `path`, `target_file`, …); which key the
+live **Write** tool sends is *unverified* — if it is none of them the gate denies the write
+(`ERR_UNSUPPORTED_OP`), it never lets it through silently.
+
+## Windsurf / Devin
+
+`axiom init --harness windsurf` writes `.devin/hooks.json` when `.devin/` exists, else
+`.windsurf/hooks.json`:
+
+<!-- init:windsurf -->
+```json
+{
+  "hooks": {
+    "pre_write_code": [
+      { "command": "axiom gate --stdin --format windsurf; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc",
+        "powershell": "axiom.cmd gate --stdin --format windsurf; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }" }
+    ],
+    "pre_run_command": [
+      { "command": "axiom gate --stdin --format windsurf; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc",
+        "powershell": "axiom.cmd gate --stdin --format windsurf; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }" }
+    ],
+    "pre_mcp_tool_use": [
+      { "command": "axiom gate --stdin --format windsurf; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || exit 2; exit $rc",
+        "powershell": "axiom.cmd gate --stdin --format windsurf; if ($LASTEXITCODE -notin 0,2) { exit 2 } else { exit $LASTEXITCODE }" }
+    ]
+  }
+}
+```
+
+Only exit `2` blocks (`command` runs via `bash -c`, `powershell` via `powershell -Command`), so
+both forms map a crash or a missing `axiom`/node to `2`. `pre_mcp_tool_use` sends
+`mcp_tool_name` + `mcp_tool_arguments`; the gate judges write-like MCP tools by name.
+
+## Gemini CLI
+
+`axiom init --harness gemini` merges into `.gemini/settings.json` (plus `mcpServers.axiom`):
+
+<!-- init:gemini -->
+```json
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace|run_shell_command",
+        "hooks": [ { "name": "axiom-gate", "type": "command", "command": "axiom gate --stdin --format gemini", "timeout": 10000 } ]
+      }
+    ]
+  }
+}
+```
+
+The timeout is in **milliseconds**.
+
+## Junie
+
+Junie CLI runs hooks only from the user config `~/.junie/config.json`; `axiom init --harness
+junie` prints this snippet with ` --root <this repo>` appended to the command (a user hook serves
+every project):
+
+<!-- init:junie -->
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Write|Edit|Bash", "hooks": [ { "type": "command", "command": "axiom gate --stdin --format junie", "timeout": 10 } ] }
+    ]
+  }
+}
+```
+
+Junie supports `"decision": "ask"`; the gate's `--format junie` answers allow / deny only.
+
+## Kiro
+
+`axiom init --harness kiro` (auto when `.kiro/` exists) writes `.kiro/hooks/axiom-gate.json`
+([kiro.dev/docs/hooks](https://kiro.dev/docs/hooks/)):
+
+<!-- init:kiro -->
+```json
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "axiom-gate",
+      "description": "AXIOM write gate (axiom init)",
+      "trigger": "PreToolUse",
+      "matcher": "write|shell|@mcp",
+      "action": { "type": "command", "command": "axiom gate --stdin --format kiro" },
+      "timeout": 15
+    }
+  ]
+}
+```
+
+`write` and `shell` are Kiro's built-in tool categories and `@mcp` selects every MCP tool. Kiro
+sends `{hook_event_name, cwd, session_id, tool_name, tool_input}` on stdin and, for
+`PreToolUse`, **blocks on any non-zero exit** and shows stderr to the agent — so `--format kiro`
+prints nothing on stdout, the reason on stderr, and exits `2` on a deny; a crashed gate blocks
+too. MCP tool ids arrive as `mcp_<server>_<tool>`.
+
+## OpenCode
+
+OpenCode has no hook file; it loads plugins from `.opencode/plugins/`. `axiom init --harness
+opencode` (auto when `.opencode/` exists) writes `.opencode/plugins/axiom-gate.js`, one
+dependency-free ESM file
+([opencode.ai/docs/plugins](https://opencode.ai/docs/plugins/)). Its `tool.execute.before`
+hook spawns `axiom gate --stdin --format claude` (args array, no shell; on Windows
+`cmd.exe /d /s /c axiom.cmd …` with constant arguments — the payload travels on stdin) with
+`{tool_name: input.tool, tool_input: output.args, cwd: directory, session_id}`, parses the
+stdout document and **throws** on a deny or ask — which blocks the tool. A non-zero exit, a
+missing `axiom` and a 15 s timeout throw too (fail closed). `AXIOM_GATE_CMD` (a JSON argv array)
+overrides the bin, `AXIOM_GATE_TIMEOUT_MS` the timeout. The `patch` tool is sent as
+`apply_patch` with the V4A text.
+
+## ACP (Agent Client Protocol)
+
+[ACP](https://agentclientprotocol.com) clients (Zed, JetBrains, …) talk to agents over
+line-delimited JSON-RPC on stdio and have no hook API: the agent asks the **client** with
+`session/request_permission` (`toolCall.kind` = `edit`/`delete`/`move`/`execute`/…,
+`locations`, `rawInput`, `diff` content; `options` with `allow_once`/`allow_always`/
+`reject_once`/`reject_always`). `axiom acp-proxy --root <repo> -- <agent> [args…]` sits between
+the two:
+
+- every message is forwarded unchanged in both directions;
+- each `session/request_permission` is judged by the in-process gate (one payload per target:
+  `diff` paths, `locations`, a path in `rawInput`; `execute` → the shell scan; the session `cwd`
+  is learned from `session/new` / `session/load`);
+- on a **deny** the proxy answers the agent itself with the `reject_once` option (else
+  `reject_always`, else `cancelled`) and the client never sees the request; on an **allow** the
+  request goes to the client, so the human keeps the final say. An edit with no target is denied.
+
+Point the client's agent command at the proxy, e.g. in Zed `"command": "axiom", "args":
+["acp-proxy", "--root", "/abs/repo", "--", "gemini", "--experimental-acp"]`. Library users call
+`acpPermissionDecision(request, { cwd })` directly.
 
 ## Claude Desktop and other stdio clients
 

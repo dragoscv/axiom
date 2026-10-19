@@ -161,7 +161,8 @@ describe("repo.requireReference", () => {
       const r = await check(b, rule({ in: "packages/mcp/spec/nope.md" }), root);
       expect(r.verdict).toBe("fail");
       expect(r.findings[0]?.facts).toMatchObject({ source: "absent", mustChange: false });
-      expect(r.findings[0]?.message).toMatch(/neither in the plan nor in the repo/);
+      expect(r.findings[0]?.facts.in).toBe("packages/mcp/spec/nope.md");
+      expect(r.findings[0]?.facts.__provider).toBeUndefined();
     });
     it("mustChange: the repo companion does not count; the planned one does", async () => {
       const strict = rule({ in: "packages/mcp/spec/README.md", mustChange: true });
@@ -169,7 +170,7 @@ describe("repo.requireReference", () => {
       const r = await check(onlyTool, strict, root);
       expect(r.verdict).toBe("fail");
       expect(r.findings[0]?.facts).toMatchObject({ source: "absent", mustChange: true });
-      expect(r.findings[0]?.message).toMatch(/does not also change/);
+      expect(r.findings[0]?.facts.__provider).toBeUndefined();
       const both = makeBundle([
         { path: "packages/mcp/src/tools/apply.ts", content: "" },
         { path: "packages/mcp/spec/README.md", op: "overwrite", content: "apply.ts" },
@@ -281,12 +282,16 @@ describe("repo.requireReference", () => {
 
   describe("fails closed (verdict: error, provider finding)", () => {
     const trigger = () => makeBundle([{ path: "packages/mcp/src/tools/apply.ts", content: "" }]);
-    const expectProviderError = (r: Awaited<ReturnType<typeof check>>, re: RegExp) => {
+    const expectProviderError = (
+      r: Awaited<ReturnType<typeof check>>,
+      facts: Record<string, unknown>,
+    ) => {
       expect(r.verdict).toBe("error");
       expect(r.findings[0]?.predicate).toBe(PRED);
       expect(r.findings[0]?.severity).toBe("error");
       expect(r.findings[0]?.facts.code).toBe("ERR_PROVIDER_FAILED");
-      expect(r.findings[0]?.message).toMatch(re);
+      expect(r.findings[0]?.facts.__provider).toBe(true);
+      expect(r.findings[0]?.facts).toMatchObject(facts);
     };
     it("jsonPointer set but the companion is not JSON", async () => {
       const r = await check(
@@ -294,11 +299,12 @@ describe("repo.requireReference", () => {
         rule({ in: "packages/mcp/spec/broken.json", jsonPointer: "/tools" }),
         root,
       );
-      expectProviderError(r, /not valid JSON/);
+      expectProviderError(r, { in: "packages/mcp/spec/broken.json", source: "repo" });
+      expect(r.findings[0]?.facts.jsonPointer).toBeUndefined();
     });
     it("jsonPointer does not resolve", async () => {
       const r = await check(trigger(), rule({ jsonPointer: "/nope/deeper" }), root);
-      expectProviderError(r, /does not resolve/);
+      expectProviderError(r, { jsonPointer: "/nope/deeper", source: "repo" });
     });
     it("jsonPointer resolves to a number (cannot contain a string)", async () => {
       const b = makeBundle([
@@ -310,11 +316,11 @@ describe("repo.requireReference", () => {
         },
       ]);
       const r = await check(b, rule({ jsonPointer: "/n" }), root);
-      expectProviderError(r, /is a number/);
+      expectProviderError(r, { jsonPointer: "/n", source: "plan" });
     });
     it("companion is not UTF-8", async () => {
       const r = await check(trigger(), rule({ in: "packages/mcp/spec/latin1.txt" }), root);
-      expectProviderError(r, /not valid UTF-8/);
+      expectProviderError(r, { in: "packages/mcp/spec/latin1.txt", source: "repo" });
     });
     it("companion exists but cannot be read as a file", async () => {
       const r = await check(
@@ -322,7 +328,8 @@ describe("repo.requireReference", () => {
         rule({ in: "packages/mcp/spec/a-dir.json", jsonPointer: "/x" }),
         root,
       );
-      expectProviderError(r, /could not be read/);
+      expectProviderError(r, { in: "packages/mcp/spec/a-dir.json", source: "repo" });
+      expect(r.findings[0]?.facts.jsonPointer).toBeUndefined();
     });
     it("a `warn` CheckRef does not downgrade the provider error", async () => {
       const r = await runChecks({

@@ -10,6 +10,8 @@ export const ERROR_CODES = [
   "ERR_PATH_RESERVED_NAME",
   "ERR_PATH_INVALID_CHAR",
   "ERR_PATH_CASE_COLLISION",
+  /** First segment names a directory AXIOM reserves (`.axiom`, any case / 8.3 alias / realpath) (S-1305). */
+  "ERR_PATH_RESERVED_DIR",
   "ERR_SYMLINK_IN_PATH",
   "ERR_CONTAINMENT",
   "ERR_TARGET_TYPE",
@@ -40,6 +42,8 @@ export const ERROR_CODES = [
   "ERR_INVALID_PLAN",
   "ERR_INVALID_MANIFEST",
   "ERR_INVALID_PROFILE",
+  /** A profile declares a `version` newer than this binary understands (S-1307). */
+  "ERR_PROFILE_VERSION",
   // checks
   "ERR_PREDICATE_UNKNOWN",
   "ERR_PREDICATE_PARAMS",
@@ -88,6 +92,10 @@ export const ERROR_CODES = [
   "ERR_NET_DENIED",
   "ERR_NET_FAILED",
   "ERR_NOT_CANONICAL",
+  /** Loopback daemon answered without a valid response MAC / token, or from a dead pid (S-1304). */
+  "ERR_DAEMON_AUTH",
+  /** Command-line usage error: unknown verb/option, missing argument (S-1311). */
+  "ERR_USAGE",
   "ERR_UNSUPPORTED_OP",
   "ERR_INTERNAL",
 ] as const;

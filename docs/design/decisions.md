@@ -8,6 +8,8 @@ landed; "shipped in" is the release that carries the result.
 
 ```mermaid
 timeline
+  accTitle: Decisions by release
+  accDescr: Which owner decisions shaped each release from 2.0.0 to 2.2.1.
   title Decisions by release
   2.0.0 : D-01 framing · D-02 defer .axm · D-03 predicates · D-06 toolchain · D-07 scope · D-08 archive · D-09 guards · D-10 stdio · D-11 budgets · D-12 Node 22.14
   2.1.0 : D-05 PR mode · D-13 emitters · D-14 hand-written LSP · D-15 cel-js · D-16 DSSE signing

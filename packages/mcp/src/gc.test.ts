@@ -1,11 +1,12 @@
-import { mkdir, readdir, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, utimes, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { acquireLock } from "@codai/axiom-apply";
 import { sha256Hex } from "@codai/axiom-canon";
 import { casHas, casPut, compilePlan } from "@codai/axiom-plan";
 import { type AxiomError, isAxiomError } from "@codai/axiom-schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { casRootDir, collectGarbage, parseDuration } from "./gc.js";
+import { DECISIONS_FILE } from "./decisions.js";
+import { casRootDir, collectGarbage, parseDuration, pruneDecisions } from "./gc.js";
 import { saveManifest } from "./store.js";
 import { makePlan, tmpRepo } from "./test-helpers.js";
 import { captureUndo } from "./undo.js";
@@ -168,5 +169,61 @@ describe("collectGarbage", () => {
     expect(parseDuration("250")).toBe(250);
     expect(parseDuration("1w")).toBeUndefined();
     expect(parseDuration("")).toBeUndefined();
+  });
+});
+
+describe("decisions retention", () => {
+  const DAY = 86_400_000;
+  const NOW = Date.parse("2026-10-19T00:00:00.000Z");
+  const line = (daysAgo: number, id: string) =>
+    JSON.stringify({ v: 1, id, decided_at: new Date(NOW - daysAgo * DAY).toISOString() });
+  async function seed(): Promise<string> {
+    const file = path.join(repo.root, DECISIONS_FILE);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      `${[line(40, "old1"), line(31, "old2"), "{not json", line(2, "new")].join("\n")}\n`,
+    );
+    return file;
+  }
+  const ids = async (file: string) =>
+    (await readFile(file, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => (l.startsWith("{not") ? "bad" : (JSON.parse(l) as { id: string }).id));
+
+  it("pruneDecisions keeps newer + undatable lines; dry-run writes nothing", async () => {
+    const file = await seed();
+    const dry = await pruneDecisions(repo.root, 30, { now: NOW, dryRun: true });
+    expect(dry).toEqual({ kept: 2, removed: 2 });
+    expect(await ids(file)).toEqual(["old1", "old2", "bad", "new"]);
+    const r = await pruneDecisions(repo.root, 30, { now: NOW });
+    expect(r).toEqual({ kept: 2, removed: 2 });
+    expect(await ids(file)).toEqual(["bad", "new"]);
+    expect((await readdir(path.dirname(file))).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+    expect(await pruneDecisions(repo.root, 30, { now: NOW })).toEqual({ kept: 2, removed: 0 });
+  });
+
+  it("missing journal is a no-op; negative days → ERR_USAGE; a held lock → ERR_LOCKED", async () => {
+    expect(await pruneDecisions(repo.root, 7)).toEqual({ kept: 0, removed: 0 });
+    await expect(pruneDecisions(repo.root, -1)).rejects.toMatchObject({ code: "ERR_USAGE" });
+    const lock = await acquireLock(repo.root, "test", 1000);
+    try {
+      await expect(pruneDecisions(repo.root, 7, { lockTimeoutMs: 50 })).rejects.toMatchObject({
+        code: "ERR_LOCKED",
+      });
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it("collectGarbage applies decisionsOlderThanDays only when set", async () => {
+    const file = await seed();
+    const none = await collectGarbage(repo.root, { now: () => NOW });
+    expect(none.decisionsPruned).toBeUndefined();
+    expect(await ids(file)).toHaveLength(4);
+    const r = await collectGarbage(repo.root, { now: () => NOW, decisionsOlderThanDays: 35 });
+    expect(r.decisionsPruned).toBe(1);
+    expect(await ids(file)).toEqual(["old2", "bad", "new"]);
   });
 });

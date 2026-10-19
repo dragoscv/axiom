@@ -1,14 +1,23 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { loadProfile } from "@codai/axiom-checks";
 import { compilePlan } from "@codai/axiom-plan";
-import { AxiomError, type Plan, PlanSchema } from "@codai/axiom-schema";
+import { API_VERSION, AxiomError, type Plan, PlanSchema } from "@codai/axiom-schema";
 import { describe, expect, it } from "vitest";
-import { findClockKeys, migrateV1, normaliseV1Path, V1ManifestSchema } from "./migrate.js";
+import { GateProfileSchema } from "./gate.js";
+import {
+  findClockKeys,
+  migrateProfile,
+  migrateV1,
+  normaliseV1Path,
+  V1ManifestSchema,
+} from "./migrate.js";
+import { loadAxiomConfig, loadLegacyAxiomConfig } from "./profile-v3.js";
 import { tmpRepo } from "./test-helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -429,5 +438,103 @@ describe.skipIf(!existsSync(CLI))("axiom migrate v1 (dist/cli.js)", () => {
     const mainText = await readFile(join(dist, "cli-main.js"), "utf8");
     expect(mainText).not.toMatch(/^import\b[^\n]*?from\s+["']\.\/migrate-lazy/m);
     expect(mainText).toMatch(/import\(["']\.\/migrate-lazy\.js["']\)/);
+  });
+});
+
+describe("migrateV1 output apiVersion (D-41)", () => {
+  it("a migrated plan carries the canonical v3 apiVersion", async () => {
+    const { plan } = await migrateV1(
+      { version: "1.0.0", artifacts: [{ path: "a.txt", contentUtf8: "a\n" }] },
+      { version: "test" },
+    );
+    expect(plan.apiVersion).toBe(API_VERSION);
+    expect(API_VERSION).toBe("axiom.codai.ro/v3");
+  });
+});
+
+describe("migrateProfile (axiom migrate --profile, D-42)", () => {
+  async function legacyRepo() {
+    const repo = await tmpRepo("axiom-migrate-profile-");
+    await mkdir(join(repo.root, ".axiom", "profiles"), { recursive: true });
+    const gate = { version: 3, deny: ["secret/**"], ask: [".github/**"], mode: "warn", pii: true };
+    await writeFile(join(repo.root, ".axiom", "gate-profile.json"), JSON.stringify(gate));
+    const profile = {
+      apiVersion: "axiom.dev/v2",
+      kind: "Profile",
+      name: "team",
+      extends: "strict",
+      checks: [{ id: "deps.max", predicate: "deps.max", params: { max: 3 } }],
+      facts: { allowRepo: false, allowGuards: false },
+    };
+    await writeFile(join(repo.root, ".axiom", "profiles", "team.json"), JSON.stringify(profile));
+    return repo;
+  }
+
+  it("round-trip: old files → axiom.json → loadAxiomConfig yields the same gate and checks", async () => {
+    const repo = await legacyRepo();
+    try {
+      const legacyGate = GateProfileSchema.parse(
+        JSON.parse(await readFile(join(repo.root, ".axiom", "gate-profile.json"), "utf8")),
+      );
+      const legacyChecks = await loadProfile("team", {
+        searchDirs: [join(repo.root, ".axiom", "profiles")],
+      });
+
+      const r = await migrateProfile(repo.root);
+      expect(r.written).toBe(true);
+      expect(r.oldFiles).toEqual([".axiom/gate-profile.json", ".axiom/profiles/team.json"]);
+      expect(r.config.version).toBe(3);
+      expect(await readFile(r.file, "utf8")).toBe(r.json);
+      // Old files are never deleted.
+      expect(existsSync(join(repo.root, ".axiom", "gate-profile.json"))).toBe(true);
+      expect(existsSync(join(repo.root, ".axiom", "profiles", "team.json"))).toBe(true);
+
+      const cfg = await loadAxiomConfig(repo.root, { home: repo.root });
+      expect(cfg?.warnings).toEqual([]);
+      const { version: _v, ...legacyGateNoVersion } = legacyGate;
+      expect(GateProfileSchema.parse(cfg?.gate)).toEqual(legacyGateNoVersion);
+      const v3Checks = await loadProfile("team", { config: cfg?.checks });
+      expect(v3Checks).toEqual(legacyChecks);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("--dry-run writes nothing; a second run → ERR_EXISTS; empty repo → ERR_NOT_FOUND", async () => {
+    const repo = await legacyRepo();
+    try {
+      const dry = await migrateProfile(repo.root, { dryRun: true });
+      expect(dry.written).toBe(false);
+      expect(existsSync(dry.file)).toBe(false);
+      expect(dry.json).toBe(`${JSON.stringify(dry.config, null, 2)}\n`);
+      await migrateProfile(repo.root);
+      await expect(migrateProfile(repo.root)).rejects.toMatchObject({ code: "ERR_EXISTS" });
+    } finally {
+      await repo.cleanup();
+    }
+    const empty = await tmpRepo("axiom-migrate-profile-empty-");
+    try {
+      await expect(migrateProfile(empty.root)).rejects.toMatchObject({ code: "ERR_NOT_FOUND" });
+    } finally {
+      await empty.cleanup();
+    }
+  });
+
+  it("gate-only repo: checks section is empty and still loads as the builtin default chain", async () => {
+    const repo = await tmpRepo("axiom-migrate-profile-gate-");
+    try {
+      await mkdir(join(repo.root, ".axiom"), { recursive: true });
+      await writeFile(join(repo.root, ".axiom", "gate-profile.json"), '{"deny":["x/**"]}');
+      expect((await loadLegacyAxiomConfig(repo.root, "nope"))?.legacy).toBe(true);
+      const r = await migrateProfile(repo.root);
+      expect(r.oldFiles).toEqual([".axiom/gate-profile.json"]);
+      expect(r.config.checks).toEqual({});
+      const cfg = await loadAxiomConfig(repo.root, { home: repo.root });
+      expect(GateProfileSchema.parse(cfg?.gate).deny).toEqual(["x/**"]);
+      const p = await loadProfile("default", { config: cfg?.checks });
+      expect(p.checks).toEqual((await loadProfile("default")).checks);
+    } finally {
+      await repo.cleanup();
+    }
   });
 });

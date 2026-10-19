@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { CanonError } from "./digest.js";
 import {
   AXIOM_MANIFEST_PAYLOAD_TYPE,
   type DsseEnvelope,
@@ -19,6 +20,21 @@ import { pae } from "./pae.js";
 const kp = generateKeyPair();
 const trust: TrustedKey[] = [{ keyid: kp.keyid, alg: "ed25519", publicKey: kp.publicKeyBase64 }];
 const body = { kind: "Manifest", name: "p", artifacts: [{ path: "a", op: "create" }], counter: 3 };
+
+describe("key material errors carry a closed code", () => {
+  it("bad key material → CanonError ERR_SIGNATURE_INVALID", () => {
+    const codeOf = (f: () => unknown): string | undefined => {
+      try {
+        f();
+      } catch (e) {
+        return e instanceof CanonError ? e.code : "plain";
+      }
+      return undefined;
+    };
+    expect(codeOf(() => keyidFor(new Uint8Array(5)))).toBe("ERR_SIGNATURE_INVALID");
+    expect(codeOf(() => privateKeyFrom(""))).toBe("ERR_SIGNATURE_INVALID");
+  });
+});
 
 describe("DSSE protocol.md §Test Vectors", () => {
   it("PAE for the spec's HelloWorld vector (payload base64 from the envelope example)", () => {
@@ -44,7 +60,10 @@ describe("keyidFor", () => {
     expect(expected).toMatch(/^[0-9a-f]{64}$/);
   });
   it("rejects non-32-byte material", () => {
-    expect(() => keyidFor(new Uint8Array(31))).toThrow(/32 raw bytes/);
+    expect(() => keyidFor(new Uint8Array(31))).toThrow(
+      expect.objectContaining({ code: "ERR_SIGNATURE_INVALID" }),
+    );
+    expect(() => keyidFor(new Uint8Array(33))).toThrow(CanonError);
   });
 });
 

@@ -1,7 +1,10 @@
 # Command rules (`command.deny`)
 
-Since v2.6 the gate can refuse shell commands, not only file writes. Rules live in
-`.axiom/gate-profile.json` under `commands`:
+*Let the gate refuse shell commands, not only file writes: your own `deny` rules, the `house` pack, hard codes that no override unlocks, importing a PowerShell guard, and a shadow-mode cutover.*
+
+Rules live in the gate policy under `commands` — since 3.0 the `gate` section of
+`.axiom/axiom.json` (the older `.axiom/gate-profile.json` is still read, with a deprecation
+warning; file shapes in [profiles.md](../reference/profiles.md)):
 
 ```json
 {
@@ -68,6 +71,18 @@ answered by the real guard, replayed in `command-rules.test.ts`.
 | `house.playwrightLocal` | `playwright test` at a command position (allowed: `--list`, `PW_ALLOW_LOCAL=1`) | `pnpm e2e:cloud …` |
 | `house.buildUnqueued` | `pnpm build`, `typecheck`, `turbo build`, `next build`, `tsc --noEmit` outside `run-build.ps1` / `agentq.ps1` | `run-build.ps1 -Command '<cmd>'` |
 
+`axiom setup init` writes a policy with `mode: "enforce"`, `commands.pack: "house"` and four
+**hard** codes — `house.forcePush`, `house.resetHard`, `house.cleanForce`,
+`house.worktreeRemoveForce` — that are refused in every mode and cannot be overridden.
+
+## Overrides
+
+In a policy that allows overrides, a call can pass a remaining deny by carrying
+`axiom-override: <reason>` in one of the tool call's `explanation`, `goal`, `description` or
+`reason` fields, or as a trailing `# axiom-override: …` shell comment outside quotes and
+heredocs. The reason must have at least 3 words and 12 letters. Text inside the content being
+written (an `apply_patch` body, a file's new bytes) never counts, and hard codes ignore overrides.
+
 `command.deployNeedsCleanTree` (exported as `HOUSE_DEPLOY_RULE`) is not in the pack: the guard
 refuses deploys (`gcloud run deploy`, `docker push`, `terraform apply`, publishing, …) only when
 the git tree is dirty, so the gate adds this rule only when its git-state fact reports a dirty
@@ -77,7 +92,7 @@ session ownership — are separate gate modules, not command rules.
 ## Importing an existing guard
 
 ```sh
-axiom import-guard guard.ps1 -o commands.json
+axiom setup import-guard guard.ps1 -o commands.json
 ```
 
 Every `@{ … }` / `[ordered]@{ … }` table of `'regex' = "reason"` entries becomes a list of rules
@@ -85,13 +100,13 @@ with ids `imported.1`, `imported.2`, …. Inline `(?i)` is dropped (rules are ca
 default). Constructs JavaScript cannot express — atomic groups, possessive quantifiers, balancing
 groups, `(?x)`, class subtraction — and strings with `$variable` interpolation are listed under
 `skipped` with the line number and the reason, never translated approximately. Paste `commands`
-into `.axiom/gate-profile.json`. Checks outside hashtables (if-blocks) are not imported.
+into the gate policy. Checks outside hashtables (if-blocks) are not imported.
 
 ## Shadow mode and cutover
 
 Replace a guard only after it has run beside AXIOM without disagreement (decision D-39):
 
-1. Set `"shadow": true` in the gate profile. Verdicts of the v2.6 rules (`commands`,
+1. Set `"shadow": true` in the gate policy. Verdicts of the command and state rules (`commands`,
   `coordination`, `git`, `sessions`) are not enforced: the call goes on, and the journal line in
   `.axiom/decisions.jsonl` records what the gate would have decided (`shadow: true`, `rule`) plus
   the command text. The path and content predicates (`deny`, `allow`, `noSecrets`, `maxBytes`)

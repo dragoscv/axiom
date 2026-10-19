@@ -1,0 +1,35 @@
+{
+  "name": "@codai/axiom-hook-win32-x64",
+  "version": "2.7.0",
+  "description": "Native axiom-hook gate client for win32-x64 (installed as an optional dependency of @codai/axiom-mcp)",
+  "license": "MIT",
+  "author": "Dragos Catalin Vladulescu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dragoscv/axiom.git",
+    "directory": "packages/axiom-hook-win32-x64"
+  },
+  "homepage": "https://github.com/dragoscv/axiom/tree/main/crates/axiom-hook#readme",
+  "bugs": {
+    "url": "https://github.com/dragoscv/axiom/issues"
+  },
+  "keywords": [
+    "axiom",
+    "hook",
+    "gate",
+    "native"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

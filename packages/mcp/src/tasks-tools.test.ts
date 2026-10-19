@@ -384,7 +384,7 @@ describe("factory sharing", () => {
     const { createRootsPolicy } = await import("./roots.js");
     const { Client, InMemoryTransport } = await import("@modelcontextprotocol/client");
     const policy = await createRootsPolicy([repo.root]);
-    const factory = serverFactory(policy, { tasks });
+    const factory = serverFactory(policy, { tasks, toolset: "full" });
     const connect = async () => {
       const server = factory({ era: "legacy" } as never);
       const [ct, st] = InMemoryTransport.createLinkedPair();

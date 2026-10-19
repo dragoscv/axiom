@@ -8,8 +8,8 @@ authors:
 repository-code: https://github.com/dragoscv/axiom
 url: https://dragoscv.github.io/axiom/
 license: MIT
-version: 2.2.1
-date-released: "2026-09-21"
+version: 2.7.0
+date-released: "2026-10-19"
 keywords:
   - mcp
   - coding-agents

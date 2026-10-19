@@ -17,6 +17,9 @@ on:
       - "packages/apply/src/**"
       - "packages/checks/src/**"
       - "packages/mcp/src/roots*.ts"
+      - "packages/mcp/src/gate*.ts"
+      - "packages/mcp/src/command-rules.ts"
+      - "packages/mcp/src/shell-lex.ts"
       - "scripts/mutation-smoke.mjs"
       - ".github/workflows/mutation.yml"
   pull_request:
@@ -26,6 +29,9 @@ on:
       - "packages/apply/src/**"
       - "packages/checks/src/**"
       - "packages/mcp/src/roots*.ts"
+      - "packages/mcp/src/gate*.ts"
+      - "packages/mcp/src/command-rules.ts"
+      - "packages/mcp/src/shell-lex.ts"
       - "scripts/mutation-smoke.mjs"
       - ".github/workflows/mutation.yml"
   workflow_dispatch:

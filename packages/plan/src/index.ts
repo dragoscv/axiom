@@ -1,5 +1,5 @@
 export { decodeBlob, encodeBlob, isTextSafe } from "./blob.js";
-export { casGet, casHas, casPath, casPut } from "./cas.js";
+export { casGet, casGetUnverified, casHas, casPath, casPut } from "./cas.js";
 export {
   AXIOM_VERSION,
   type CompileOptions,

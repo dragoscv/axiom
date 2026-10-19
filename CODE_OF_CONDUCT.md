@@ -59,10 +59,12 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at the maintainer
-via GitHub private message or a report at
-https://github.com/dragoscv/axiom/security/advisories/new (mark it Code of
-Conduct). All complaints will be reviewed and investigated promptly and fairly.
+reported to the community leaders responsible for enforcement through a private
+report at https://github.com/dragoscv/axiom/security/advisories/new (title it
+"Code of Conduct"; only the maintainer can see it). If that is not possible,
+open an issue asking the maintainer to contact you — without any details of the
+incident — and the conversation continues privately. All complaints will be
+reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.

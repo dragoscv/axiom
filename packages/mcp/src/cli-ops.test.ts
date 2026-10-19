@@ -166,7 +166,7 @@ describe.skipIf(!hasDist)("cli ops verbs (dist/cli.js)", () => {
     // JSON is valid YAML 1.2 flow syntax; add a comment + block style header to make it real YAML.
     await writeFile(
       yamlFile,
-      `# yaml-language-server: $schema=../schemas/plan.json\napiVersion: axiom.dev/v2\nkind: Plan\nname: twin\nintent: ${JSON.stringify(plan.intent)}\nartifacts: ${JSON.stringify(plan.artifacts)}\n`,
+      `# yaml-language-server: $schema=../schemas/plan.json\napiVersion: ${plan.apiVersion}\nkind: Plan\nname: twin\nintent: ${JSON.stringify(plan.intent)}\nartifacts: ${JSON.stringify(plan.artifacts)}\n`,
     );
     const a = await run(["compile", jsonFile, "-o", join(repo.root, "a.json")]);
     const b = await run(["compile", yamlFile, "-o", join(repo.root, "b.json")]);

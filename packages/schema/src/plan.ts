@@ -3,8 +3,18 @@ import { CheckRefSchema } from "./check.js";
 import { DigestRefSchema } from "./digest.js";
 import { RelPathSchema } from "./path.js";
 
-export const API_VERSION = "axiom.dev/v2" as const;
-export const ApiVersionSchema = z.literal(API_VERSION);
+/** Canonical wire `apiVersion` (3.0, D-41): every document AXIOM 3.x creates carries it. */
+export const API_VERSION = "axiom.codai.ro/v3" as const;
+/** The 2.x `apiVersion`: still parsed everywhere through 3.x so stored documents keep working. */
+export const API_VERSION_V2 = "axiom.dev/v2" as const;
+/** Every accepted `apiVersion`, canonical first. */
+export const API_VERSIONS = [API_VERSION, API_VERSION_V2] as const;
+export const ApiVersionSchema = z.enum(API_VERSIONS);
+
+/** True for the 2.x `apiVersion` (`axiom.dev/v2`). */
+export function isLegacyApiVersion(v: unknown): v is typeof API_VERSION_V2 {
+  return v === API_VERSION_V2;
+}
 
 /** Per-blob inline limit: 256 KiB of string content (≈192 KiB decoded when base64). */
 export const INLINE_CONTENT_MAX = 256 * 1024;
@@ -113,7 +123,7 @@ export const PlanSchema = z
   })
   .strict();
 
-export type ApiVersion = typeof API_VERSION;
+export type ApiVersion = (typeof API_VERSIONS)[number];
 export type ArtifactMode = z.infer<typeof ArtifactModeSchema>;
 export type ArtifactOp = z.infer<typeof ArtifactOpSchema>;
 export type Capability = z.infer<typeof CapabilitySchema>;

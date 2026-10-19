@@ -2,6 +2,7 @@ import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
 import { canonicalDigestRef } from "@codai/axiom-canon";
 import {
+  API_VERSION,
   type CheckRef,
   type CheckReport,
   compareUtf8,
@@ -270,7 +271,7 @@ export async function runChecks(opts: RunChecksOptions): Promise<CheckReport> {
       : "pass";
 
   return {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: API_VERSION,
     kind: "CheckReport",
     manifestDigest: bundle.manifestDigest,
     profile: profile.name,

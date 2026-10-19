@@ -2,10 +2,30 @@
   "$schema": "https://unpkg.com/@changesets/config@3.0.3/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [["@codai/axiom-*"]],
+  "fixed": [
+    [
+      "@codai/axiom-apply",
+      "@codai/axiom-axm",
+      "@codai/axiom-axm-lsp",
+      "@codai/axiom-canon",
+      "@codai/axiom-checks",
+      "@codai/axiom-emitters-web",
+      "@codai/axiom-hook-darwin-arm64",
+      "@codai/axiom-hook-darwin-x64",
+      "@codai/axiom-hook-linux-arm64",
+      "@codai/axiom-hook-linux-x64",
+      "@codai/axiom-hook-win32-x64",
+      "@codai/axiom-mcp",
+      "@codai/axiom-plan",
+      "@codai/axiom-schema"
+    ]
+  ],
   "linked": [],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@codai/axiom-testkit", "@codai/axiom-conformance"]
+  "ignore": [
+    "@codai/axiom-testkit",
+    "@codai/axiom-conformance"
+  ]
 }

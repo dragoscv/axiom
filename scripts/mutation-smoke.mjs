@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Mutation smoke (D-38, replaces Stryker S-110 while @stryker-mutator/vitest-runner is not
- * Vitest-5 aware). A fixed catalog of mutants on the security decisions of the write gate:
+ * Vitest-5 aware). A fixed catalog of 32 mutants on the security decisions of the write gate:
  * each mutant flips exactly one decision, the owning package's tests run, and the mutant must
  * be KILLED (tests fail). A survivor means that decision is untested — the run exits 1.
  *
@@ -168,6 +168,119 @@ export const MUTANTS = [
     find: "return c.startsWith(p.endsWith(path.sep) ? p : p + path.sep);",
     replace: "return c.startsWith(p);",
     why: "--root containment must be separator-aware (/r/ab is not inside /r/a)",
+  },
+  {
+    id: "rollback-skip-step",
+    file: "packages/apply/src/apply.ts",
+    pkg: "packages/apply",
+    find: "for (let i = j.steps.length - 1; i >= 0; i--) {",
+    replace: "for (let i = j.steps.length - 1; i >= 1; i--) {",
+    why: "rollback must replay every journal step (the first one included)",
+  },
+  {
+    id: "recover-ignore-committing",
+    file: "packages/apply/src/apply.ts",
+    pkg: "packages/apply",
+    find: 'if (j.phase === "committing" || j.phase === "rolling-back") {',
+    replace: 'if (j.phase === "rolling-back") {',
+    why: "crash recovery must roll back a journal left in phase committing",
+  },
+  {
+    id: "journal-backup-containment",
+    file: "packages/apply/src/apply.ts",
+    pkg: "packages/apply",
+    find: "if (step.backup !== undefined && step.backup !== `${prefix}${step.path}`) {",
+    replace: "if (false && step.backup !== undefined && step.backup !== `${prefix}${step.path}`) {",
+    why: "a planted journal whose backup points outside its own backup set is ERR_JOURNAL_CORRUPT",
+  },
+  {
+    id: "reserved-dir-case",
+    file: "packages/apply/src/contain.ts",
+    pkg: "packages/apply",
+    find: 'return first.normalize("NFC").toLowerCase() === RESERVED_DIR;',
+    replace: 'return first.normalize("NFC") === RESERVED_DIR;',
+    why: ".AXIOM/x must be refused like .axiom/x (case-insensitive reserved dir)",
+  },
+  {
+    id: "lock-never-locked",
+    file: "packages/apply/src/lock.ts",
+    pkg: "packages/apply",
+    find: '      if (now >= deadline) {\n        throw new AxiomError("ERR_LOCKED", "another apply holds the root lock", {',
+    replace:
+      '      if (false && now >= deadline) {\n        throw new AxiomError("ERR_LOCKED", "another apply holds the root lock", {',
+    why: "a held root lock must surface ERR_LOCKED after the wait deadline",
+  },
+  {
+    id: "chain-prev-mismatch",
+    file: "packages/apply/src/journal.ts",
+    pkg: "packages/apply",
+    find: 'if (entry.prev !== prev) return { good, firstBad: { seq, reason: "prev-mismatch" } };',
+    replace: "",
+    why: "a journal chain entry whose prev hash does not match must be reported as broken",
+  },
+  {
+    id: "gate-fail-open-always",
+    file: "packages/mcp/src/gate.ts",
+    pkg: "packages/mcp",
+    find: '    if (opts.failOpen === true) {\n      log("warn", `${why} — failing open (--fail-open)`);',
+    replace: '    if (true) {\n      log("warn", `${why} — failing open (--fail-open)`);',
+    why: "an internal error must deny (fail-closed) unless --fail-open was passed",
+  },
+  {
+    id: "force-push-cluster",
+    file: "packages/mcp/src/command-rules.ts",
+    pkg: "packages/mcp",
+    find: '(o) => longOpt(o, "force-with-lease", 3) || longOpt(o, "mirror", 2) || shortHas(o, "f"),',
+    replace: '(o) => longOpt(o, "force-with-lease", 3) || longOpt(o, "mirror", 2),',
+    why: "git push -uf / -fu (short-flag clusters) must be detected as a force-push",
+  },
+  {
+    id: "shell-lex-newline",
+    file: "packages/mcp/src/shell-lex.ts",
+    pkg: "packages/mcp",
+    find: '    if (c === "\\n") {\n      push(false);',
+    replace: '    if (false && c === "\\n") {\n      push(false);',
+    why: "a newline separates shell segments (a second command on its own line is judged)",
+  },
+  {
+    id: "override-reason-words",
+    file: "packages/mcp/src/gate.ts",
+    pkg: "packages/mcp",
+    find: "return words.length >= 3 && letters >= 12;",
+    replace: "return letters >= 12;",
+    why: "an override reason needs >= 3 words (one long token is not a reason)",
+  },
+  {
+    id: "gate-hard-first",
+    file: "packages/mcp/src/gate.ts",
+    pkg: "packages/mcp",
+    find: "const v = found.find((x) => isHardCode(profile.hard, x.id)) ?? found[0];",
+    replace: "const v = found[0];",
+    why: "when several rules match, the hard one decides the verdict",
+  },
+  {
+    id: "glob-nocase-default",
+    file: "packages/checks/src/predicates/util.ts",
+    pkg: "packages/checks",
+    find: "nocase: opts.nocase ?? DEFAULT_GLOB_NOCASE,",
+    replace: "nocase: opts.nocase ?? false,",
+    why: "path globs default to case-insensitive on win32/darwin (.ENV is .env)",
+  },
+  {
+    id: "daemon-mac-skip",
+    file: "packages/mcp/src/daemon-client.ts",
+    pkg: "packages/mcp",
+    find: "if (exit < 0 || !verifyDaemonMac(key, nonce, exit, out, mac)) {",
+    replace: "if (exit < 0) {",
+    why: "a daemon verdict without a valid x-axiom-mac must not be trusted",
+  },
+  {
+    id: "ref-cas-rehash",
+    file: "packages/plan/src/ref.ts",
+    pkg: "packages/plan",
+    find: "const actual = sha256Hex(bytes);\n  if (actual !== hex) {",
+    replace: "const actual = sha256Hex(bytes);\n  if (false && actual !== hex) {",
+    why: "a poisoned CAS entry under a pinned ref digest is ERR_DIGEST_MISMATCH",
   },
 ];
 

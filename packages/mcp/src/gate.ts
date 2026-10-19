@@ -43,12 +43,13 @@ import {
   contentMaxBytes,
   contentNoSecrets,
   type FactContext,
+  globMatcher,
   pathAllow,
   pathDeny,
 } from "@codai/axiom-checks";
 import { type ErrorCode, isAxiomError, relPathIssues } from "@codai/axiom-schema";
 import { z } from "zod";
-import { CommandsConfigSchema, evaluateCommand } from "./command-rules.js";
+import { CommandsConfigSchema, evaluateCommandRules } from "./command-rules.js";
 import { CoordinationSchema, evaluateCoordination } from "./coord.js";
 import { appendDecision, hashArgs, principalSubject } from "./decisions.js";
 import {
@@ -70,6 +71,7 @@ import {
 import type { RuleVerdict } from "./gate-verdict.js";
 import { evaluateGit, type GitRules, GitRulesSchema } from "./gitfacts.js";
 import { postMain } from "./post-write.js";
+import { loadAxiomConfig } from "./profile-v3.js";
 import {
   checkSessionWrite,
   checkStaleScript,
@@ -79,7 +81,16 @@ import {
   SessionsConfigSchema,
   type SessionTarget,
 } from "./session-guard.js";
-import { captureUndo } from "./undo.js";
+import {
+  expandNested,
+  findTrailingOverride,
+  normalizeGit,
+  programName,
+  shellWords,
+  splitSegments,
+  stripTrailingOverride,
+} from "./shell-lex.js";
+import { captureOutsideUndo, captureUndo } from "./undo.js";
 
 export {
   allowStdout,
@@ -109,6 +120,11 @@ export const GATE_DENY_EXIT_DEFAULT = 0;
 
 export const GateProfileSchema = z
   .object({
+    /**
+     * Profile format major (3.0, D-42). Absent = written for 2.x. A profile declaring a major
+     * newer than this binary is refused (`ERR_PROFILE_VERSION`) instead of half-understood.
+     */
+    version: z.int().positive().optional(),
     /** picomatch globs (dot: true) — any match denies. */
     deny: z.array(z.string().min(1)).default([]),
     /**
@@ -125,6 +141,12 @@ export const GateProfileSchema = z
     noSecrets: z.boolean().default(true),
     /** Also scan for PII (`cnp`, `email`, `phoneRo`, `card`) — `content.noSecrets { pii }`. */
     pii: z.boolean().default(false),
+    /**
+     * Globs where the PII-class `content.noSecrets` findings (email, phone, CNP, card,
+     * credentialAssignment) are ignored — test fixtures and scratch dirs (3.0, S-1313).
+     * Real keys (privateKey, awsKey, tokens) are still reported everywhere.
+     */
+    noSecretsExclude: z.array(z.string().min(1)).optional(),
     /** Run `content.maxBytes` on the new content when the payload carries it. */
     maxBytes: z.int().positive().optional(),
     /**
@@ -172,7 +194,30 @@ export const GateProfileSchema = z
      */
     outside: z.enum(["deny", "warn", "allow"]).default("deny"),
   })
-  .strict();
+  // Unknown keys are ignored with a warning (3.0, D-42): a newer profile read by an older bin
+  // must neither deny every write nor (with --fail-open) switch the gate off.
+  .strip();
+
+/** Highest profile `version` this binary understands. */
+export const GATE_PROFILE_VERSION = 3;
+
+/** A gate profile that cannot be used: never covered by `--fail-open` (S-1307). */
+export class GateProfileError extends Error {
+  readonly code: "ERR_INVALID_PROFILE" | "ERR_PROFILE_VERSION";
+  constructor(code: "ERR_INVALID_PROFILE" | "ERR_PROFILE_VERSION", message: string) {
+    super(message);
+    this.name = "GateProfileError";
+    this.code = code;
+  }
+}
+
+const GATE_PROFILE_KEYS: ReadonlySet<string> = new Set(Object.keys(GateProfileSchema.shape));
+
+/** Top-level keys of a raw profile this binary does not know (reported, then ignored). */
+export function unknownGateProfileKeys(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return [];
+  return Object.keys(raw).filter((k) => !GATE_PROFILE_KEYS.has(k) && k !== "$schema");
+}
 
 export type GateProfile = z.infer<typeof GateProfileSchema>;
 export type GateProfileInput = z.input<typeof GateProfileSchema>;
@@ -207,7 +252,7 @@ export async function loadGateProfile(opts: {
   root: string;
   profilePath?: string;
   home?: string;
-}): Promise<{ profile: GateProfile; source: string }> {
+}): Promise<{ profile: GateProfile; source: string; unknownKeys?: string[] }> {
   const candidates: string[] = [];
   if (opts.profilePath !== undefined) candidates.push(path.resolve(opts.profilePath));
   candidates.push(path.join(opts.root, ".axiom", "gate-profile.json"));
@@ -220,21 +265,44 @@ export async function loadGateProfile(opts: {
       if (errno(err) === "ENOENT" || errno(err) === "ENOTDIR") {
         // An explicit --profile that does not exist is a configuration error, not a fallback.
         if (file === candidates[0] && opts.profilePath !== undefined)
-          throw new Error(`gate profile not found: ${file}`);
+          throw new GateProfileError("ERR_INVALID_PROFILE", `gate profile not found: ${file}`);
         continue;
       }
       throw err;
     }
-    const parsed = GateProfileSchema.safeParse(JSON.parse(text));
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (err) {
+      throw new GateProfileError(
+        "ERR_INVALID_PROFILE",
+        `${file}: not valid JSON (${err instanceof Error ? err.message : String(err)}) — fix it or run 'axiom init --force'`,
+      );
+    }
+    const declared =
+      raw !== null && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;
+    if (typeof declared === "number" && declared > GATE_PROFILE_VERSION) {
+      throw new GateProfileError(
+        "ERR_PROFILE_VERSION",
+        `${file}: profile version ${declared} is newer than this axiom (understands ≤ ${GATE_PROFILE_VERSION}); upgrade the axiom bin`,
+      );
+    }
+    const parsed = GateProfileSchema.safeParse(raw);
     if (!parsed.success) {
-      throw new Error(
+      throw new GateProfileError(
+        "ERR_INVALID_PROFILE",
         `invalid gate profile ${file}: ${parsed.error.issues
           .slice(0, 5)
           .map((i) => `${i.path.join(".")}: ${i.message}`)
           .join("; ")}`,
       );
     }
-    return { profile: parsed.data, source: file };
+    const unknownKeys = unknownGateProfileKeys(raw);
+    return {
+      profile: parsed.data,
+      source: file,
+      ...(unknownKeys.length === 0 ? {} : { unknownKeys }),
+    };
   }
   return { profile: DEFAULT_GATE_PROFILE, source: "builtin" };
 }
@@ -431,6 +499,12 @@ const PATH_KEYS = [
   "targetFile",
   "file",
   "uri",
+  "newPath",
+  "new_path",
+  "destination",
+  "target",
+  "dirPath",
+  "dir_path",
 ] as const;
 const CONTENT_KEYS = [
   "content",
@@ -456,6 +530,12 @@ const SHELL_COMMAND_KEYS = ["command", "cmd", "script", "commandLine", "command_
 function commandString(input: Record<string, unknown>): string | undefined {
   const s = firstString(input, SHELL_COMMAND_KEYS);
   if (s !== undefined) return s;
+  // VS Code `create_and_run_task`: `{ task: { command, args } }`.
+  const task = asRecord(input.task);
+  if (task !== undefined && typeof task.command === "string") {
+    const args = Array.isArray(task.args) ? task.args.filter((a) => typeof a === "string") : [];
+    return [task.command, ...args].join(" ");
+  }
   for (const k of SHELL_COMMAND_KEYS) {
     const v = input[k];
     if (Array.isArray(v) && v.length > 0 && v.every((w) => typeof w === "string")) {
@@ -476,7 +556,6 @@ function commandString(input: Record<string, unknown>): string | undefined {
  * guarantee, the gate is the seatbelt.
  */
 const REDIRECT_RE = /(?:^|[\s;&|])(?:\d?>{1,2}|&>)\s*("([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
-const SHELL_SPLIT_RE = /(?:^|[;&|]+|\|\||&&)\s*/;
 const WRITE_CMDS: Record<string, { skipFlags: boolean; operands: "all" | "last" | "afterI" }> = {
   tee: { skipFlags: true, operands: "all" },
   rm: { skipFlags: true, operands: "all" },
@@ -493,27 +572,28 @@ const WRITE_CMDS: Record<string, { skipFlags: boolean; operands: "all" | "last" 
   dd: { skipFlags: false, operands: "all" },
   sed: { skipFlags: true, operands: "afterI" },
   "remove-item": { skipFlags: true, operands: "all" },
+  ri: { skipFlags: true, operands: "all" },
+  rd: { skipFlags: true, operands: "all" },
   "set-content": { skipFlags: true, operands: "all" },
+  sc: { skipFlags: true, operands: "all" },
   "add-content": { skipFlags: true, operands: "all" },
+  ac: { skipFlags: true, operands: "all" },
   "out-file": { skipFlags: true, operands: "all" },
   "move-item": { skipFlags: true, operands: "all" },
+  mi: { skipFlags: true, operands: "all" },
   "copy-item": { skipFlags: true, operands: "all" },
+  ci: { skipFlags: true, operands: "all" },
+  cpi: { skipFlags: true, operands: "all" },
   "new-item": { skipFlags: true, operands: "all" },
+  ni: { skipFlags: true, operands: "all" },
   del: { skipFlags: true, operands: "all" },
   erase: { skipFlags: true, operands: "all" },
   move: { skipFlags: true, operands: "all" },
   copy: { skipFlags: true, operands: "all" },
 };
 const GIT_WRITE_SUBCMDS = new Set(["checkout", "reset", "clean", "restore", "rm", "mv", "stash"]);
-
-function shellWords(segment: string): string[] {
-  const out: string[] = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  for (let m = re.exec(segment); m !== null; m = re.exec(segment)) {
-    out.push(m[1] ?? m[2] ?? m[3] ?? "");
-  }
-  return out;
-}
+/** PowerShell aliases that map to a delete. */
+const DELETE_CMDS = new Set(["rm", "rmdir", "unlink", "del", "erase", "remove-item", "ri", "rd"]);
 
 function looksLikePath(word: string): boolean {
   if (word === "" || word === "-" || word === "--") return false;
@@ -534,12 +614,15 @@ export function extractShellWriteTargets(command: string): GateTarget[] {
     seen.add(rawPath);
     out.push({ rawPath, op, content: undefined });
   };
-  for (let m = REDIRECT_RE.exec(command); m !== null; m = REDIRECT_RE.exec(command)) {
-    const target = m[2] ?? m[3] ?? m[4] ?? "";
-    if (target !== "" && !/^&\d$/.test(target) && !/^\/dev\//.test(target)) push(target, "write");
-  }
-  REDIRECT_RE.lastIndex = 0;
-  for (const seg of command.split(SHELL_SPLIT_RE)) {
+  // Every segment (split on ; & | && || and newlines, heredoc bodies dropped) plus the
+  // commands nested in `cmd /c`, `bash -c`, `pwsh -Command`, `-EncodedCommand`, `iex '…'`.
+  const segments = splitSegments(stripTrailingOverride(command)).flatMap((s) => expandNested(s));
+  for (const seg of segments) {
+    for (let m = REDIRECT_RE.exec(seg); m !== null; m = REDIRECT_RE.exec(seg)) {
+      const target = m[2] ?? m[3] ?? m[4] ?? "";
+      if (target !== "" && !/^&\d$/.test(target) && !/^\/dev\//.test(target)) push(target, "write");
+    }
+    REDIRECT_RE.lastIndex = 0;
     const words = shellWords(seg);
     // skip env assignments and sudo/exec prefixes
     let i = 0;
@@ -549,18 +632,29 @@ export function extractShellWriteTargets(command: string): GateTarget[] {
       ["sudo", "exec", "command", "nohup", "time"].includes(words[i] ?? "")
     )
       i++;
-    const cmd = (words[i] ?? "").toLowerCase().replace(/^.*[\\/]/, "");
+    const cmd = programName(words.slice(i));
     const rest = words.slice(i + 1);
     if (cmd === "git") {
-      const sub = rest.find((w) => !w.startsWith("-"));
+      // Global options (`-C <dir>`, `-c k=v`, `--git-dir=…`) come before the subcommand.
+      const g = normalizeGit(words.slice(i));
+      const sub = g?.sub;
       if (sub !== undefined && GIT_WRITE_SUBCMDS.has(sub)) {
-        const afterSub = rest.slice(rest.indexOf(sub) + 1);
+        const afterSub = g?.args ?? [];
         const dd = afterSub.indexOf("--");
         const operands =
           dd === -1 ? afterSub.filter((w) => !w.startsWith("-")) : afterSub.slice(dd + 1);
-        if (sub === "clean" || (sub === "reset" && afterSub.includes("--hard")))
+        if (sub === "clean" || (sub === "reset" && afterSub.includes("--hard"))) {
           push(".", "delete");
-        for (const p of operands) push(p, sub === "rm" || sub === "clean" ? "delete" : "write");
+          continue;
+        }
+        for (const p of operands) push(p, sub === "rm" ? "delete" : "write");
+      }
+      continue;
+    }
+    if (cmd === "find") {
+      if (rest.includes("-delete")) {
+        const start = rest.find((w) => !w.startsWith("-"));
+        push(start ?? ".", "delete");
       }
       continue;
     }
@@ -596,7 +690,7 @@ export function extractShellWriteTargets(command: string): GateTarget[] {
       continue;
     }
     let operands: string[];
-    if (cmd.includes("-")) {
+    if (cmd.includes("-") || /^(ri|rd|sc|ac|mi|ci|cpi|ni)$/.test(cmd)) {
       // PowerShell cmdlet: named parameters. Path-bearing ones name the target; every other
       // `-Name value` pair is skipped so `-Value "x"` is not mistaken for a file.
       operands = [];
@@ -614,6 +708,13 @@ export function extractShellWriteTargets(command: string): GateTarget[] {
       for (let k = 0; k < rest.length; k++) {
         const w = rest[k] ?? "";
         if (w.startsWith("-")) {
+          // `-Path:value` binds the value in the same token.
+          const colon = w.indexOf(":");
+          if (colon > 1) {
+            const pname = w.slice(1, colon).toLowerCase();
+            if (PATH_PARAMS.includes(pname)) operands.push(w.slice(colon + 1));
+            continue;
+          }
           const name = w.slice(1).toLowerCase();
           const val = rest[k + 1];
           if (PATH_PARAMS.includes(name) && val !== undefined) operands.push(val);
@@ -627,15 +728,7 @@ export function extractShellWriteTargets(command: string): GateTarget[] {
     } else {
       operands = rule.skipFlags ? rest.filter((w) => !w.startsWith("-") || w === "-") : rest;
     }
-    const op: "write" | "delete" =
-      cmd === "rm" ||
-      cmd === "rmdir" ||
-      cmd === "unlink" ||
-      cmd === "del" ||
-      cmd === "erase" ||
-      cmd === "remove-item"
-        ? "delete"
-        : "write";
+    const op: "write" | "delete" = DELETE_CMDS.has(cmd) ? "delete" : "write";
     if (rule.operands === "last") {
       const last = operands[operands.length - 1];
       if (last !== undefined) push(last, op);
@@ -834,6 +927,14 @@ export async function resolveGateTarget(
     throw new GateDeny("ERR_CONTAINMENT", "target escapes root", supplied);
   }
   const relPosix = rel.split(path.sep).join("/");
+  // Windows 8.3 short names (`VERYLO~1`) alias a long name the globs were written for (P0-5).
+  if (IS_WIN32 && relPosix.split("/").some((s) => /~\d+(\.[^.]*)?$/.test(s))) {
+    throw new GateDeny(
+      "ERR_PATH_SEGMENT",
+      "8.3 short-name path segment: use the long name",
+      relPosix,
+    );
+  }
   const issues = relPathIssues(relPosix);
   const first = issues[0];
   if (first !== undefined) {
@@ -887,7 +988,7 @@ export function buildGateContext(targets: readonly ResolvedGateTarget[]): FactCo
     };
   });
   const manifest = {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: "axiom.codai.ro/v3",
     kind: "Manifest",
     name: "gate",
     profile: "gate",
@@ -934,38 +1035,75 @@ export async function gatePredicateDenies(
   if (profile.allow !== undefined && profile.allow.length > 0)
     findings.push(...(await pathAllow.run(ctx, { globs: profile.allow })));
   const hasContent = targets.some((t) => t.target.content !== undefined);
-  if (hasContent && profile.noSecrets)
+  if (hasContent && profile.noSecrets) {
+    const found = await contentNoSecrets.run(ctx, {
+      disable: [],
+      allowPaths: [],
+      pii: profile.pii,
+    });
+    const excluded =
+      profile.noSecretsExclude === undefined || profile.noSecretsExclude.length === 0
+        ? undefined
+        : globMatcher(profile.noSecretsExclude, false);
     findings.push(
-      ...(await contentNoSecrets.run(ctx, { disable: [], allowPaths: [], pii: profile.pii })),
+      ...found.filter(
+        (f) =>
+          excluded === undefined ||
+          f.path === undefined ||
+          !PII_CLASS_IDS.has(f.id) ||
+          !excluded(f.path),
+      ),
     );
+  }
   if (hasContent && profile.maxBytes !== undefined)
     findings.push(...(await contentMaxBytes.run(ctx, { max: profile.maxBytes })));
   return findings.map((f) => new GateDeny(f.id, f.message, f.path));
 }
 
+/** `content.noSecrets` ids that `noSecretsExclude` may silence (never real credentials). */
+const PII_CLASS_IDS: ReadonlySet<string> = new Set([
+  "content.noSecrets.email",
+  "content.noSecrets.phoneRo",
+  "content.noSecrets.cnp",
+  "content.noSecrets.card",
+  "content.noSecrets.credentialAssignment",
+]);
+
 // ------------------------------------------------------------- relaxation --
 
-/** `axiom-override: <reason>` — the reason runs to the end of the line, 8..300 chars. */
-const OVERRIDE_RE = /axiom-override:\s*([^\r\n]{8,300})/i;
-/** Tool-input fields an agent writes prose into (never file content). */
-const OVERRIDE_KEYS = [
-  "explanation",
-  "goal",
-  "description",
-  "reason",
-  "justification",
-  "command",
-] as const;
+/** `axiom-override: <reason>` — the reason runs to the end of the line. */
+const OVERRIDE_RE = /axiom-override:\s*([^\r\n]{1,300})/i;
+/**
+ * Tool-input fields an agent writes PROSE into (never file content, never the command body:
+ * 3.0, D-44). A shell command may carry the override only as a trailing `# axiom-override:`
+ * comment outside quotes and heredocs — see {@link findTrailingOverride}.
+ */
+const OVERRIDE_KEYS = ["explanation", "goal", "description", "reason", "justification"] as const;
 
-/** The override reason the agent stated in the tool call, or `undefined`. */
-export function findOverrideReason(input: Record<string, unknown>): string | undefined {
+/** ≥ 3 words with letters and ≥ 12 letters in total: "ok ok ok" or "........" is not a reason. */
+export function isOverrideReason(reason: string): boolean {
+  const words = reason.split(/\s+/).filter((w) => /\p{L}/u.test(w));
+  const letters = (reason.match(/\p{L}/gu) ?? []).length;
+  return words.length >= 3 && letters >= 12;
+}
+
+/**
+ * The override reason the agent stated in the tool call, or `undefined`. `command` is the
+ * shell command of a shell-class tool (only its trailing comment counts); pass `undefined`
+ * for every other tool so an apply_patch body or file content can never unlock a deny.
+ */
+export function findOverrideReason(
+  input: Record<string, unknown>,
+  command?: string,
+): string | undefined {
   for (const k of OVERRIDE_KEYS) {
     const v = input[k];
     if (typeof v !== "string") continue;
     const m = OVERRIDE_RE.exec(v);
     const reason = m?.[1]?.replace(/["'`]+\s*$/, "").trim();
-    if (reason !== undefined && reason.length >= 8) return reason;
+    if (reason !== undefined && isOverrideReason(reason)) return reason;
   }
+  if (command !== undefined) return findTrailingOverride(command);
   return undefined;
 }
 
@@ -999,7 +1137,7 @@ const SYSTEM_DIRS_POSIX = [
 
 /** Operating-system directories: `outside: "allow"` still warns for these. */
 export function isSystemPath(abs: string, win32: boolean = IS_WIN32): boolean {
-  const p = abs.replace(/\\/g, "/");
+  const p = abs.replace(/\\/g, "/").replace(/^\/\/[?.]\/|^\/\?\?\//, "");
   const under = (dir: string, s: string) => s === dir || s.startsWith(`${dir}/`);
   if (win32) {
     const l = p.toLowerCase();
@@ -1070,34 +1208,33 @@ async function noteDeniedCreate(
 
 /**
  * Shell-command rules of the v2.6 profile, in order: stale script (S-1215) → command rules
- * (S-1208) → coordination (S-1212) → git state (S-1213). First verdict wins.
+ * (S-1208) → coordination (S-1212) → git state (S-1213). Every command rule is evaluated
+ * (3.0): the returned list keeps that order, so callers pick a hard verdict before the first.
  */
 export async function runCommandRules(
   command: string,
   profile: GateProfile,
   rootReal: string,
   home?: string,
-): Promise<RuleVerdict | undefined> {
+): Promise<RuleVerdict[]> {
+  const out: RuleVerdict[] = [];
   if (profile.sessions === undefined || profile.sessions.staleScript) {
     const v = await checkStaleScript(rootReal, command);
-    if (v !== undefined) return v;
+    if (v !== undefined) out.push(v);
   }
-  if (profile.commands !== undefined) {
-    const v = evaluateCommand(command, profile.commands);
-    if (v !== undefined) return v;
-  }
+  if (profile.commands !== undefined) out.push(...evaluateCommandRules(command, profile.commands));
   if (profile.coordination !== undefined) {
     const v = await evaluateCoordination(command, profile.coordination, {
       root: rootReal,
       ...(home === undefined ? {} : { home }),
     });
-    if (v !== undefined) return v;
+    if (v !== undefined) out.push(v);
   }
   if (profile.git !== undefined) {
     const v = await evaluateGit(command, profile.git as GitRules, rootReal);
-    if (v !== undefined) return v;
+    if (v !== undefined) out.push(v);
   }
-  return undefined;
+  return out;
 }
 
 /**
@@ -1192,11 +1329,27 @@ export function renderDeny(
         exitCode: exit(0),
       };
     case "windsurf":
-      // Cascade hooks block only on exit 2; stdout is not read.
+    case "kiro":
+      // Cascade/Devin hooks block only on exit 2, Kiro on any non-zero exit; stdout is not read.
       return { stdout: undefined, exitCode: exit(GATE_EXIT_DENY) };
     case "gemini":
-    case "junie":
       return { stdout: JSON.stringify({ decision: "deny", reason }), exitCode: exit(0) };
+    case "junie":
+      // Junie pauses and asks the user on `decision: "ask"`.
+      return { stdout: JSON.stringify({ decision, reason }), exitCode: exit(0) };
+    case "claude":
+      // Claude validates the hook document against its schema: only `hookSpecificOutput`
+      // (extra top-level keys can turn a deny into a non-blocking hook error).
+      return {
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: decision,
+            permissionDecisionReason: reason,
+          },
+        }),
+        exitCode: exit(GATE_DENY_EXIT_DEFAULT),
+      };
     case "cline":
       return { stdout: JSON.stringify({ cancel: true, errorMessage: reason }), exitCode: exit(0) };
     default:
@@ -1220,6 +1373,7 @@ const ASK_FORMATS: ReadonlySet<GateFormat> = new Set<GateFormat>([
   "claude",
   "copilot",
   "vscode",
+  "junie",
 ]);
 
 // ------------------------------------------------------------------- run --
@@ -1231,6 +1385,8 @@ const RANK: Record<GateLogLevel, number> = { error: 0, warn: 1, info: 2, debug: 
 export interface GateOptions {
   /** Fallback root when the payload has no `cwd`. */
   root?: string;
+  /** stdin exceeded the size cap: an agent action, judged fail-closed (unlike an empty stdin). */
+  stdinTooLarge?: boolean;
   /** Explicit profile file (overrides the search path). */
   profilePath?: string;
   /** @deprecated Gate v2 is fail-closed by default; kept as a no-op alias for old hook configs. */
@@ -1480,6 +1636,95 @@ export async function sameRepoWorktreeRoot(
 
 const AXIOM_REPO_MARKERS = ["journal", "cas", "applied", "profiles", "trust", "lock", "backup"];
 
+/** Deny id for `git clean` / `git reset --hard` on the whole tree (3.0, P0-6). */
+export const DESTRUCTIVE_TREE_CODE = "git.destructiveTree";
+
+/** `git.destructiveTree` is hard whenever the profile hardens reset --hard or clean -f. */
+export function destructiveTreeIsHard(hard: readonly string[]): boolean {
+  return (
+    isHardCode(hard, DESTRUCTIVE_TREE_CODE) ||
+    isHardCode(hard, "house.resetHard") ||
+    isHardCode(hard, "house.cleanForce")
+  );
+}
+
+async function mtimeMs(file: string): Promise<number | undefined> {
+  try {
+    return (await lstat(file)).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The gate profile for `root` (3.0, I-2). A linked worktree (agent slot) whose own
+ * `.axiom/gate-profile.json` is missing or OLDER than the main clone's inherits the main
+ * clone's profile, so a policy change reaches every slot without copying files. `--profile`
+ * always wins; a slot with a newer profile of its own keeps it.
+ */
+export async function loadGateProfileForRoot(
+  root: string,
+  opts: { profilePath?: string; home?: string } = {},
+): Promise<{ profile: GateProfile; source: string; unknownKeys?: string[] }> {
+  const base = {
+    ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
+    ...(opts.home === undefined ? {} : { home: opts.home }),
+  };
+  if (opts.profilePath === undefined) {
+    // 3.0 (D-42): `.axiom/axiom.json` wins over the legacy gate-profile.json.
+    const v3 = await loadAxiomConfigAsGate(root, opts.home);
+    if (v3 !== undefined) return v3;
+    const common = await gitCommonDir(root);
+    if (common !== undefined && path.basename(common).toLowerCase() === ".git") {
+      const mainRoot = path.dirname(common);
+      if (!samePath(mainRoot, root)) {
+        const own = await mtimeMs(path.join(root, ".axiom", "gate-profile.json"));
+        const inherited = await mtimeMs(path.join(mainRoot, ".axiom", "gate-profile.json"));
+        if (inherited !== undefined && (own === undefined || own < inherited)) {
+          return loadGateProfile({ root: mainRoot, ...base });
+        }
+      }
+    }
+  }
+  return loadGateProfile({ root, ...base });
+}
+
+/** The `gate` section of `<root>/.axiom/axiom.json` (extends resolved), or undefined. */
+async function loadAxiomConfigAsGate(
+  root: string,
+  home?: string,
+): Promise<{ profile: GateProfile; source: string; unknownKeys?: string[] } | undefined> {
+  let cfg: Awaited<ReturnType<typeof loadAxiomConfig>>;
+  try {
+    cfg = await loadAxiomConfig(root, home === undefined ? {} : { home });
+  } catch (err) {
+    const code = isAxiomError(err) ? err.code : undefined;
+    throw new GateProfileError(
+      code === "ERR_PROFILE_VERSION" ? "ERR_PROFILE_VERSION" : "ERR_INVALID_PROFILE",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  if (cfg === undefined) return undefined;
+  const raw = cfg.gate ?? {};
+  const parsed = GateProfileSchema.safeParse(raw);
+  const source = cfg.sources.at(-1) ?? path.join(root, ".axiom", "axiom.json");
+  if (!parsed.success) {
+    throw new GateProfileError(
+      "ERR_INVALID_PROFILE",
+      `invalid gate section in ${source}: ${parsed.error.issues
+        .slice(0, 5)
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ")}`,
+    );
+  }
+  const unknownKeys = [...unknownGateProfileKeys(raw), ...cfg.warnings.map((w) => `(${w})`)];
+  return {
+    profile: parsed.data,
+    source,
+    ...(unknownKeys.length === 0 ? {} : { unknownKeys }),
+  };
+}
+
 /**
  * Walk up from `start` to the nearest directory that is a repository root: it holds `.git`
  * (directory, or the file a worktree/submodule uses) or a *repo* `.axiom/` (one with
@@ -1575,12 +1820,22 @@ export async function runGate(
     return deny(new GateDeny("ERR_INTERNAL", `${why} (fail-closed; pass --fail-open to allow)`));
   };
 
-  if (payloadText === undefined) return internal("no payload on stdin (timeout or empty)");
+  // An empty / timed-out stdin is a harness or wiring hiccup, not an agent action: every
+  // harness already fails open on a hook timeout, so denying here only stalls long-running
+  // chats (3.0, S-1313). Unparseable JSON stays fail-closed.
+  if (payloadText === undefined && opts.stdinTooLarge === true) {
+    return internal(`stdin exceeded ${GATE_STDIN_MAX_BYTES} bytes`);
+  }
+  if (payloadText === undefined) {
+    log("warn", "no payload on stdin (timeout or empty) — allowing");
+    return allow("no payload on stdin");
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(payloadText);
-  } catch (err) {
-    return internal(`payload is not JSON: ${err instanceof Error ? err.message : String(err)}`);
+  } catch {
+    // Never echo the parse error: it quotes the payload, which may carry a secret.
+    return internal(`payload is not JSON (${payloadText.length} bytes)`);
   }
   const payload = normalizePayload(raw);
   // No tool name at all: not a PreToolUse payload we understand. Nothing to judge → allow
@@ -1607,23 +1862,19 @@ export async function runGate(
       );
       return allow("undetermined write target");
     }
-    return deny(
-      new GateDeny(
-        "ERR_UNSUPPORTED_OP",
-        `write tool "${payload.toolName}" carries no recognised path key (${PATH_KEYS.join(", ")}); add it to the gate or pass --fail-open`,
-      ),
-    );
   }
   const targets = extracted.targets;
   // A shell command with no write target may still hit a command / coordination / git rule
   // (v2.6), so it needs the profile; a write tool with none was handled above.
   const command = extracted.cls === "shell" ? commandString(payload.input) : undefined;
-  if (targets.length === 0 && command === undefined)
+  if (targets.length === 0 && command === undefined && !extracted.undetermined)
     return allow(`tool ${payload.toolName} writes nothing recognisable`);
   const agentId = `${payload.harness ?? (format === "auto" ? "unknown" : format)}:${payload.sessionId ?? "unknown"}`;
 
   /** Set once the main root and its profile are known: what the decision journal needs. */
   let rec: { root: string; profile: GateProfile; source: string } | undefined;
+  /** Profile file of the root that produced the blocking finding, when not the main one. */
+  let decidingProfile: string | undefined;
   const judgedPaths: string[] = [];
   /**
    * Shadow mode (S-1216): the FIRST v2.6 rule verdict (command / coordination / git / session)
@@ -1638,7 +1889,7 @@ export async function runGate(
   const warnings: string[] = [];
   let relaxedKind: "warn" | "override" | undefined;
   let relaxedCode: string | undefined;
-  const overrideReason = findOverrideReason(payload.input);
+  const overrideReason = findOverrideReason(payload.input, command);
   /** True when `d` is let through (and remembered as a warning); hard codes and asks never are. */
   const relax = (d: GateDeny, p: GateProfile | undefined = rec?.profile): boolean => {
     if (p === undefined || d.ask || isHardCode(p.hard, d.code)) return false;
@@ -1660,7 +1911,10 @@ export async function runGate(
   };
   const recorded = async (r: GateResult): Promise<GateResult> => {
     if (rec === undefined) return r;
-    if (!rec.profile.record && !rec.profile.shadow) return r;
+    // Relaxed decisions (warn / override) are always journaled: they are the audit trail D-40
+    // promised. Plain allow/deny lines need `record` or `shadow`.
+    const relaxedHere = r.decision === "allow" && relaxedKind !== undefined;
+    if (!rec.profile.record && !rec.profile.shadow && !relaxedHere) return r;
     try {
       const judged = r.decision === "allow" && shadowOf !== undefined ? shadowOf : r;
       const relaxedAllow = judged.decision === "allow" && relaxedKind !== undefined;
@@ -1681,6 +1935,9 @@ export async function runGate(
         ...(judged.reason === undefined ? {} : { reason: judged.reason }),
         paths: [...new Set(judgedPaths)],
         profile: rec.source,
+        ...(decidingProfile !== undefined && decidingProfile !== rec.source
+          ? { profile_decided: decidingProfile }
+          : {}),
         ms: Math.round(judged.durationMs * 10) / 10,
         ...(rec.profile.shadow ? { shadow: true as const } : {}),
         // Shadow records carry the command so `guard-parity.mjs --replay` can diff it (S-1216).
@@ -1736,22 +1993,36 @@ export async function runGate(
     const loadFor = async (root: string): Promise<{ profile: GateProfile; source: string }> => {
       const hit = profiles.get(root);
       if (hit !== undefined) return hit;
-      const loaded = await loadGateProfile({
-        root,
-        ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
-        ...(opts.home === undefined ? {} : { home: opts.home }),
-      });
+      const loaded = await loadGateProfileForRoot(root, opts);
+      if (loaded.unknownKeys !== undefined) {
+        log(
+          "warn",
+          `${loaded.source}: ignoring unknown key(s) ${loaded.unknownKeys.join(", ")} (written for a newer axiom?)`,
+        );
+      }
       log("debug", `root=${root} profile=${loaded.source}`);
       profiles.set(root, loaded);
       return loaded;
     };
-    const profileFor = async (root: string): Promise<GateProfile> => (await loadFor(root)).profile;
     const main = await loadFor(rootReal);
     const profile = main.profile;
     rec = { root: rootReal, profile, source: main.source };
     log("debug", `class=${extracted.cls} targets=${targets.length}`);
+    if (extracted.undetermined) {
+      // Write-class tool, target unknown (D-18: unknown → deny with reason) — judged after the
+      // profile loads so warn mode / an override relax it like any other deny (3.0).
+      const d = new GateDeny(
+        "ERR_UNSUPPORTED_OP",
+        `write tool "${payload.toolName}" carries no recognised path key (${PATH_KEYS.join(", ")}); add it to the gate or pass --fail-open`,
+      );
+      if (!relax(d)) return recorded(deny(d));
+      return recorded(allow("undetermined write target relaxed", warnings.join("\n")));
+    }
     if (command !== undefined) {
-      const v = await runCommandRules(command, profile, rootReal, opts.home);
+      const found = await runCommandRules(command, profile, rootReal, opts.home);
+      // A hard verdict anywhere wins over an earlier relaxable one (3.0: hard by code, never
+      // by evaluation order).
+      const v = found.find((x) => isHardCode(profile.hard, x.id)) ?? found[0];
       if (v !== undefined) {
         const r = await ruleVerdict(v);
         if (r !== undefined) return r;
@@ -1761,6 +2032,8 @@ export async function runGate(
     const groups = new Map<string, ResolvedGateTarget[]>();
     /** First `ask` verdict (profile `ask` globs); returned only once every deny check passed. */
     let pendingAsk: GateDeny | undefined;
+    /** Absolute out-of-root targets `outside` let through (undo snapshot, I-20). */
+    const outsideAbs: string[] = [];
     const add = (root: string, r: ResolvedGateTarget) => {
       judgedPaths.push(r.relPath);
       const g = groups.get(root);
@@ -1768,6 +2041,24 @@ export async function runGate(
       else g.push(r);
     };
     for (const t of targets) {
+      if (extracted.cls === "shell" && t.rawPath === ".") {
+        // `git clean` / `reset --hard` on the root itself — the root is not an escape, so this
+        // is judged BEFORE containment/outside (3.0, P0-6). Deny when the profile protects
+        // anything; code `git.destructiveTree` is hard whenever reset/clean are hard.
+        judgedPaths.push(".");
+        if (profile.deny.length > 0 || profile.commands !== undefined) {
+          const d = new GateDeny(
+            DESTRUCTIVE_TREE_CODE,
+            "destructive git command on the whole tree",
+            ".",
+          );
+          if (destructiveTreeIsHard(profile.hard)) throw d;
+          if (relax(d)) continue;
+          throw d;
+        }
+        if (profile.ask.length > 0) pendingAsk ??= askDeny(".");
+        continue;
+      }
       try {
         add(rootReal, await resolveGateTarget(rootReal, t, cwdReal));
       } catch (err) {
@@ -1786,6 +2077,7 @@ export async function runGate(
               warnings.push(msg);
               if (RANK.warn <= RANK[level]) stderr.push(msg);
             }
+            outsideAbs.push(abs);
             continue;
           }
           if (relax(err)) continue;
@@ -1800,30 +2092,21 @@ export async function runGate(
           log("debug", `shell operand ${JSON.stringify(t.rawPath)} skipped: ${err.code}`);
           continue;
         }
-        if (extracted.cls === "shell" && err instanceof GateDeny && t.rawPath === ".") {
-          // `git clean` / `reset --hard` on the root itself: deny only if the profile protects
-          // anything — approximate by denying when the profile has a deny list.
-          if (profile.deny.length > 0) {
-            const d = new GateDeny("path.deny", "destructive git command on the whole tree", ".");
-            if (relax(d)) continue;
-            throw d;
-          }
-          if (profile.ask.length > 0) pendingAsk ??= askDeny(".");
-          continue;
-        }
         if (err instanceof GateDeny && relax(err)) continue;
         throw err;
       }
     }
     let n = 0;
     for (const [root, resolved] of groups) {
-      const p = await profileFor(root);
+      const loadedP = await loadFor(root);
+      const p = loadedP.profile;
       const steer = await runSteerRequire(resolved, p);
       const found = [...(await gatePredicateDenies(resolved, p)), ...(steer ? [steer] : [])];
       // A hard code anywhere wins over earlier relaxable findings.
       const blocking =
         found.find((d) => isHardCode(p.hard, d.code)) ?? found.find((d) => !relax(d, p));
       if (blocking !== undefined) {
+        if (loadedP.source !== main.source) decidingProfile = loadedP.source;
         await noteDeniedCreate(rootReal, extracted.cls, payload.toolName, resolved, root, profile);
         return recorded(deny(blocking));
       }
@@ -1859,6 +2142,14 @@ export async function runGate(
     }
     // Every deny passed: an `ask` glob hands the decision to the human (deny on non-ask formats).
     if (pendingAsk !== undefined) return recorded(deny(pendingAsk));
+    if (profile.undo && outsideAbs.length > 0) {
+      await captureOutsideUndo(rootReal, {
+        ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
+        agentId,
+        tool: payload.toolName,
+        absPaths: outsideAbs,
+      });
+    }
     if (sessionTargets.length > 0) {
       // Allowed: capture the pre-image for `axiom undo` and remember who is writing what.
       if (profile.undo) {
@@ -1896,6 +2187,11 @@ export async function runGate(
     return recorded(allow(`${n} target(s) passed (${extracted.cls})`, hint));
   } catch (err) {
     if (err instanceof GateDeny) return recorded(deny(err));
+    if (err instanceof GateProfileError) {
+      // A broken / too-new profile is never covered by --fail-open: failing open here would
+      // silently switch the gate off (P0-11).
+      return deny(new GateDeny(err.code, err.message));
+    }
     return recorded(internal(err instanceof Error ? err.message : String(err)));
   }
 }
@@ -2006,7 +2302,9 @@ export async function gateMain(
   if (io.cwdFallback !== undefined) opts.cwdFallback = io.cwdFallback;
   if (io.home !== undefined) opts.home = io.home;
   if (read.tooLarge) {
-    const r = await runGate(undefined, opts);
+    // An oversize payload IS an agent action (a huge write): never fail open on it unless the
+    // operator asked for --fail-open.
+    const r = await runGate(undefined, { ...opts, stdinTooLarge: true });
     r.stderr.unshift(`AXIOM GATE WARN: stdin exceeded ${GATE_STDIN_MAX_BYTES} bytes`);
     return r;
   }

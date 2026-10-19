@@ -57,7 +57,7 @@
       "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
     },
     {
-      "includes": ["packages/axm-lsp/src/vocabulary.ts"],
+      "includes": ["packages/axm/src/lsp/vocabulary.ts"],
       "linter": { "rules": { "suspicious": { "noTemplateCurlyInString": "off" } } }
     }
   ]

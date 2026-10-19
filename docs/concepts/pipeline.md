@@ -10,6 +10,8 @@ resources, journal, signatures, attestations — is keyed by the manifest's dige
 
 ```mermaid
 flowchart LR
+  accTitle: AXIOM pipeline
+  accDescr: A Plan from an agent becomes a canonical Manifest, is checked as one change set and is applied with a journal.
   A[Agent or human] -->|JSON or .axm| P[Plan<br/>intent · artifacts · checks]
   P -->|compilePlan<br/>render templates · apply patches · resolve refs| M[ManifestBundle<br/>manifest · manifestDigest · blobs]
   M -->|runChecks profile + plan.checks| C{CheckReport}
@@ -25,12 +27,12 @@ flowchart LR
 
 | Stage | Input | Output | Where | What can fail |
 |---|---|---|---|---|
-| **Author** | intent | `Plan` (`apiVersion: axiom.dev/v2`) — JSON, or `.axm` parsed by `axiom_axm_parse` / `axiom compile plan.axm` | agent, `.axm` file | `ERR_INVALID_PLAN` with JSON pointers |
-| **Compile** | `Plan`, optional `root`, emitter registry, network policy | `ManifestBundle` = `{ manifest, manifestDigest, blobs, attestation?, signatures? }` | `@codai/axiom-plan` `compilePlan`; `axiom compile`; `axiom_plan_compile` / `axiom_plan_seal` | template/patch/ref errors, `ERR_BLOB_TOO_LARGE`, `ERR_BUNDLE_TOO_LARGE` |
-| **Check** | bundle, profile, optional `root` | `CheckReport { verdict: pass \| fail \| error, findings[], preImage }` | `@codai/axiom-checks` `runChecks`; `axiom check`; `axiom_check` / `axiom_check_start` | `ERR_PREDICATE_*`, `ERR_PROVIDER_FAILED`, `ERR_PREIMAGE_CHANGED` |
-| **Dry-run** | bundle, `root` | `ApplyResult { mode: dry-run, diff }` | `axiom apply --dry-run`; `axiom_apply_dry_run` | containment, `ERR_EXISTS`, pre-checks |
-| **Apply** | bundle, `root`, `confirmDigest` | `ApplyResult { status: applied \| noop \| rolled-back \| failed }` + journal | `@codai/axiom-apply` `apply`; `axiom apply --confirm`; `axiom_apply` | `ERR_CONFIRM_DIGEST_MISMATCH`, `ERR_LOCKED`, `ERR_PREIMAGE_CHANGED`, `ERR_ROLLBACK` |
-| **Prove** | bundle, tree or key | `verify --tree` result, in-toto Statement, DSSE envelope | `axiom verify`, `axiom sign`, GitHub Action | mismatch list, `ERR_SIGNATURE_*` |
+| **Author** | intent | `Plan` (`apiVersion: axiom.codai.ro/v3`; `axiom.dev/v2` still accepted) — JSON, YAML, or `.axm` parsed by `axiom_axm_parse` / `axiom plan compile plan.axm` | agent, `.axm` file | `ERR_INVALID_PLAN` with JSON pointers |
+| **Compile** | `Plan`, optional `root`, emitter registry, network policy | `ManifestBundle` = `{ manifest, manifestDigest, blobs, attestation?, signatures? }` | `@codai/axiom-plan` `compilePlan`; `axiom plan compile`; `axiom_plan_compile` / `axiom_plan_seal` | template/patch/ref errors, `ERR_BLOB_TOO_LARGE`, `ERR_BUNDLE_TOO_LARGE` |
+| **Check** | bundle, profile, optional `root` | `CheckReport { verdict: pass \| fail \| error, findings[], preImage }` | `@codai/axiom-checks` `runChecks`; `axiom plan check`; `axiom_check` / `axiom_check_start` | `ERR_PREDICATE_*`, `ERR_PROVIDER_FAILED`, `ERR_PREIMAGE_CHANGED` |
+| **Dry-run** | bundle, `root` | `ApplyResult { mode: dry-run, diff }` | `axiom plan apply --dry-run`; `axiom_apply_dry_run` | containment, `ERR_EXISTS`, pre-checks |
+| **Apply** | bundle, `root`, `confirmDigest` | `ApplyResult { status: applied \| noop \| rolled-back \| failed }` + journal | `@codai/axiom-apply` `apply`; `axiom plan apply --confirm`; `axiom_apply` | `ERR_CONFIRM_DIGEST_MISMATCH`, `ERR_LOCKED`, `ERR_PREIMAGE_CHANGED`, `ERR_ROLLBACK` |
+| **Prove** | bundle, tree or key | `verify --tree` result, in-toto Statement, DSSE envelope | `axiom plan verify`, `axiom keys sign`, GitHub Action | mismatch list, `ERR_SIGNATURE_*` |
 
 The MCP tools and the CLI verbs are thin wrappers over the same three library functions, so a
 digest computed by one is the digest the others expect.
@@ -64,7 +66,7 @@ three routes, and is re-hashed at every hop:
 |---|---|---|---|
 | **`blobs`** | inline in the bundle, keyed by `sha256:<hex>`, `utf8` or `base64` | default for MCP and small CLI plans; `inline`, `template` and `patch` sources compile to blobs | ≤ 256 KiB per blob, ≤ 4 MiB per bundle (`ERR_BUNDLE_TOO_LARGE`) |
 | **CAS** | `<root>/.axiom/cas/sha256/<aa>/<hex>` | `compile --store cas`, `cas` sources, fetched `ref` sources; large or many-file plans; chunked plans over MCP | per-root; `axiom gc` reclaims — [cas.md](cas.md) |
-| **`ref`** | an `https:` or `file:` URI pinned by digest | vendored binaries, release assets | fetched **only** by `axiom compile --allow-net`, never by apply or by an MCP tool; stored into the CAS after the pin verifies |
+| **`ref`** | an `https:` or `file:` URI pinned by digest | vendored binaries, release assets | fetched **only** by `axiom plan compile --allow-net`, never by apply or by an MCP tool; stored into the CAS after the pin verifies |
 
 Resolution order at check and apply time is `blobs → CAS`; a `ref` whose bytes are not already
 in the CAS is `ERR_REF_OFFLINE`. Whatever the route, apply re-hashes each blob before staging
@@ -78,6 +80,8 @@ machine view and the on-disk layout are in [apply.md](../guides/apply.md).
 
 ```mermaid
 sequenceDiagram
+  accTitle: Two-phase apply sequence
+  accDescr: The steps of a hash-gated two-phase apply from lock and staging through pre-image verification, rename and journal commit.
   autonumber
   participant C as Caller
   participant A as apply()
@@ -126,7 +130,7 @@ Three properties fall out of this shape:
   with what staging observed. A file another agent changed in the window is detected and the
   whole set rolls back — the tree is byte-identical to before.
 - **Crash safety.** The journal is fsynced before phase 2 and after every 32 steps; the next
-  `apply` on that root (or `axiom rollback <digest>`) finishes a `committing` or `rolling-back`
+  `apply` on that root (or `axiom journal rollback <digest>`) finishes a `committing` or `rolling-back`
   journal before doing anything else.
 - **Scoped rollback.** Rollback touches only the paths in that journal; files created by
   someone else after the apply are left alone. If the rollback itself fails the result is
@@ -145,7 +149,7 @@ three manifests. From these you can:
 
 - re-run the same bundle and get `noop` (or a `drifted[]` list if someone edited the files);
 - roll back any of the last three applies;
-- ask `axiom verify bundle.json --tree .` in CI whether the tree still matches, and publish an
+- ask `axiom plan verify bundle.json --tree .` in CI whether the tree still matches, and publish an
   in-toto attestation of the answer ([verify-tree.md](../guides/verify-tree.md));
 - read `axiom://journal/<root-id>`, `axiom://applied/<sha>` and `axiom://report/<sha>` from any
   MCP client.

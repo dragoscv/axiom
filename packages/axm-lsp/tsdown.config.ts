@@ -14,25 +14,14 @@ export default defineConfig([
     entry: { index: "src/index.ts" },
     dts: true,
     clean: true,
+    deps: { neverBundle: [/^node:/, /^@codai\//] },
   },
   {
     ...shared,
-    // The bin bundles the workspace packages (axm, schema, chevrotain, zod) so the
-    // extension can spawn it from a single file; `vscode-languageserver*` stays a runtime
-    // dependency (it is what the client already ships and what the transport expects).
+    // Deprecated shim (D-45): the bin only forwards to `@codai/axiom-axm/lsp/main`.
     entry: { main: "src/main.ts" },
     dts: false,
     clean: false,
-    deps: {
-      alwaysBundle: [
-        /^@codai\//,
-        /^chevrotain/,
-        /^zod/,
-        /^@chevrotain\//,
-        /^lodash-es/,
-        /^regexp-to-ast/,
-      ],
-      neverBundle: [/^node:/, /^vscode-languageserver/],
-    },
+    deps: { neverBundle: [/^node:/, /^@codai\//] },
   },
 ]);

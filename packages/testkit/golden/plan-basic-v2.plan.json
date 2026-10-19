@@ -1,0 +1,31 @@
+{
+  "apiVersion": "axiom.dev/v2",
+  "kind": "Plan",
+  "name": "golden-basic",
+  "intent": "Three inline files: text, nested path, and a binary payload. Cross-OS determinism guard.",
+  "artifacts": [
+    {
+      "path": "src/index.ts",
+      "source": { "type": "inline", "content": "export const answer = 42;\n" }
+    },
+    {
+      "path": "README.md",
+      "mode": "0644",
+      "op": "overwrite",
+      "source": { "type": "inline", "content": "# golden\n\nhéllo — ✓ 日本語\n" }
+    },
+    {
+      "path": "bin/run.sh",
+      "mode": "0755",
+      "source": {
+        "type": "inline",
+        "content": "IyEvYmluL3NoCmVjaG8gAGJpbmFyeQo=",
+        "encoding": "base64"
+      }
+    }
+  ],
+  "checks": [
+    { "id": "no-secrets", "predicate": "content.noSecrets", "params": {} },
+    { "id": "deny-env", "predicate": "path.deny", "params": [".env*"], "severity": "error" }
+  ]
+}

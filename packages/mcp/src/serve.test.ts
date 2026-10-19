@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { join } from "node:path";
@@ -9,9 +10,13 @@ import {
   DAEMON_PROTOCOL,
   daemonStatePath,
   GATE_PATH,
+  H_CWD,
+  H_MAC,
+  H_NONCE,
   H_PROTOCOL,
   HEALTH_PATH,
   readDaemonState,
+  verifyDaemonMac,
 } from "./daemon-proto.js";
 import { readDecisions } from "./decisions.js";
 import { gateMain } from "./gate.js";
@@ -99,6 +104,8 @@ describe("axiom serve --hook (resident gate daemon)", () => {
     expect(st?.port).toBe(dm.port);
     expect(st?.protocol).toBe(DAEMON_PROTOCOL);
     expect(st?.roots).toEqual([root]);
+    // protocol 2: a fresh 32-byte key per start, never the --token-env value.
+    expect(st?.key).toMatch(/^[0-9a-f]{64}$/);
     await dm.close();
     d = undefined;
     await expect(readFile(daemonStatePath(home.root), "utf8")).rejects.toMatchObject({
@@ -175,9 +182,9 @@ describe("axiom serve --hook (resident gate daemon)", () => {
     }
   });
 
-  it("refuses browser origins, foreign Host headers, missing protocol header and bad tokens", async () => {
+  it("refuses browser origins, foreign Host headers, missing protocol header and wrong tokens", async () => {
     const dm = await daemon({ token: "s3cret-token" });
-    const ok = { [H_PROTOCOL]: "1", authorization: "Bearer s3cret-token" };
+    const ok = { [H_PROTOCOL]: String(DAEMON_PROTOCOL), authorization: "Bearer s3cret-token" };
     expect(
       (await raw(dm, { path: GATE_PATH, headers: { ...ok, origin: "https://evil.example" } }))
         .status,
@@ -185,7 +192,15 @@ describe("axiom serve --hook (resident gate daemon)", () => {
     expect(
       (await raw(dm, { path: GATE_PATH, headers: { ...ok, host: "evil.example:47861" } })).status,
     ).toBe(403);
-    expect((await raw(dm, { path: GATE_PATH, headers: { [H_PROTOCOL]: "1" } })).status).toBe(401);
+    // A wrong bearer is refused; a missing one is fine (protocol 2 authenticates the daemon by MAC).
+    expect(
+      (
+        await raw(dm, {
+          path: GATE_PATH,
+          headers: { [H_PROTOCOL]: String(DAEMON_PROTOCOL), authorization: "Bearer nope" },
+        })
+      ).status,
+    ).toBe(401);
     expect(
       (await raw(dm, { path: GATE_PATH, headers: { authorization: "Bearer s3cret-token" } }))
         .status,
@@ -274,6 +289,133 @@ describe("axiom serve --hook (resident gate daemon)", () => {
     await dm.close();
     d = undefined;
     expect(closed).toBe(1);
+  });
+});
+
+describe("axiom serve --hook — protocol 2 hardening", () => {
+  const gateHeaders = (extra: Record<string, string> = {}) => ({
+    [H_PROTOCOL]: String(DAEMON_PROTOCOL),
+    [H_CWD]: encodeURIComponent(root),
+    [H_NONCE]: randomBytes(16).toString("hex"),
+    ...extra,
+  });
+
+  it("MACs every verdict with the key from daemon.json (nonce + exit + body digest)", async () => {
+    const dm = await daemon();
+    const st = await readDaemonState(home.root);
+    const nonce = randomBytes(16).toString("hex");
+    const r = await raw(dm, {
+      path: `${GATE_PATH}?a=--stdin`,
+      headers: gateHeaders({ [H_NONCE]: nonce }),
+      body: write(".env", "A=1\n"),
+    });
+    expect(r.status).toBe(200);
+    const mac = r.headers[H_MAC];
+    expect(typeof mac).toBe("string");
+    const exit = Number(r.headers["x-axiom-exit"]);
+    expect(
+      verifyDaemonMac(st?.key ?? "", nonce, exit, Buffer.from(r.body, "utf8"), String(mac)),
+    ).toBe(true);
+    expect(
+      verifyDaemonMac(st?.key ?? "", "other-nonce", exit, Buffer.from(r.body), String(mac)),
+    ).toBe(false);
+  });
+
+  it("refuses a gate request without a nonce (400)", async () => {
+    const dm = await daemon();
+    const h = gateHeaders();
+    delete (h as Record<string, string>)[H_NONCE];
+    const r = await raw(dm, { path: `${GATE_PATH}?a=--stdin`, headers: h, body: write("a.ts") });
+    expect(r.status).toBe(400);
+  });
+
+  it("answers protocol-1 clients 426 so they fall back to spawning", async () => {
+    const dm = await daemon();
+    const r = await raw(dm, {
+      path: `${GATE_PATH}?a=--stdin`,
+      headers: { ...gateHeaders(), [H_PROTOCOL]: "1" },
+      body: write(".env", "A=1\n"),
+    });
+    expect(r.status).toBe(426);
+    expect(r.headers["x-axiom-exit"]).toBeUndefined();
+  });
+
+  it("judges no payload whose workspace_roots / workspaceRoots / tool_info.cwd point outside the roots (421)", async () => {
+    const other = await tmpRepo("axiom-serve-outside-");
+    try {
+      const out = await realpath(other.root);
+      await mkdir(join(out, ".git"));
+      const dm = await daemon();
+      const payloads = [
+        {
+          hook_event_name: "preToolUse",
+          workspace_roots: [out],
+          tool_name: "Write",
+          tool_input: { file_path: ".env", content: "A=1\n" },
+        },
+        {
+          preToolUse: { toolName: "write_to_file", parameters: { path: ".env", content: "x" } },
+          workspaceRoots: [out],
+        },
+        {
+          agent_action_name: "pre_write_code",
+          tool_info: { cwd: out, file_path: ".env", edits: [] },
+        },
+      ];
+      for (const p of payloads) {
+        const r = await raw(dm, {
+          path: `${GATE_PATH}?a=--stdin`,
+          headers: gateHeaders(),
+          body: JSON.stringify(p),
+        });
+        expect(r.status, JSON.stringify(p)).toBe(421);
+      }
+    } finally {
+      await other.cleanup();
+    }
+  });
+
+  it("refuses argv outside the allowlist (no --profile/--root from the query string) with 400 and no file bytes", async () => {
+    const secret = join(root, "secret.txt");
+    await writeFile(secret, "TOPSECRET-BYTES");
+    const dm = await daemon();
+    for (const argv of [
+      ["--stdin", "--profile", secret],
+      ["--stdin", `--profile=${secret}`],
+      ["--stdin", "--root", root],
+      ["--stdin", "--format", "nope"],
+      ["--stdin", "--deny-exit", "7"],
+      ["--stdin", "--no-root-discovery"],
+    ]) {
+      const qs = argv.map((a) => `a=${encodeURIComponent(a)}`).join("&");
+      const r = await raw(dm, {
+        path: `${GATE_PATH}?${qs}`,
+        headers: gateHeaders(),
+        body: write("a.ts"),
+      });
+      expect(r.status, argv.join(" ")).toBe(400);
+      expect(r.body).not.toContain("TOPSECRET");
+    }
+    const ok = await raw(dm, {
+      path: `${GATE_PATH}?a=--stdin&a=--format&a=codex&a=--deny-exit&a=2&a=--log-level&a=warn`,
+      headers: gateHeaders(),
+      body: write("a.ts"),
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  it("stops reading an oversized body and answers 413", async () => {
+    const dm = await daemon();
+    const big = "x".repeat(4 * 1024 * 1024 + 1024);
+    const r = await raw(dm, {
+      path: `${GATE_PATH}?a=--stdin`,
+      headers: gateHeaders(),
+      body: big,
+    }).catch((err: unknown) => ({ status: -1, err }));
+    // The daemon may reset the socket after answering; either way it never judged the payload.
+    expect([413, -1]).toContain(r.status);
+    if (r.status === -1) return;
+    expect(r.status).toBe(413);
   });
 });
 

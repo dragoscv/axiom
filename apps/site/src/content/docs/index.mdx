@@ -26,7 +26,16 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/components';
+import { Badge, Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/components';
+import pkg from '../../../../../packages/mcp/package.json';
+
+<p class="not-content ax-version">
+  <Badge text={`v${pkg.version}`} variant="note" /> <a href="https://github.com/dragoscv/axiom/blob/main/CHANGELOG.md">Changelog</a> · No telemetry
+</p>
+
+AXIOM sits between a coding agent and your repository. Every write and shell command the agent
+attempts is judged **before it runs**, and a change set the agent submits is applied as **one
+transaction** you can undo byte for byte.
 
 <div class="ax-pipeline not-content" aria-label="Plan, Manifest, checks, apply, journal — every arrow is a hash boundary">
 <svg viewBox="0 0 880 120" role="img">
@@ -42,31 +51,50 @@ import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/comp
 </div>
 
 <CardGrid stagger>
-  <Card title="Plan → Manifest" icon="document">
-    An agent submits a **Plan**; AXIOM compiles it to a canonical, content-addressed
-    **Manifest** (JCS/RFC 8785, sha256) — no timestamps, no content inline.
+  <Card title="A gate in 12 harnesses" icon="approve-check">
+    Claude Code, Copilot CLI, VS Code, Codex, Cursor, Windsurf, Gemini CLI, Junie, Cline,
+    **Kiro**, **OpenCode** and any **ACP** client. One policy file decides which paths, secrets
+    and shell commands are allowed, asked about or denied.
   </Card>
-  <Card title="Set-level checks" icon="approve-check">
-    Predicates run over the **whole change set**, not one file at a time. A fact provider
-    that cannot run yields `error`, never a silent pass. Fail closed.
+  <Card title="Digest-confirmed apply" icon="seti:git">
+    A change set compiles to a canonical **Manifest**; `apply` runs only with the digest you
+    inspected, re-checks every prior hash at commit, and rolls back to the byte-identical tree
+    on any failure.
   </Card>
-  <Card title="Two-phase apply" icon="seti:git">
-    Pre-image hashes are re-verified at commit, writes are staged then atomically renamed,
-    and a journal makes every apply **rollback-able**, even after a crash.
+  <Card title="Session undo" icon="random">
+    `axiom journal undo --session <id>` restores every file one agent session wrote through the
+    gate, including allowed writes outside the repository.
   </Card>
-  <Card title="On the record" icon="seti:lock">
-    `confirmDigest` must equal the manifest digest. Optional Ed25519 signing, anti-rollback
-    counters and in-toto attestations make the agent's edit provable.
+  <Card title="Explainable" icon="document">
+    The decision journal is redacted and local. `axiom explain last` names the rule, the profile
+    and the fix; `axiom report` renders a static HTML report.
   </Card>
-  <Card title="Works everywhere" icon="puzzle">
-    One package, five surfaces: **MCP** server, **CLI**, PreToolUse **hook**, GitHub
-    **Action**, **VS Code**. Roots are an explicit allowlist; there is no `cwd` fallback.
+  <Card title="Provable" icon="seti:lock">
+    DSSE (Ed25519) signatures and in-toto statements for
+    [applies](/axiom/spec/attestation/apply/v1/) and
+    [gate decisions](/axiom/spec/attestation/agent-decision/v0.1/), checkable with
+    `gh attestation verify`.
   </Card>
-  <Card title="Deterministic" icon="random">
-    Same Plan, same Manifest, same digest on Linux, macOS and Windows. Golden fixtures pin
-    every digest in CI.
+  <Card title="Warn vs enforce" icon="warning">
+    `mode: "enforce"` (what `axiom setup init` writes) blocks denies. `mode: "warn"` lets them
+    through as warnings the agent sees, for a trial week; **hard codes** such as
+    `house.forcePush` deny in both. See [gate keys](/axiom/reference/profiles/#gate-keys).
   </Card>
 </CardGrid>
+
+## Quickstart
+
+```sh
+npm i -g @codai/axiom-mcp
+axiom setup init       # hook + MCP entry + enforcing policy for the detected harness
+axiom setup doctor     # is it wired, and fast enough for the hook timeout?
+# ask the agent to `git push --force` or write `.env`: the gate denies it and says why
+axiom explain last     # which rule decided, and what to do instead
+axiom journal undo --session <id>   # roll back one session (needs "undo": true)
+```
+
+The bin is also installed as `axgate`, for machines where another `axiom` CLI comes first on
+the PATH. Full walk-through: [quickstart](/axiom/getting-started/quickstart/).
 
 ## Install
 
@@ -96,8 +124,11 @@ import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/comp
     Installs to `%LOCALAPPDATA%\axiom\bin` and adds it to your user PATH.
   </TabItem>
   <TabItem label="VS Code">
-    Install the `.vsix` attached to the [latest release](https://github.com/dragoscv/axiom/releases/latest),
-    or wire the MCP server in `.vscode/mcp.json` — see [VS Code](/axiom/integration/vscode/).
+    Install **AXIOM** (`dragoscv.axiom-axm`) from the
+    [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=dragoscv.axiom-axm)
+    or [Open VSX](https://open-vsx.org/extension/dragoscv/axiom-axm) (Cursor, VSCodium,
+    Windsurf): gate status bar, Doctor / Init / Stats / Explain commands, `.axm` support. See
+    [VS Code](/axiom/integration/vscode/).
   </TabItem>
   <TabItem label="GitHub Action">
     ```yaml
@@ -115,6 +146,8 @@ import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/comp
 
 ```mermaid
 flowchart LR
+  accTitle: The AXIOM pipeline
+  accDescr: An agent's Plan is compiled to a Manifest, checked, previewed as a dry run, then applied; the apply writes the journal under .axiom and can upload an attestation to Sigstore.
   A[Agent] -->|Plan| P[plan_compile]
   P -->|Manifest + blobs| C[check]
   C -->|verdict| D[apply_dry_run]

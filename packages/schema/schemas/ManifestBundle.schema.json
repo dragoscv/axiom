@@ -1,5 +1,5 @@
 {
-  "$id": "https://axiom.dev/schemas/v2/ManifestBundle.schema.json",
+  "$id": "https://dragoscv.github.io/axiom/schemas/v3/ManifestBundle.schema.json",
   "title": "ManifestBundle",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
@@ -9,7 +9,10 @@
       "properties": {
         "apiVersion": {
           "type": "string",
-          "const": "axiom.dev/v2"
+          "enum": [
+            "axiom.codai.ro/v3",
+            "axiom.dev/v2"
+          ]
         },
         "kind": {
           "type": "string",

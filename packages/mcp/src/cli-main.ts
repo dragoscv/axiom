@@ -18,7 +18,22 @@ import {
   ManifestBundleSchema,
   RepoSnapshotSchema,
 } from "@codai/axiom-schema";
-import { EMITTERS, emitterCatalogue } from "./emitters.js";
+import {
+  checkOptions,
+  commandName,
+  findGroup,
+  flagsOf,
+  groupCommands,
+  oneLineUsage,
+  renderCommandHelp,
+  renderGroupHelp,
+  renderOverview,
+  resolveCommand,
+  suggest,
+  topLevelCandidates,
+  wantsHelp,
+} from "./cli-commands.js";
+import { emitterCatalogue, loadEmitters, withEmitterHint } from "./emitters.js";
 import type { GcOptions } from "./gc.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
 import {
@@ -27,7 +42,6 @@ import {
   loadTrustStore,
   parsePublicEntry,
   profileWantsAntiRollback,
-  SIGNING_KEY_ENV,
   signBundle,
   trustAdd,
   trustRemove,
@@ -40,89 +54,149 @@ import { diffSnapshots, snapshotRoot } from "./snapshot.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { saveManifest, saveReport, toDigestRef } from "./store.js";
 import { TaskStore } from "./tasks.js";
+import { parseToolset, type Toolset } from "./toolset.js";
 import { isWireMode, WIRE_MODES, type WireMode } from "./wire.js";
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
 const EXIT_USAGE = 2;
 
-const help = (version: string) => `axiom ${version} — transactional write gate for AI agents
-
-Usage:
-  axiom mcp [--root <abs>]... [--allow-guards] [--guard-allowlist <abs>]... [--log-level ${LOG_LEVELS.join("|")}]
-            [--http <host:port>] [--http-token-env <NAME>] [--wire ${WIRE_MODES.join("|")}] [--require-human]
-                                         (--require-human: axiom_apply/axiom_write refuse unless a human confirms via MCP elicitation)
-  axiom init [--root <dir>] [--harness auto|copilot|claude|codex|vscode|cursor|windsurf|gemini|junie|cline] [--daemon]
-             [--profile-name <name>] [--force] [--upgrade] [--managed --out <dir>] [--json]
-                                         (MCP entry + PreToolUse hook + .axiom/profiles/<name>.json + gate profile + .gitignore; idempotent;
-                                          --daemon: hooks call the native axiom-hook client / Claude HTTP hook of \`axiom serve --hook\`;
-                                          --upgrade: record+steer, daemon client, global-bin MCP, PostToolUse in existing files;
-                                          --managed: enterprise policy files for Claude/Codex/Cursor/Copilot/VS Code into --out)
-  axiom serve --hook --root <abs>... [--host 127.0.0.1] [--port 47861] [--token-env <NAME>] [--otel]
-                                         (resident gate daemon for hooks; loopback only; writes ~/.axiom/daemon.json; Ctrl+C stops;
-                                          --otel: GenAI execute_tool spans to $AXIOM_OTEL_ENDPOINT / $OTEL_EXPORTER_OTLP_ENDPOINT)
-  axiom stats [--root <dir>] [--since <iso>|<n>d|<n>h|<n>m] [--json]
-                                         (gate decisions allow/deny/ask, codes, p50/p95 per harness + silent-gate alarms from hook logs)
-  axiom undo --session <agent> [--root <dir>] [--dry-run] [--force] [--since <iso>]
-                                         (restore every file one agent session wrote; needs "undo": true in the gate profile; exit 1 = conflicts skipped)
-  axiom import-guard <guard.ps1> [-o <file>]   (PowerShell guard pattern tables → gate profile "commands" JSON)
-  axiom attest decisions --root <dir> [--since <iso>] [--limit <n>] [--sign [--key-file <path>]]
-                                         (gate decision journal → in-toto agent-decision Statements, JSON Lines; --sign = DSSE)
-  axiom doctor [--root <dir>] [--json]   (bin on PATH, hooks, gate latency, lock, journals, chain, profiles; exit 2 = a check failed)
-  axiom status [--root <dir>] [--json]   (lock holder/queue/intents, interrupted journals, last applied, chain)
-  axiom log [--root <dir>] [--limit <n>] [--json]   (journal chain, newest first; default 20)
-  axiom compile <plan.json|plan.yaml|plan.axm> [-o <out.json>] [--store inline|cas] [--root <dir>]
-                                     [--allow-net [--net-allow <host>[,host]]] [--allow-file]   (ref sources; offline by default)
-  axiom verify <bundle.json> [--root <dir>]      (with --root: also verify signatures against .axiom/trust/keys.json)
-  axiom verify --journal --root <dir>            (journal hash chain; broken → exit 1, code ERR_JOURNAL_CHAIN)
-  axiom verify <bundle.json> --tree <dir> [--pre] [--attest <out.json>]
-                                          (tree ≟ manifest: every artifact digest (or --pre: the declared pre-image set);
-                                           --attest writes an in-toto Statement ${"https://axiom.dev/attestation/apply/v1"})
-  axiom check <bundle.json> --root <dir> [--profile <name>] [--json | --format text|json|sarif] [--allow-guards] [--guard-allowlist <abs>]...
-  axiom apply <bundle.json> --root <dir> [--dry-run] [--profile <name>] [--confirm <digest>]
-                                         [--pr [--branch <name>] [--message <text>]]
-                                         [--lock-timeout <ms>] [--keep-backups <n>]
-                                         [--allow-guards] [--guard-allowlist <abs>]...
-	axiom rollback <digest> --root <dir>
-  axiom gc --root <dir> [--dry-run] [--older-than <n>(ms|s|m|h|d)] [--keep all-manifests|journal] [--undo-ttl <n>(ms|s|m|h|d)]
-                                         (CAS garbage collection + expired undo logs; CLI only)
-	axiom diff <a.json> <b.json>
-	axiom schema <${SCHEMA_KINDS.join("|")}>
-  axiom emitters [--json]                  (template emitters available to \`compile\`)
-  axiom keygen [--out <dir>] [--name <label>]   (ed25519; private key → file 0600, public entry → stdout)
-  axiom sign <bundle.json> [--key-file <path>] [-o <out.json>] [--root-id <id>]   (private key from --key-file or $${SIGNING_KEY_ENV}; --root-id = root-bound envelope)
-  axiom sign <bundle.json> --keyless [--bound --root <dir> | --root-id <id>] [-o <out.json>]
-                                          (Sigstore via ambient OIDC → bundle.keylessSignatures; no OIDC → exit 1 ERR_KEYLESS_UNAVAILABLE)
-  axiom trust add <pubkey.json> --root <dir> | trust remove <keyid> --root <dir> | trust list --root <dir>
-  axiom trust root-id [<id> | --clear] --root <dir>   (require root-bound signatures carrying <id>; docs/guides/signing.md)
-  axiom gate --stdin [--post] [--format auto|claude|copilot|vscode|codex|cursor|windsurf|gemini|junie|cline] [--root <dir>] [--profile <file>]
-             [--fail-open] [--no-shell-scan] [--no-root-discovery] [--track-reads] [--deny-exit 0|2] [--log-level ...]
-                                         (PreToolUse hook; fail-closed; deny = exit 0 + harness JSON, windsurf/--deny-exit 2 = exit 2;
-                                          answered by \`axiom serve --hook\` when it runs, in-process otherwise; --post = PostToolUse check)
-    axiom migrate v1 <manifest.json> [-o <plan.json>] [--profile <name>] [--cas <root>] [--content <dir>] [--overwrite]
-                                           (v1 manifest → v2 Plan; exit 1 = migrated with warnings)
-  axiom snapshot --root <dir> [-o <out.json>] [--include <glob>]... [--exclude <glob>]... [--max-files <n>] [--no-gitignore] [--no-digest]
-  axiom snapshot-diff <a.json> <b.json>       (RepoSnapshot files → { added, removed, changed })
-	axiom --version | --help
-
-Exit codes: 0 ok · 1 verdict fail / apply failed / chain broken / keyless unavailable · 2 usage or error
-(doctor: 2 = at least one check failed; warnings exit 0).
-The \`mcp\` verb speaks JSON-RPC on stdout and logs JSON lines on stderr; every other verb prints JSON to stdout.
-With --http it serves Streamable HTTP at http://<host:port>/mcp instead (port 0 = random; the URL is logged at
-info level). A non-loopback host requires a bearer token in the env var named by --http-token-env
-(default AXIOM_HTTP_TOKEN); loopback binds accept an optional token.
-A \`.axm\` plan with errors prints its diagnostics as JSON and exits 2.
-\`guard.external\` checks run only with --allow-guards AND a profile that sets facts.allowGuards; absolute
-commands must additionally appear in --guard-allowlist (relative ones must live under <root>/scripts/).
-`;
-
 function out(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
 async function readJson(file: string): Promise<unknown> {
-  const text = await readFile(path.resolve(file), "utf8");
-  return JSON.parse(text) as unknown;
+  const text = await readInput(file);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (err) {
+    throw new AxiomError("ERR_INVALID_PLAN", `${file}: not valid JSON`, {
+      details: { path: path.resolve(file), format: "json", ...jsonErrorPosition(text, err) },
+    });
+  }
+}
+
+/** A user-named input file; absent -> ERR_NOT_FOUND with details.path (never ERR_INTERNAL). */
+async function readInput(file: string): Promise<string> {
+  const abs = path.resolve(file);
+  try {
+    return await readFile(abs, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT")
+      throw new AxiomError("ERR_NOT_FOUND", `input file not found: ${file}`, {
+        details: { path: abs },
+      });
+    if (code === "EISDIR")
+      throw new AxiomError("ERR_TARGET_TYPE", `expected a file, found a directory: ${file}`, {
+        details: { path: abs },
+      });
+    throw err;
+  }
+}
+
+/**
+ * 1-based line/column of a JSON.parse failure. Current V8 messages carry no position
+ * ("Unexpected token 'P', ..."), so the offset comes from a minimal grammar scan.
+ */
+function jsonErrorPosition(
+  text: string,
+  err: unknown,
+): { line?: number; column?: number; reason: string } {
+  const reason = err instanceof Error ? err.message : String(err);
+  const at = jsonErrorOffset(text);
+  if (at === undefined) return { reason };
+  const before = text.slice(0, at);
+  return { line: before.split("\n").length, column: at - before.lastIndexOf("\n"), reason };
+}
+
+/** Offset of the first JSON syntax error in `text`, or undefined when it scans clean. */
+function jsonErrorOffset(text: string): number | undefined {
+  let i = 0;
+  const ws = () => {
+    while (i < text.length && " \t\n\r".includes(text[i] as string)) i++;
+  };
+  const fail = (): never => {
+    throw i;
+  };
+  const lit = (word: string) => {
+    for (const ch of word) {
+      if (text[i] !== ch) fail();
+      i++;
+    }
+  };
+  const str = () => {
+    i++;
+    while (i < text.length && text[i] !== '"') {
+      if (text.charCodeAt(i) < 0x20) fail();
+      i += text[i] === "\\" ? 2 : 1;
+    }
+    if (text[i] !== '"') fail();
+    i++;
+  };
+  const num = () => {
+    const m = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(text.slice(i));
+    if (m === null) fail();
+    i += (m as RegExpExecArray)[0].length;
+  };
+  const value = (): void => {
+    ws();
+    const c = text[i];
+    if (c === "{") {
+      i++;
+      ws();
+      if (text[i] === "}") {
+        i++;
+        return;
+      }
+      for (;;) {
+        ws();
+        if (text[i] !== '"') fail();
+        str();
+        ws();
+        if (text[i] !== ":") fail();
+        i++;
+        value();
+        ws();
+        if (text[i] === ",") i++;
+        else if (text[i] === "}") {
+          i++;
+          return;
+        } else fail();
+      }
+    }
+    if (c === "[") {
+      i++;
+      ws();
+      if (text[i] === "]") {
+        i++;
+        return;
+      }
+      for (;;) {
+        value();
+        ws();
+        if (text[i] === ",") i++;
+        else if (text[i] === "]") {
+          i++;
+          return;
+        } else fail();
+      }
+    }
+    if (c === '"') str();
+    else if (c === "t") lit("true");
+    else if (c === "f") lit("false");
+    else if (c === "n") lit("null");
+    else if (c === "-" || (c !== undefined && c >= "0" && c <= "9")) num();
+    else fail();
+  };
+  try {
+    if (text.charCodeAt(0) === 0xfeff) i = 1;
+    value();
+    ws();
+    return i < text.length ? i : undefined;
+  } catch (at) {
+    return typeof at === "number" ? Math.min(at, text.length) : undefined;
+  }
 }
 
 class AxmDiagnosticsError extends Error {
@@ -135,12 +209,12 @@ class AxmDiagnosticsError extends Error {
 
 async function readPlan(file: string): Promise<unknown> {
   if (isYamlPath(file)) {
-    const text = await readFile(path.resolve(file), "utf8");
+    const text = await readInput(file);
     const { parsePlanYaml } = await import("./yaml-lazy.js");
     return parsePlanYaml(text);
   }
   if (path.extname(file).toLowerCase() !== ".axm") return readJson(file);
-  const text = await readFile(path.resolve(file), "utf8");
+  const text = await readInput(file);
   const { parseAxm } = await import("./axm-lazy.js");
   const r = parseAxm(text);
   if (r.plan === undefined) throw new AxmDiagnosticsError(r.diagnostics);
@@ -192,7 +266,7 @@ function guardOptions(values: {
   return { allowGuards: values["allow-guards"] === true, guardAllowlist: allowlist };
 }
 
-async function cmdMcp(argv: string[]): Promise<number> {
+export async function cmdMcp(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string", multiple: true },
     "log-level": { type: "string" },
@@ -200,11 +274,19 @@ async function cmdMcp(argv: string[]): Promise<number> {
     "http-token-env": { type: "string" },
     wire: { type: "string" },
     "require-human": { type: "boolean" },
+    tools: { type: "string" },
+    emitter: { type: "string", multiple: true },
     ...GUARD_FLAGS,
   });
   const level = values["log-level"] ?? "warn";
   if (!isLogLevel(level))
     throw new UsageError(`--log-level must be one of ${LOG_LEVELS.join("|")}`);
+  let toolset: Toolset;
+  try {
+    toolset = parseToolset(values.tools);
+  } catch (err) {
+    throw new UsageError(err instanceof Error ? err.message : String(err));
+  }
   // D-19: 2026-07-28 is the default wire; `2025` keeps serving legacy clients from the same
   // entry (the SDK pins the era per connection), `2026-only` refuses them.
   const { serveStdio, serverFactory } = await import("./mcp-lazy.js");
@@ -223,10 +305,17 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // so no orphaned children survive the server (S-406).
   const tasks = new TaskStore();
   const requireHuman = values["require-human"] === true;
+  const emitterSpecs = values.emitter ?? [];
+  const emitters =
+    emitterSpecs.length === 0
+      ? undefined
+      : await withEmitterHint(loadEmitters(emitterSpecs, process.cwd()));
   const factory = serverFactory(policy, {
     log,
     guards,
     tasks,
+    toolset,
+    ...(emitters === undefined ? {} : { emitters }),
     ...(requireHuman ? { requireHuman } : {}),
   });
   if (values.http !== undefined) {
@@ -265,7 +354,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdCompile(argv: string[]): Promise<number> {
+export async function cmdCompile(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     out: { type: "string", short: "o" },
     store: { type: "string" },
@@ -273,6 +362,7 @@ async function cmdCompile(argv: string[]): Promise<number> {
     "allow-net": { type: "boolean" },
     "net-allow": { type: "string", multiple: true },
     "allow-file": { type: "boolean" },
+    emitter: { type: "string", multiple: true },
   });
   const file = positionals[0];
   if (file === undefined)
@@ -287,13 +377,16 @@ async function cmdCompile(argv: string[]): Promise<number> {
   const net: NonNullable<Parameters<typeof compilePlan>[1]>["net"] = { allowNet };
   if (allowlist.length > 0) net.allowlist = allowlist;
   if (values["allow-file"] === true) net.allowFile = true;
-  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters: EMITTERS, net };
   let rootReal: string | undefined;
   if (values.root !== undefined || store === "cas" || allowNet || net.allowFile === true) {
     rootReal = await realRootArg(values.root ?? ".");
-    compileOpts.root = rootReal;
   }
-  const { bundle } = await compilePlan(await readPlan(file), compileOpts);
+  const emitters = await withEmitterHint(
+    loadEmitters(values.emitter ?? [], rootReal ?? process.cwd()),
+  );
+  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters, net };
+  if (rootReal !== undefined) compileOpts.root = rootReal;
+  const { bundle } = await withEmitterHint(compilePlan(await readPlan(file), compileOpts));
   if (rootReal !== undefined) await saveManifest(rootReal, bundle);
   if (values.out !== undefined) {
     await writeFile(path.resolve(values.out), `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
@@ -308,7 +401,7 @@ async function cmdCompile(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdVerify(argv: string[]): Promise<number> {
+export async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     root: { type: "string" },
     tree: { type: "string" },
@@ -388,7 +481,7 @@ async function loadProfileFor(rootReal: string, name: string) {
   return loadProfile(name, { searchDirs: [path.join(rootReal, ".axiom", "profiles")] });
 }
 
-async function cmdCheck(argv: string[]): Promise<number> {
+export async function cmdCheck(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     root: { type: "string" },
     profile: { type: "string" },
@@ -437,7 +530,7 @@ async function cmdCheck(argv: string[]): Promise<number> {
   return report.verdict === "pass" ? EXIT_OK : EXIT_FAIL;
 }
 
-async function cmdApply(argv: string[]): Promise<number> {
+export async function cmdApply(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     root: { type: "string" },
     profile: { type: "string" },
@@ -457,6 +550,13 @@ async function cmdApply(argv: string[]): Promise<number> {
   const rootReal = await realRootArg(values.root);
   const bundle = parseBundleFile(await readJson(file));
   const dryRun = values["dry-run"] === true;
+  if (!dryRun && values.confirm === undefined) {
+    throw new AxiomError(
+      "ERR_CONFIRM_DIGEST_MISMATCH",
+      `apply needs --confirm <digest>: run 'axiom plan apply ${file} --root <dir> --dry-run' first and pass its manifestDigest`,
+      { details: { confirm: null, manifestDigest: bundle.manifestDigest } },
+    );
+  }
   if (!dryRun && values.confirm !== bundle.manifestDigest) {
     throw new AxiomError(
       "ERR_CONFIRM_DIGEST_MISMATCH",
@@ -520,7 +620,7 @@ function intFlag(
   return n;
 }
 
-async function cmdRollback(argv: string[]): Promise<number> {
+export async function cmdRollback(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, { root: { type: "string" } });
   const digest = positionals[0];
   if (digest === undefined) throw new UsageError("rollback: <digest> is required");
@@ -530,13 +630,14 @@ async function cmdRollback(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdGc(argv: string[]): Promise<number> {
+export async function cmdGc(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     "dry-run": { type: "boolean" },
     "older-than": { type: "string" },
     keep: { type: "string" },
     "undo-ttl": { type: "string" },
+    "decisions-older-than": { type: "string" },
   });
   const rootReal = await realRootArg(values.root);
   const keep = values.keep ?? "all-manifests";
@@ -556,11 +657,57 @@ async function cmdGc(argv: string[]): Promise<number> {
     if (ms === undefined) throw new UsageError("--undo-ttl must be <n>(ms|s|m|h|d)");
     gcOpts.undoTtlMs = ms;
   }
+  if (values["decisions-older-than"] !== undefined) {
+    const days = Number(values["decisions-older-than"]);
+    if (!Number.isInteger(days) || days < 1)
+      throw new UsageError("--decisions-older-than must be a whole number of days >= 1");
+    gcOpts.decisionsOlderThanDays = days;
+  }
   out(await collectGarbage(rootReal, gcOpts));
   return EXIT_OK;
 }
 
-async function cmdDiff(argv: string[]): Promise<number> {
+/** Console-backed io for the 3.0 command modules (this file may write stdout). */
+const cliIo = {
+  stdout: (s: string) => console.log(s),
+  stderr: (s: string) => console.error(s),
+};
+
+export async function cmdExplain(argv: string[]): Promise<number> {
+  return (await import("./v3-lazy.js")).explainMain(argv, cliIo);
+}
+
+export async function cmdSuggestProfile(argv: string[]): Promise<number> {
+  return (await import("./v3-lazy.js")).suggestMain(argv, cliIo);
+}
+
+export async function cmdReplay(argv: string[]): Promise<number> {
+  return (await import("./v3-lazy.js")).replayMain(argv, cliIo);
+}
+
+export async function cmdReport(argv: string[]): Promise<number> {
+  return (await import("./v3-lazy.js")).reportMain(argv, cliIo);
+}
+
+export async function cmdPin(argv: string[]): Promise<number> {
+  return (await import("./v3-lazy.js")).pinMain(argv, cliIo);
+}
+
+export async function cmdAcpProxy(argv: string[]): Promise<number> {
+  const dd = argv.indexOf("--");
+  if (dd === -1) throw new UsageError("acp-proxy: the agent command goes after --");
+  const { values } = opts(argv.slice(0, dd), { root: { type: "string" } });
+  const root = await realRootArg(values.root);
+  const { runAcpProxyWithAgent } = await import("./v3-lazy.js");
+  return runAcpProxyWithAgent(argv.slice(dd + 1), {
+    clientIn: process.stdin,
+    clientOut: process.stdout,
+    root,
+    onDeny: (d) => console.error(`AXIOM ACP DENY ${d.code ?? ""}: ${d.reason ?? "denied"}`),
+  });
+}
+
+export async function cmdDiff(argv: string[]): Promise<number> {
   const { positionals } = opts(argv, {});
   const [a, b] = positionals;
   if (a === undefined || b === undefined)
@@ -570,7 +717,7 @@ async function cmdDiff(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdSchema(argv: string[]): Promise<number> {
+export async function cmdSchema(argv: string[]): Promise<number> {
   const { positionals } = opts(argv, {});
   const kind = positionals[0];
   if (!isSchemaKind(kind))
@@ -579,19 +726,24 @@ async function cmdSchema(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdEmitters(argv: string[]): Promise<number> {
-  const { values } = opts(argv, { json: { type: "boolean" } });
-  const rows = emitterCatalogue();
+export async function cmdEmitters(argv: string[]): Promise<number> {
+  const { values } = opts(argv, {
+    json: { type: "boolean" },
+    emitter: { type: "string", multiple: true },
+  });
+  const rows = emitterCatalogue(
+    await withEmitterHint(loadEmitters(values.emitter ?? [], process.cwd())),
+  );
   if (values.json) {
     out(rows);
     return EXIT_OK;
   }
-  for (const r of rows) console.log(`${r.emitter}@${r.version}: ${r.template} — ${r.description}`);
+  for (const r of rows) console.log(`${r.emitter}@${r.version}: ${r.template} - ${r.description}`);
   return EXIT_OK;
 }
 
 /** Reachable when `main()` is called as a library; `cli.ts` short-circuits `gate` to the lazy chunk. */
-async function cmdKeygen(argv: string[]): Promise<number> {
+export async function cmdKeygen(argv: string[]): Promise<number> {
   const { values } = opts(argv, { out: { type: "string" }, name: { type: "string" } });
   const r = await keygen(path.resolve(values.out ?? "."), values.name);
   // The private key NEVER reaches stdout; only its location does.
@@ -599,7 +751,7 @@ async function cmdKeygen(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdSign(argv: string[]): Promise<number> {
+export async function cmdSign(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, {
     "key-file": { type: "string" },
     out: { type: "string", short: "o" },
@@ -650,7 +802,7 @@ async function cmdSignKeyless(
     rootId = (await loadTrustStore(rootReal))?.rootId;
     if (rootId === undefined)
       throw new UsageError(
-        "sign --keyless --bound: the root's trust store has no rootId (axiom trust root-id <id>) — or pass --root-id",
+        "sign --keyless --bound: the root's trust store has no rootId (axiom keys trust root-id <id>) - or pass --root-id",
       );
   } else if (values.bound !== true && values.root !== undefined) {
     throw new UsageError("sign --keyless: --root requires --bound");
@@ -693,7 +845,7 @@ async function localRoot(root: string | undefined): Promise<string> {
   return realRootArg(root ?? ".");
 }
 
-async function cmdInit(argv: string[]): Promise<number> {
+export async function cmdInit(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     harness: { type: "string" },
@@ -703,6 +855,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     upgrade: { type: "boolean" },
     managed: { type: "boolean" },
     out: { type: "string" },
+    "dry-run": { type: "boolean" },
     json: { type: "boolean" },
   });
   const { runInit, isHarnessArg, HARNESSES } = await import("./ops-lazy.js");
@@ -714,6 +867,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   if (values.force === true) initOpts.force = true;
   if (values.daemon === true) initOpts.daemon = true;
   if (values.upgrade === true) initOpts.upgrade = true;
+  if (values["dry-run"] === true) initOpts.dryRun = true;
   if (values.managed === true) {
     if (values.out === undefined) throw new UsageError("init --managed needs --out <dir>");
     initOpts.managed = { out: path.resolve(values.out) };
@@ -732,13 +886,20 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
   }
   for (const n of r.notes) console.log(`  note: ${n}`);
+  if (r.diff !== undefined && r.diff !== "") console.log(r.diff);
   return EXIT_OK;
 }
 
 /** Set by `main()`: argv[1] of this process, so `doctor` can time this very CLI's gate. */
 let CLI_ENTRY: string | undefined;
 
-async function cmdDoctor(argv: string[]): Promise<number> {
+export async function cmdDoctor(argv: string[]): Promise<number> {
+  if (argv.includes("--fleet")) {
+    return (await import("./v3-lazy.js")).fleetMain(
+      argv.filter((a) => a !== "--fleet"),
+      cliIo,
+    );
+  }
   const { values } = opts(argv, { root: { type: "string" }, json: { type: "boolean" } });
   const { runDoctor } = await import("./ops-lazy.js");
   const root = path.resolve(values.root ?? ".");
@@ -760,7 +921,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   return r.ok ? EXIT_OK : EXIT_USAGE;
 }
 
-async function cmdStatus(argv: string[]): Promise<number> {
+export async function cmdStatus(argv: string[]): Promise<number> {
   const { values } = opts(argv, { root: { type: "string" }, json: { type: "boolean" } });
   const s = await collectStatus(await localRoot(values.root));
   if (values.json) out(s);
@@ -771,7 +932,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
 const LOG_LIMIT_DEFAULT = 20;
 const LOG_LIMIT_MAX = 100_000;
 
-async function cmdLog(argv: string[]): Promise<number> {
+export async function cmdLog(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     limit: { type: "string", short: "n" },
@@ -792,7 +953,7 @@ async function cmdLog(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdTrust(argv: string[]): Promise<number> {
+export async function cmdTrust(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   const { values, positionals } = opts(rest, {
     root: { type: "string" },
@@ -842,7 +1003,7 @@ async function cmdTrust(argv: string[]): Promise<number> {
   }
 }
 
-async function cmdGate(argv: string[]): Promise<number> {
+export async function cmdGate(argv: string[]): Promise<number> {
   const { gateMain } = await import("./gate-lazy.js");
   const r = await gateMain(argv);
   for (const line of r.stderr) console.error(line);
@@ -851,7 +1012,7 @@ async function cmdGate(argv: string[]): Promise<number> {
 }
 
 /** `axiom serve --hook` (S-901): resident gate daemon; runs until SIGINT/SIGTERM. */
-async function cmdServe(argv: string[]): Promise<number> {
+export async function cmdServe(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     hook: { type: "boolean" },
     root: { type: "string", multiple: true },
@@ -907,8 +1068,8 @@ async function cmdServe(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-/** `axiom attest decisions` (S-904): decision journal → in-toto agent-decision JSON Lines. */
-async function cmdAttest(argv: string[]): Promise<number> {
+/** `axiom attest decisions` (S-904): decision journal -> in-toto agent-decision JSON Lines. */
+export async function cmdAttest(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   if (sub !== "decisions") throw new UsageError("attest: subcommand must be decisions");
   const { values } = opts(rest, {
@@ -935,7 +1096,7 @@ async function cmdAttest(argv: string[]): Promise<number> {
 }
 
 /** `axiom undo --session <agent>` (S-1210): restore what one agent session wrote. */
-async function cmdUndo(argv: string[]): Promise<number> {
+export async function cmdUndo(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     session: { type: "string" },
@@ -956,7 +1117,7 @@ async function cmdUndo(argv: string[]): Promise<number> {
 }
 
 /** `axiom stats` (S-1211): gate decisions + harness hook logs + silent-gate alarms. */
-async function cmdStats(argv: string[]): Promise<number> {
+export async function cmdStats(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     since: { type: "string" },
@@ -980,13 +1141,13 @@ async function cmdStats(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-/** `axiom import-guard <guard.ps1>` (S-1216): PowerShell guard tables → gate profile `commands`. */
-async function cmdImportGuard(argv: string[]): Promise<number> {
+/** `axiom import-guard <guard.ps1>` (S-1216): PowerShell guard tables -> gate profile `commands`. */
+export async function cmdImportGuard(argv: string[]): Promise<number> {
   const { values, positionals } = opts(argv, { out: { type: "string", short: "o" } });
   const file = positionals[0];
   if (file === undefined) throw new UsageError("import-guard: <guard.ps1> is required");
   const { importGuardProfile } = await import("./ops-lazy.js");
-  const r = importGuardProfile(await readFile(path.resolve(file), "utf8"));
+  const r = importGuardProfile(await readInput(file));
   for (const s of r.skipped) console.error(`skipped line ${s.line}: ${s.why}`);
   if (values.out !== undefined) {
     await writeFile(
@@ -1004,7 +1165,24 @@ async function cmdImportGuard(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-async function cmdMigrate(argv: string[]): Promise<number> {
+export async function cmdMigrate(argv: string[]): Promise<number> {
+  if (argv[0] === "--profile" || (argv.includes("--profile") && argv[0] !== "v1")) {
+    const { values } = opts(argv, {
+      profile: { type: "boolean" },
+      root: { type: "string" },
+      "dry-run": { type: "boolean" },
+      name: { type: "string" },
+    });
+    const root = await localRoot(values.root);
+    const { migrateProfile } = await import("./v3-lazy.js");
+    const r = await migrateProfile(root, {
+      dryRun: values["dry-run"] === true,
+      ...(values.name === undefined ? {} : { profileName: values.name }),
+    });
+    if (values["dry-run"] === true) console.log(r.json);
+    else for (const n of r.notes) console.log(n);
+    return EXIT_OK;
+  }
   const [from, ...rest] = argv;
   if (from !== "v1") throw new UsageError("migrate: source format must be v1");
   const { values, positionals } = opts(rest, {
@@ -1047,7 +1225,7 @@ async function cmdMigrate(argv: string[]): Promise<number> {
 /** Set by `main()` so lazily-loaded verbs can record the CLI version without importing package.json. */
 let MIGRATE_VERSION = "0.0.0";
 
-async function cmdSnapshot(argv: string[]): Promise<number> {
+export async function cmdSnapshot(argv: string[]): Promise<number> {
   const { values } = opts(argv, {
     root: { type: "string" },
     out: { type: "string", short: "o" },
@@ -1103,7 +1281,7 @@ function parseSnapshotFile(raw: unknown, label: string) {
   return parsed.data;
 }
 
-async function cmdSnapshotDiff(argv: string[]): Promise<number> {
+export async function cmdSnapshotDiff(argv: string[]): Promise<number> {
   const { positionals } = opts(argv, {});
   const [a, b] = positionals;
   if (a === undefined || b === undefined)
@@ -1113,79 +1291,145 @@ async function cmdSnapshotDiff(argv: string[]): Promise<number> {
   return EXIT_OK;
 }
 
-const VERBS: Record<string, (argv: string[]) => Promise<number>> = {
-  mcp: cmdMcp,
-  init: cmdInit,
-  doctor: cmdDoctor,
-  status: cmdStatus,
-  log: cmdLog,
-  compile: cmdCompile,
-  verify: cmdVerify,
-  check: cmdCheck,
-  apply: cmdApply,
-  rollback: cmdRollback,
-  gc: cmdGc,
-  diff: cmdDiff,
-  schema: cmdSchema,
-  emitters: cmdEmitters,
-  keygen: cmdKeygen,
-  sign: cmdSign,
-  trust: cmdTrust,
-  gate: cmdGate,
-  serve: cmdServe,
-  attest: cmdAttest,
-  migrate: cmdMigrate,
-  undo: cmdUndo,
-  stats: cmdStats,
-  "import-guard": cmdImportGuard,
-  snapshot: cmdSnapshot,
-  "snapshot-diff": cmdSnapshotDiff,
-};
+/** A usage error tied to the command it happened in (for the one-line usage + help hint). */
+function usageFail(
+  message: string,
+  json: boolean,
+  usage: string | undefined,
+  helpCmd: string,
+): number {
+  const help = `axiom ${helpCmd} --help`.replace(/\s+/g, " ");
+  if (json) {
+    console.error(
+      JSON.stringify({
+        code: "ERR_USAGE",
+        message,
+        details: { ...(usage === undefined ? {} : { usage }), help },
+      }),
+    );
+  } else {
+    const lines = [`error: ${message}`];
+    if (usage !== undefined) lines.push(`usage: ${usage}`);
+    lines.push(`Run '${help}' for usage, options and examples.`);
+    console.error(lines.join("\n"));
+  }
+  return EXIT_USAGE;
+}
+
+function didYouMean(near: string[]): string {
+  return near.length === 0 ? "" : ` (did you mean ${near.map((n) => `'${n}'`).join(" or ")}?)`;
+}
+
+/** `axiom help [words...]` / `axiom <words> --help`: the narrowest help that matches. */
+function printHelp(words: readonly string[], version: string): number {
+  const r = resolveCommand(words);
+  if (r?.rest.every((w) => w.startsWith("-"))) {
+    process.stdout.write(renderCommandHelp(r.cmd));
+    return EXIT_OK;
+  }
+  const g = findGroup(words[0]);
+  if (g !== undefined) {
+    process.stdout.write(renderGroupHelp(g));
+    return EXIT_OK;
+  }
+  process.stdout.write(renderOverview(version));
+  return EXIT_OK;
+}
+
+/** Errors a user caused (missing file, malformed JSON) must never surface as ERR_INTERNAL. */
+function fsErrorToAxiom(err: unknown): AxiomError | undefined {
+  const e = err as NodeJS.ErrnoException;
+  if (e === null || typeof e !== "object") return undefined;
+  if (e.code === "ENOENT")
+    return new AxiomError("ERR_NOT_FOUND", `no such file or directory: ${e.path ?? "?"}`, {
+      details: { path: e.path ?? null },
+    });
+  if (e.code === "EISDIR")
+    return new AxiomError(
+      "ERR_TARGET_TYPE",
+      `expected a file, found a directory: ${e.path ?? "?"}`,
+      {
+        details: { path: e.path ?? null },
+      },
+    );
+  return undefined;
+}
 
 export async function main(argv: readonly string[], version: string): Promise<number> {
-  const HELP = help(version);
   MIGRATE_VERSION = version;
   CLI_ENTRY = process.argv[1];
-  const [verb, ...rest] = argv;
-  if (verb === undefined || verb === "--help" || verb === "-h" || verb === "help") {
-    process.stdout.write(HELP);
-    return verb === undefined ? EXIT_USAGE : EXIT_OK;
+  const json = flagsOf(argv).includes("--json");
+  const [first] = argv;
+  if (first === undefined) {
+    process.stdout.write(renderOverview(version));
+    return EXIT_USAGE;
   }
-  if (verb === "--version" || verb === "-v") {
+  if (first === "--help" || first === "-h") {
+    process.stdout.write(renderOverview(version));
+    return EXIT_OK;
+  }
+  if (first === "help") return printHelp(argv.slice(1), version);
+  if (first === "--version" || first === "-v") {
     console.log(version);
     return EXIT_OK;
   }
-  const run = VERBS[verb];
-  if (run === undefined) {
-    console.error(`unknown verb: ${verb}\n\n${HELP}`);
-    return EXIT_USAGE;
+  const resolved = resolveCommand(argv);
+  if (resolved === undefined) {
+    const group = findGroup(first);
+    if (group !== undefined) {
+      const sub = argv[1];
+      if (sub === undefined || sub.startsWith("-")) {
+        process.stdout.write(renderGroupHelp(group));
+        return sub === undefined ? EXIT_USAGE : EXIT_OK;
+      }
+      const near = suggest(
+        sub,
+        groupCommands(group.name).map((c) => ({
+          word: c.path[1] ?? "",
+          show: `${group.name} ${c.path[1] ?? ""}`,
+        })),
+      );
+      return usageFail(
+        `unknown command 'axiom ${group.name} ${sub}'${didYouMean(near)}`,
+        json,
+        undefined,
+        group.name,
+      );
+    }
+    if (first.startsWith("-")) return usageFail(`unknown option '${first}'`, json, undefined, "");
+    const near = suggest(first, topLevelCandidates());
+    return usageFail(`unknown command '${first}'${didYouMean(near)}`, json, undefined, "");
   }
-  // `axiom <verb> --help` used to reach the verb's strict parseArgs → "Unknown option '--help'".
+  const { cmd, rest } = resolved;
+  const name = commandName(cmd);
+  // `axiom <cmd> --help` used to reach the verb's strict parseArgs -> "Unknown option '--help'".
   // No option of any verb is `-h`, so either flag before a `--` separator means "show usage".
-  const dashDash = rest.indexOf("--");
-  const flags = dashDash === -1 ? rest : rest.slice(0, dashDash);
-  if (flags.includes("--help") || flags.includes("-h")) {
-    process.stdout.write(HELP);
+  if (wantsHelp(rest)) {
+    process.stdout.write(renderCommandHelp(cmd));
     return EXIT_OK;
   }
+  if (cmd.passthrough !== true) {
+    const bad = checkOptions(cmd, rest);
+    if (bad !== undefined) return usageFail(bad, json, oneLineUsage(cmd), name);
+  }
   try {
-    return await run(rest);
+    return await cmd.run(rest);
   } catch (err) {
     if (err instanceof AxmDiagnosticsError) {
       out({ code: "ERR_INVALID_PLAN", diagnostics: err.diagnostics });
       return EXIT_USAGE;
     }
-    if (err instanceof UsageError) {
-      console.error(`error: ${err.message}\n\n${HELP}`);
-      return EXIT_USAGE;
-    }
-    // Duck-typed: lazy chunks (`migrate-lazy`, …) carry their own bundled AxiomError class.
+    if (err instanceof UsageError) return usageFail(err.message, json, oneLineUsage(cmd), name);
+    if (err instanceof Error && (err as { code?: string }).code?.startsWith("ERR_PARSE_ARGS"))
+      return usageFail(err.message, json, oneLineUsage(cmd), name);
+    // Duck-typed: lazy chunks (`migrate-lazy`, ...) carry their own bundled AxiomError class.
     if (isAxiomError(err)) {
       console.error(JSON.stringify(err.toJSON()));
       return EXIT_USAGE;
     }
-    if (err instanceof Error && (err as { code?: string }).code?.startsWith("ERR_PARSE_ARGS")) {
-      console.error(`error: ${err.message}\n\n${HELP}`);
+    const mapped = fsErrorToAxiom(err);
+    if (mapped !== undefined) {
+      console.error(JSON.stringify(mapped.toJSON()));
       return EXIT_USAGE;
     }
     console.error(
@@ -1197,3 +1441,6 @@ export async function main(argv: readonly string[], version: string): Promise<nu
     return EXIT_USAGE;
   }
 }
+
+/** For `scripts/gen-cli-doc.mjs` / `check-cli-doc.mjs`, which import the built `dist/cli-main.js`. */
+export { CLI_DOC_MARKER, COMMANDS, extractNotes, renderCliMarkdown } from "./cli-commands.js";

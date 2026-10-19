@@ -71,8 +71,9 @@ describe("canonicalize (RFC 8785)", () => {
   it("rejects lone surrogates in values and keys, accepts valid pairs", () => {
     const hi = String.fromCharCode(0xd800);
     const lo = String.fromCharCode(0xdc00);
-    expect(() => canonicalize(hi)).toThrow("lone high surrogate");
-    expect(() => canonicalize(lo)).toThrow("lone low surrogate");
+    expect(() => canonicalize(hi)).toThrow(CanonicalizeError);
+    expect(() => canonicalize(lo)).toThrow(CanonicalizeError);
+    expect(() => canonicalize(`${lo}${hi}`)).toThrow(CanonicalizeError);
     expect(() => canonicalize({ [hi]: 1 })).toThrow(CanonicalizeError);
     const emoji = String.fromCodePoint(0x1f600);
     expect(canonicalize(emoji)).toBe(JSON.stringify(emoji));

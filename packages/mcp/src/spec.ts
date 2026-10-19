@@ -1,12 +1,18 @@
 import { z } from "zod";
 import { toolJsonSchema } from "./jsonschema.js";
 import { TOOL_DEFS } from "./tools.js";
+import { type Toolset, toolsetOf } from "./toolset.js";
+
+/** Format version of `spec/codai-tools.json` (3.0.0 added `toolset`); not the package version. */
+export const CODAI_TOOLS_SPEC_VERSION = "3.0.0";
 
 /** One entry of `spec/tools.json` — the codai agent-core tool manifest shape. */
 export interface ToolSpecEntry {
   name: string;
   description: string;
   riskClass: "READ" | "ACT" | "SENSITIVE";
+  /** D-43: `core` = served by default; `full` = only with `--tools full`. */
+  toolset: Toolset;
   annotations: {
     readOnlyHint: boolean;
     destructiveHint: boolean;
@@ -22,6 +28,7 @@ export function buildToolsSpec(): ToolSpecEntry[] {
     name: t.name,
     description: t.description,
     riskClass: t.riskClass,
+    toolset: toolsetOf(t.name),
     annotations: t.annotations,
     inputSchema: toolJsonSchema(z.object(t.inputSchema)),
     outputSchema: toolJsonSchema(t.outputSchema),
@@ -42,6 +49,7 @@ export function renderToolsSpec(): string {
 export interface CodaiToolSpecEntry {
   name: string;
   risk: "READ" | "ACT" | "SENSITIVE";
+  toolset: Toolset;
   description: string;
   parameters: Record<string, unknown>;
 }
@@ -54,12 +62,18 @@ export interface CodaiToolsSpec {
 
 export function buildCodaiToolsSpec(): CodaiToolsSpec {
   return {
-    version: "2.0.0",
+    version: CODAI_TOOLS_SPEC_VERSION,
     description:
-      "AXIOM MCP tools in the shape of codai packages/agent-core/spec/tools-v2.json entries. GENERATED from packages/mcp/src/tools.ts by `pnpm --filter @codai/axiom-mcp build:spec` — do not edit. `risk` is derived from the MCP annotations (readOnlyHint → READ, destructiveHint → SENSITIVE, else ACT). Serve via `npx @codai/axiom-mcp mcp --root <dir>`; see docs/integration/codai.md.",
+      "AXIOM MCP tools in the shape of codai packages/agent-core/spec/tools-v2.json entries. GENERATED from packages/mcp/src/tools.ts by `pnpm --filter @codai/axiom-mcp build:spec` — do not edit. `risk` is derived from the MCP annotations (readOnlyHint → READ, destructiveHint → SENSITIVE, else ACT). `toolset: core` tools are served by default; `full` ones only with `--tools full`. Serve via `npx @codai/axiom-mcp mcp --root <dir> [--tools full]`; see docs/integration/codai.md.",
     tools: buildToolsSpec().map((t) => {
       const { $schema: _, ...parameters } = t.inputSchema;
-      return { name: t.name, risk: t.riskClass, description: t.description, parameters };
+      return {
+        name: t.name,
+        risk: t.riskClass,
+        toolset: t.toolset,
+        description: t.description,
+        parameters,
+      };
     }),
   };
 }

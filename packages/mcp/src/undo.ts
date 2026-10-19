@@ -3,6 +3,11 @@
  * allowed write into the CAS (`.axiom/cas/sha256/<aa>/<hex>`) and appends one JSON line per
  * target to `.axiom/undo/<sha256(agentId)[:16]>.jsonl`. `undoSession` restores the FIRST
  * pre-image recorded for each path, refusing paths another agent wrote afterwards (unless forced).
+ *
+ * 3.0 (I-20): when the gate lets a write OUTSIDE the root through (`outside: allow|warn`) and
+ * `undo: true`, `captureOutsideUndo` stores those pre-images in the same root's CAS with the
+ * absolute path (`outside: true`); `undoSession` restores them too, with the same conflict rule
+ * (a later write to that absolute path by another agent of this root wins unless forced).
  */
 import { randomBytes } from "node:crypto";
 import { realpath as realpathCb } from "node:fs";
@@ -30,10 +35,12 @@ export const UNDO_TTL_MS_DEFAULT = 7 * 24 * 3600 * 1000;
 export const UNDO_BYTES_MAX = 8 * 1024 * 1024;
 
 export interface UndoItem {
+  /** Root-relative POSIX path, or the absolute path (forward slashes) when `outside`. */
   path: string;
   action: "restore" | "delete" | "skip";
   reason?: "conflict" | "toolarge" | "missing-blob" | "unchanged";
   pre: string;
+  outside?: true;
 }
 
 export interface UndoResult {
@@ -54,6 +61,8 @@ interface UndoLine {
   tool: string;
   path: string;
   pre: string;
+  /** 3.0: `path` is an absolute path outside the root. */
+  outside?: true;
 }
 
 export function undoDir(root: string): string {
@@ -71,9 +80,23 @@ function safeRel(relPath: string): string | undefined {
   return rel;
 }
 
+/** Absolute, normalised, forward-slash form of an outside path; `undefined` when not absolute. */
+function safeAbs(p: string): string | undefined {
+  if (!path.isAbsolute(p)) return undefined;
+  return path.resolve(p).replace(/\\/g, "/");
+}
+
+function absOf(root: string, l: { path: string; outside?: true }): string {
+  return l.outside === true ? path.resolve(l.path) : path.join(root, ...l.path.split("/"));
+}
+
 /** Current state of a file: `sha256:<hex>`, `absent`, or `toolarge`. */
 async function preImage(root: string, rel: string, store: boolean): Promise<string> {
-  const abs = path.join(root, ...rel.split("/"));
+  return preImageAbs(root, path.join(root, ...rel.split("/")), store);
+}
+
+/** Like `preImage`, for any absolute file; blobs always go into `root`'s CAS. */
+async function preImageAbs(root: string, abs: string, store: boolean): Promise<string> {
   try {
     const st = await stat(abs);
     if (!st.isFile()) return "absent";
@@ -131,6 +154,57 @@ export async function captureUndo(
   }
 }
 
+/**
+ * Capture pre-images of absolute paths OUTSIDE `rootReal` into its undo store (I-20). Paths
+ * inside the root, relative paths and duplicates are ignored (in-root targets use
+ * `captureUndo`). Never throws.
+ */
+export async function captureOutsideUndo(
+  rootReal: string,
+  e: {
+    sessionId?: string;
+    agentId: string;
+    tool: string;
+    absPaths: readonly string[];
+    now?: number;
+  },
+): Promise<void> {
+  try {
+    const at = e.now ?? Date.now();
+    const rootN = path.resolve(rootReal).replace(/\\/g, "/");
+    const lines: string[] = [];
+    const done = new Set<string>();
+    for (const p of e.absPaths) {
+      const abs = safeAbs(p);
+      if (abs === undefined || done.has(abs)) continue;
+      if (abs === rootN || abs.startsWith(`${rootN}/`)) continue;
+      done.add(abs);
+      let pre: string;
+      try {
+        pre = await preImageAbs(rootReal, abs, true);
+      } catch {
+        continue;
+      }
+      const line: UndoLine = {
+        v: 1,
+        at,
+        agentId: e.agentId,
+        ...(e.sessionId === undefined ? {} : { sessionId: e.sessionId }),
+        tool: e.tool,
+        path: abs,
+        pre,
+        outside: true,
+      };
+      lines.push(JSON.stringify(line));
+    }
+    if (lines.length === 0) return;
+    await mkdir(undoDir(rootReal), { recursive: true });
+    await appendFile(logFile(rootReal, e.agentId), `${lines.join("\n")}\n`);
+  } catch {
+    // advisory capture — never fail the gate
+  }
+}
+
 function parseLine(text: string): UndoLine | undefined {
   try {
     const o = JSON.parse(text) as Partial<UndoLine>;
@@ -141,6 +215,10 @@ function parseLine(text: string): UndoLine | undefined {
       typeof o.path !== "string" ||
       typeof o.pre !== "string"
     ) {
+      return undefined;
+    }
+    // An `outside` line must carry a normalised absolute path; an in-root line a safe relative one.
+    if (o.outside === true ? safeAbs(o.path) !== o.path : safeRel(o.path) === undefined) {
       return undefined;
     }
     return o as UndoLine;
@@ -264,14 +342,16 @@ export async function undoSession(
       a < b ? -1 : a > b ? 1 : 0,
     )) {
       const pre = line.pre;
+      const out = line.outside === true ? { outside: true as const } : {};
       const skip = (reason: UndoItem["reason"] & string): void => {
-        items.push({ path: rel, action: "skip", reason, pre });
+        items.push({ path: rel, action: "skip", reason, pre, ...out });
       };
       if (pre === "toolarge") {
         skip("toolarge");
         continue;
       }
-      const current = await preImage(rootReal, rel, false).catch(() => "toolarge");
+      const abs = absOf(rootReal, line);
+      const current = await preImageAbs(rootReal, abs, false).catch(() => "toolarge");
       if (current === pre) {
         skip("unchanged");
         continue;
@@ -284,10 +364,10 @@ export async function undoSession(
       }
       if (pre === "absent") {
         if (!dryRun) {
-          const t = await resolveContained(rootReal, rel);
-          await rm(t.abs, { force: true });
+          if (line.outside === true) await rm(abs, { force: true });
+          else await rm((await resolveContained(rootReal, rel)).abs, { force: true });
         }
-        items.push({ path: rel, action: "delete", pre });
+        items.push({ path: rel, action: "delete", pre, ...out });
         restored++;
         continue;
       }
@@ -298,10 +378,10 @@ export async function undoSession(
         continue;
       }
       if (!dryRun) {
-        const t = await resolveContained(rootReal, rel);
-        await writeAtomic(t.abs, bytes);
+        if (line.outside === true) await writeAtomic(abs, bytes);
+        else await writeAtomic((await resolveContained(rootReal, rel)).abs, bytes);
       }
-      items.push({ path: rel, action: "restore", pre });
+      items.push({ path: rel, action: "restore", pre, ...out });
       restored++;
     }
     return { root: rootReal, agentId, dryRun, items, restored, conflicts };

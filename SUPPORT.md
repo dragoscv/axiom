@@ -35,11 +35,14 @@ The issue form asks for these; the fastest fixes come from reports that include 
 
 | Series | Status | What you get |
 |---|---|---|
-| **2.2.x** | Current | Features, fixes and security patches, released as patch versions of the fixed group |
-| 2.0.x – 2.1.x | Supported for security fixes | Upgrade to 2.2.x for everything else; no breaking change between them |
+| 3.x | Upcoming — becomes the supported line when 3.0.0 is released | See [MIGRATION.md](MIGRATION.md) for the 2.x → 3.0 changes |
+| **2.7.x** | Supported | Fixes and security patches, released as patch versions of the fixed group |
+| < 2.7 | Unsupported | Upgrade to 2.7.x (no breaking change within 2.x) |
 | 1.0.x | **Deprecated** on npm, no fixes | See [MIGRATION.md](MIGRATION.md) and `axiom migrate v1` |
 
-All nine `@codai/axiom-*` packages share one version; mixing versions is unsupported.
+The same table as [SECURITY.md](SECURITY.md#supported-versions). Every published
+`@codai/axiom-*` package — including the native `@codai/axiom-hook-<os>-<cpu>` packages from 3.0 —
+shares one version (a Changesets fixed group); mixing versions is unsupported.
 Compatibility rules (what counts as breaking, JSON Schema `$id`s, Node floor ≥ 22.14):
 [docs/reference/versioning.md](docs/reference/versioning.md).
 

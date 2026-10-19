@@ -288,21 +288,21 @@ export async function collectStats(o: CollectStatsOptions): Promise<StatsResult>
       alarms.push({
         id: "gate.silent",
         harness: l.harness,
-        message: `${l.hookRuns} PreToolUse hook runs for this root, 0 of them the axiom gate — run \`axiom init\`, trust the workspace, reload the window`,
+        message: `${l.hookRuns} PreToolUse hook runs for this root, 0 of them the axiom gate - run \`axiom setup init\`, trust the workspace, reload the window`,
       });
     }
     if ((l.nonBlockingErrors ?? 0) > 0) {
       alarms.push({
         id: "gate.nonBlocking",
         harness: l.harness,
-        message: `${l.nonBlockingErrors} gate run(s) errored instead of deciding — check the hook command resolves (\`axiom doctor\`)`,
+        message: `${l.nonBlockingErrors} gate run(s) errored instead of deciding - check the hook command resolves (\`axiom setup doctor\`)`,
       });
     }
     if (l.p95 !== undefined && l.p95 > GATE_SLOW_P95_MS) {
       alarms.push({
         id: "gate.slow",
         harness: l.harness,
-        message: `gate p95 ${l.p95} ms > ${GATE_SLOW_P95_MS} ms — consider \`axiom init --daemon\` or check machine load`,
+        message: `gate p95 ${l.p95} ms > ${GATE_SLOW_P95_MS} ms - consider \`axiom setup init --daemon\` or check machine load`,
       });
     }
   }
@@ -310,7 +310,7 @@ export async function collectStats(o: CollectStatsOptions): Promise<StatsResult>
     alarms.push({
       id: "decisions.empty",
       message:
-        "gate profile has record: true but no decisions were journaled in the window — the gate is not running for this root",
+        "gate profile has record: true but no decisions were journaled in the window - the gate is not running for this root",
     });
   }
 
@@ -332,7 +332,7 @@ function bucketLine(label: string, b: StatsBucket): string {
 /** Human lines for the CLI (no trailing newlines). */
 export function renderStats(s: StatsResult): string[] {
   const d = s.decisions;
-  const lines = [`axiom stats — ${s.root}${s.since === undefined ? "" : ` since ${s.since}`}`];
+  const lines = [`axiom stats - ${s.root}${s.since === undefined ? "" : ` since ${s.since}`}`];
   lines.push(bucketLine("decisions", d));
   const codes = Object.entries(d.codes).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   if (codes.length > 0) lines.push(`  codes: ${codes.map(([c, n]) => `${c} ${n}`).join(", ")}`);

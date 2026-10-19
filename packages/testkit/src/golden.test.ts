@@ -34,4 +34,21 @@ describe("golden manifests", async () => {
     // manifestDigest differs because `origin` (patch vs inline) is recorded per artifact.
     expect(a.manifestDigest).not.toBe(b.manifestDigest);
   });
+
+  it("D-41: a 2.x plan (axiom.dev/v2) still compiles, to its 2.x digest; v3 differs only in digests", async () => {
+    const byName = new Map(cases.map((c) => [c.name, c]));
+    const v3 = byName.get("plan-basic");
+    const v2 = byName.get("plan-basic-v2");
+    if (v3 === undefined || v2 === undefined) throw new Error("plan-basic twins missing");
+    expect(JSON.parse(await readFile(v2.planPath, "utf8")).apiVersion).toBe("axiom.dev/v2");
+    expect(JSON.parse(await readFile(v3.planPath, "utf8")).apiVersion).toBe("axiom.codai.ro/v3");
+    const a = await compileGolden(v3.planPath);
+    const b = await compileGolden(v2.planPath);
+    expect(b.manifestDigest).toBe(
+      "sha256:dc486d57187df44cd3bcaa93a43422da84e8808bbb6bc28cd9d24f3ecbf585e0",
+    );
+    expect(a.manifestDigest).not.toBe(b.manifestDigest);
+    expect(a.planDigest).not.toBe(b.planDigest);
+    expect(a.artifacts).toEqual(b.artifacts);
+  });
 });

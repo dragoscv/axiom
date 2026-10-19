@@ -77,7 +77,7 @@ manifest without `preImage` (compiled without a root) skips this step.
 **Rollback failure is its own error.** When a commit step fails and the scoped
 rollback also fails, the result is `status: failed` with `error.code:
 ERR_ROLLBACK` (the original error is in the message and `details`), the journal
-stays in `rolling-back`, and `axiom rollback <digest>` (or the recovery at the
+stays in `rolling-back`, and `axiom journal rollback <digest>` (or the recovery at the
 next apply) retries it.
 
 **Pre-apply checks are part of the transaction.** When a `preChecks` callback
@@ -94,7 +94,7 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
   last `keepBackups` manifests (default 3, `--keep-backups <n>`), then prunes.
 - **No network.** `mode: pr` never pushes or opens a pull request (see below).
 - **`ref` sources are never fetched by apply** (`ERR_REF_OFFLINE` when the blob is not in the
-  local CAS); `axiom compile --allow-net` on the same root fetches and pins them first.
+  local CAS); `axiom plan compile --allow-net` on the same root fetches and pins them first.
 - **Directory `fsync` is skipped on Windows**; a power loss in the milliseconds
   after a rename can lose the rename on NTFS. Journal and marker files are still
   fsynced.
@@ -115,20 +115,23 @@ the staged tree after phase 1; any verdict other than `pass` aborts with
   applied/<hex>.json       ApplyResult of a committed apply; presence = idempotency marker
   cas/sha256/<aa>/<hex>    optional content-addressed store (written by compile --store cas)
   manifests/               bundles stored by the MCP server when a root is given to compile
-  profiles/<name>.json     custom check profiles
+  axiom.json               gate policy + check profiles (3.0; committed)
+  profiles/<name>.json     2.x custom check profiles (still read, deprecated)
   wt/<hex12>/              PR mode only: the isolated worktree, removed when the apply ends
   tmp/                     case-sensitivity probe scratch
 ```
 
 `<hex>` is the 64-char manifest digest without the `sha256:` prefix. The
 `default` profile protects `.axiom/**` from being overwritten by a manifest.
-`axiom init` adds `.axiom/*` to `.gitignore` with exceptions for
-`.axiom/profiles/` and `.axiom/gate-profile.json`.
+`axiom setup init` adds `.axiom/*` to `.gitignore` with `!` exceptions for the committed policy
+files ([profiles.md](../reference/profiles.md)).
 
 ## Two-phase flow
 
 ```mermaid
 stateDiagram-v2
+  accTitle: Apply state machine
+  accDescr: The states an apply moves through from acquiring the lock to committed, with the rollback paths on failure.
   [*] --> lock: acquire .axiom/lock
   lock --> recover: journal left in committing / rolling-back?
   recover --> noop: applied marker + digests match
@@ -140,7 +143,7 @@ stateDiagram-v2
   committing --> committed: every step renamed
   committing --> rollingBack: any error (ERR_PREIMAGE_CHANGED, ERR_EBUSY, …)
   rollingBack --> rolledBack: steps replayed in reverse
-  rollingBack --> failed: ERR_ROLLBACK — journal kept for axiom rollback
+  rollingBack --> failed: ERR_ROLLBACK — journal kept for axiom journal rollback
   committed --> [*]: applied/<hex>.json · lock released
   rolledBack --> [*]
   noop --> [*]
@@ -180,7 +183,7 @@ steps replayed in reverse where `done` — restore from backup or unlink the
 created file — then `rolled-back`. The result is `status: rolled-back` with
 `error` set to the original cause and `journal` pointing at the file. If the
 rollback itself fails, `status: failed` and the message names both errors; the
-journal is left for `axiom rollback <digest> --root .` or manual inspection
+journal is left for `axiom journal rollback <digest> --root .` or manual inspection
 ([`.github/skills/debug-apply-journal`](../../.github/skills/debug-apply-journal/SKILL.md)).
 
 Staging lives under the root so `rename` stays on one volume and is atomic
@@ -188,7 +191,7 @@ per file.
 
 ## Rollback on demand
 
-`rollback(root, manifestDigest)` (CLI `axiom rollback`, MCP `axiom_rollback`)
+`rollback(root, manifestDigest)` (CLI `axiom journal rollback`, MCP `axiom_rollback`)
 replays the journal of a committed apply in reverse using `backup/<hex>/`. It
 is scoped to the paths in that journal; files created after the apply by
 someone else are not touched. A journal whose backups were already pruned
@@ -212,6 +215,8 @@ failure into an early, explicit one and make the shared state inspectable.
 
 ```mermaid
 sequenceDiagram
+  accTitle: Concurrent applies
+  accDescr: Two applies on the same root serialised by the lock, with the second one failing its pre-image check.
   participant A as apply A (src/x.ts)
   participant B as apply B (src/x.ts)
   participant I as .axiom/intents
@@ -246,11 +251,11 @@ of dead pids are skipped and removed. The wait is bounded by `--lock-timeout <ms
 timeout the result is `ERR_LOCKED` with
 `details: { holder, waitedMs, queuePosition, lock }` (`queuePosition` 1 = head).
 
-**Inspecting a root.** `axiom status [--root <dir>] [--json]` (MCP
+**Inspecting a root.** `axiom journal status [--root <dir>] [--json]` (MCP
 `axiom_status`, resource `axiom://lock`) is a read-only snapshot that never
 takes the lock: holder (pid, host, digest, since, `STALE`), queue, registered
-intents with their paths, interrupted journals that need `axiom rollback`, the
-last applied entry and whether the chain verifies. `axiom log [--root <dir>] [--limit <n>] [--json]`
+intents with their paths, interrupted journals that need `axiom journal rollback`, the
+last applied entry and whether the chain verifies. `axiom journal log [--root <dir>] [--limit <n>] [--json]`
 prints the journal chain newest first (default 20):
 `#seq at state manifestDigest name (files) [code]`.
 
@@ -258,7 +263,7 @@ prints the journal chain newest first (default 20):
 (`committed`, `rolled-back`, `failed`) appends one line to
 `.axiom/journal/chain.jsonl`: `{ seq, manifestDigest, state, at, prev, files, code? }`,
 where `prev` is the sha256 of the previous line's exact bytes (64 zeros for
-`seq` 1). `axiom verify --journal --root <dir>` re-walks it and exits `1` with
+`seq` 1). `axiom journal verify --root <dir>` re-walks it and exits `1` with
 `code: ERR_JOURNAL_CHAIN` and `firstBad { seq, reason: prev-mismatch | seq-gap | parse }`
 on any break; it also returns `head` (digest of the last line) and `missing`
 (entries whose journal file was pruned — legal, not a fault). An apply never

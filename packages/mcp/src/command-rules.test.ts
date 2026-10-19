@@ -8,9 +8,11 @@ import {
   type CommandsConfig,
   CommandsConfigSchema,
   evaluateCommand,
+  evaluateCommandRules,
   HOUSE_DEPLOY_RULE,
   HOUSE_PACK,
 } from "./command-rules.js";
+import { UNDECODABLE } from "./shell-lex.js";
 
 interface ParityCase {
   command: string;
@@ -24,14 +26,20 @@ const corpus = JSON.parse(
 ) as ParityCase[];
 const house: CommandsConfig = { deny: [], pack: "house" };
 const only = (...deny: CommandRule[]): CommandsConfig => ({ deny, pack: "none" });
+/** v3 rules the PowerShell guard does not have; covered by the bypass tables below instead. */
+const AXIOM_ONLY = new Set(["house.pushDelete", "house.undecodable"]);
+const enc = (s: string): string => Buffer.from(s, "utf16le").toString("base64");
+const ids = (command: string): string[] => evaluateCommandRules(command, house).map((v) => v.id);
 
 describe("house pack parity with the PowerShell guard (fixtures/guard-parity.json)", () => {
   const live = corpus.filter((c) => c.stateful !== true);
 
   it("covers every HOUSE_PACK rule with a deny and has at least 80 cases", () => {
     expect(live.length).toBeGreaterThanOrEqual(80);
-    const firing = new Set(live.map((c) => evaluateCommand(c.command, house)?.id));
-    for (const rule of HOUSE_PACK) expect(firing, rule.id).toContain(rule.id);
+    const firing = new Set(live.flatMap((c) => ids(c.command)));
+    for (const rule of HOUSE_PACK) {
+      if (!AXIOM_ONLY.has(rule.id ?? "")) expect(firing, rule.id).toContain(rule.id);
+    }
     expect(live.filter((c) => c.guard === "allow").length).toBeGreaterThanOrEqual(30);
   });
 
@@ -39,6 +47,152 @@ describe("house pack parity with the PowerShell guard (fixtures/guard-parity.jso
     const v = evaluateCommand(command, house);
     expect(v ? "deny" : "allow").toBe(guard);
     if (v) expect(v.id).toMatch(/^house\./);
+  });
+});
+
+describe("v3 semantic house rules (shell-lex) close the 2.7.0 bypasses", () => {
+  const PUSH = "git push --force origin main";
+  const cases: readonly (readonly [string, string])[] = [
+    ["git push -uf origin main", "house.forcePush"],
+    ["git push -fu origin main", "house.forcePush"],
+    ["git push origin +main", "house.forcePush"],
+    ["git push origin +HEAD:refs/heads/main", "house.forcePush"],
+    ["git push --mirror", "house.forcePush"],
+    ["git -C . push --force", "house.forcePush"],
+    ["git -c x=y push --force origin main", "house.forcePush"],
+    ["git --no-pager push --force", "house.forcePush"],
+    ["git --git-dir=.git --work-tree . push -f", "house.forcePush"],
+    ["git.exe push --force", "house.forcePush"],
+    ['& "C:\\Program Files\\Git\\cmd\\git.exe" push --force', "house.forcePush"],
+    ["& 'git' push --force", "house.forcePush"],
+    ['"git" push --force', "house.forcePush"],
+    ['git push "--force"', "house.forcePush"],
+    ["git push '--force'", "house.forcePush"],
+    ['git push -"f"', "house.forcePush"],
+    ['git push --forc"e"', "house.forcePush"],
+    ["git p`ush --force", "house.forcePush"],
+    ["git push --for`ce", "house.forcePush"],
+    ["git push --force-with-lease", "house.forcePush"],
+    ["git push --force-with-lease=main:abc origin main", "house.forcePush"],
+    ["iex 'git push --force'", "house.forcePush"],
+    ['Invoke-Expression "git push --force"', "house.forcePush"],
+    [`pwsh -EncodedCommand ${enc("git push --force origin main")}`, "house.forcePush"],
+    [`pwsh -NoProfile -ExecutionPolicy Bypass -enc ${enc(PUSH)}`, "house.forcePush"],
+    [`powershell -enc ${enc(PUSH)}`, "house.forcePush"],
+    ['pwsh -NoProfile -Command "git push -f"', "house.forcePush"],
+    ['cmd /c "git push -f"', "house.forcePush"],
+    ["cmd.exe /c git push -f", "house.forcePush"],
+    ["bash -c 'git push -f'", "house.forcePush"],
+    ["sh -lc 'cd x && git push -f'", "house.forcePush"],
+    ["bash -c \"pwsh -c 'git push -f'\"", "house.forcePush"],
+    ["echo ok\ngit push -f", "house.forcePush"],
+    ["echo ok\r\ngit push -f", "house.forcePush"],
+    ["echo ok & git push -f", "house.forcePush"],
+    ["$r = git push -f", "house.forcePush"],
+    ["(git push -f)", "house.forcePush"],
+    ["echo 'git push -f' | bash", "house.forcePush"],
+    ["bash <<'EOF'\ngit push -f\nEOF", "house.forcePush"],
+    ["git push --delete origin main", "house.pushDelete"],
+    ["git push -d origin main", "house.pushDelete"],
+    ["git push origin :main", "house.pushDelete"],
+    ["git reset HEAD --hard", "house.resetHard"],
+    ['git reset "--hard"', "house.resetHard"],
+    ["git reset --ha`rd", "house.resetHard"],
+    ["git -C . reset --hard", "house.resetHard"],
+    ["git clean -d -f", "house.cleanForce"],
+    ["git clean --force", "house.cleanForce"],
+    ["git clean -fdx", "house.cleanForce"],
+    ["git -C . clean -fd", "house.cleanForce"],
+    ["git worktree remove --force x", "house.worktreeRemoveForce"],
+    ["git worktree remove -f x", "house.worktreeRemoveForce"],
+    ["git worktree remove x --force", "house.worktreeRemoveForce"],
+    ["git stash drop", "house.stashDrop"],
+    ["git stash drop stash@{1}", "house.stashDrop"],
+    ["git stash clear", "house.stashDrop"],
+    ["git -C repo stash clear", "house.stashDrop"],
+    ["pwsh -enc !!notbase64!!", "house.undecodable"],
+    [`pwsh -enc ${Buffer.from([1, 0, 2, 0]).toString("base64")}`, "house.undecodable"],
+    ["pwsh -EncodedCommand", "house.undecodable"],
+  ];
+
+  it.each(cases)("%j -> %s", (command, id) => {
+    expect(ids(command)).toContain(id);
+  });
+
+  const negatives: readonly string[] = [
+    "git push origin main",
+    "git push --follow-tags",
+    "git push -u origin feat/x",
+    "git push --force-if-includes origin main",
+    "git push origin main:main",
+    "git push origin refs/tags/v1:refs/tags/v1",
+    "git reset --soft HEAD~1",
+    "git reset HEAD -- a.ts",
+    "git clean -n",
+    "git clean -dn",
+    'echo "git push --force"',
+    "echo 'git push --force'",
+    'Write-Host "git reset --hard"',
+    "cat <<'EOF'\ngit push -f\nEOF",
+    "cat <<EOF > notes.md\ngit push -f\ngit reset --hard\nEOF",
+    "$t = @'\ngit push -f\n'@",
+    'git commit -m "fix: force push docs" -- a.ts',
+    "git log --grep=force -- push.ts",
+    "git worktree list",
+    "git stash list",
+    "git stash show -p stash@{0}",
+    "rg -n 'git push -f' docs",
+    "git push origin main # never --force here",
+  ];
+
+  it.each(negatives)("%j -> no destructive house rule", (command) => {
+    const hit = ids(command).filter((id) =>
+      [
+        "house.forcePush",
+        "house.pushDelete",
+        "house.resetHard",
+        "house.cleanForce",
+        "house.worktreeRemoveForce",
+        "house.stashDrop",
+        "house.undecodable",
+      ].includes(id),
+    );
+    expect(hit).toEqual([]);
+  });
+
+  it("returns every match in pack order so a softer first match cannot shadow a hard one", () => {
+    expect(ids("git worktree remove --force ../x")).toEqual([
+      "house.worktreeRemoveForce",
+      "house.worktreeRawRemove",
+    ]);
+    expect(ids("git stash drop")).toEqual(["house.stashDrop", "house.stashBare"]);
+    const both = ids("git reset --hard; git push -f");
+    expect(both).toEqual(["house.forcePush", "house.resetHard"]);
+    expect(evaluateCommand("git reset --hard; git push -f", house)?.id).toBe("house.forcePush");
+  });
+
+  it("marks undecodable nested commands ask, with a fix", () => {
+    const v = evaluateCommandRules("powershell -enc ####", house).find(
+      (x) => x.id === "house.undecodable",
+    );
+    expect(v?.decision).toBe("ask");
+    expect(v?.fix).toBe("decode the command and run it plainly");
+    expect(HOUSE_PACK.find((r) => r.id === "house.undecodable")?.pattern).toBe(UNDECODABLE);
+  });
+
+  it("treats nesting deeper than 3 levels as undecodable", () => {
+    const three = `bash -c "sh -c 'pwsh -c \\"git push -f\\"'"`;
+    expect(ids(three)).toContain("house.forcePush");
+    const four = `bash -c "sh -c 'pwsh -c \\"cmd /c git push -f\\"'"`;
+    expect(ids(four)).toEqual(["house.undecodable"]);
+    let cmd = "git status";
+    for (let i = 0; i < 5; i++) cmd = `pwsh -enc ${enc(cmd)}`;
+    expect(ids(cmd)).toEqual(["house.undecodable"]);
+  });
+
+  it("keeps a user rule that reuses a house id on its own pattern", () => {
+    const mine: CommandRule = { id: "house.forcePush", pattern: "never-matches-xyz", reason: "r" };
+    expect(evaluateCommand("git push -f", only(mine))).toBeUndefined();
   });
 });
 

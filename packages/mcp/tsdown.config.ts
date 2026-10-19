@@ -21,15 +21,18 @@ const CEDAR_WASM = /^@cedar-policy\/cedar-wasm/;
  * module (~19 KB across the CLI bundle). They are comments only, so dropping them changes no
  * behaviour and keeps the eager `cli.js + cli-main.js` inside the 950 KB budget.
  * Whole-line JSDoc blocks (`/** … *​/`, ~95 KB in the CLI bundle, mostly from bundled deps) are
- * dropped for the same reason; `/*!` license banners are untouched.
+ * dropped for the same reason — except blocks carrying `@license` or `@preserve` (legal
+ * comments must survive bundling); `/*!` license banners never match the pattern.
  */
+const JSDOC_LINE = /^[ \t]*\/\*\*(?:[^*]|\*(?!\/))*\*\/[ \t]*\r?\n/gm;
+const LEGAL_COMMENT = /@license\b|@preserve\b/;
 const stripRegionMarkers = {
   name: "axiom-strip-region-markers",
   renderChunk(code: string) {
     return {
       code: code
         .replace(/^\/\/#(?:end)?region\b[^\n]*\n/gm, "")
-        .replace(/^[ \t]*\/\*\*(?:[^*]|\*(?!\/))*\*\/[ \t]*\r?\n/gm, ""),
+        .replace(JSDOC_LINE, (block) => (LEGAL_COMMENT.test(block) ? block : "")),
       map: null,
     };
   },
@@ -75,6 +78,7 @@ export default defineConfig([
         /gc-lazy/,
         /mcp-lazy/,
         /ops-lazy/,
+        /v3-lazy/,
         /yaml-lazy/,
         /serve-lazy/,
       ],
@@ -111,6 +115,19 @@ export default defineConfig([
     ...shared,
     // Standalone `axiom init` / `axiom doctor` chunk (S-701/S-702): setup, CLI only.
     entry: { "ops-lazy": "src/ops-lazy.ts" },
+    dts: false,
+    clean: false,
+    plugins: [stripRegionMarkers],
+    deps: {
+      alwaysBundle: [/.*/],
+      neverBundle: [/^node:/, CEDAR_WASM],
+    },
+  },
+  {
+    ...shared,
+    // 3.0 CLI-only commands (fleet, explain, suggest, replay, report, pin, acp-proxy, migrate
+    // --profile): loaded on demand, never in the eager bundle.
+    entry: { "v3-lazy": "src/v3-lazy.ts" },
     dts: false,
     clean: false,
     plugins: [stripRegionMarkers],

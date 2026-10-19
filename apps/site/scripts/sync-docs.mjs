@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /**
- * sync-docs — copy `docs/**` (except `archive/`) into `src/content/docs/`, inject Starlight
+ * sync-docs — copy `docs/**` (except `archive/` and `research/`) into `src/content/docs/`, inject Starlight
  * frontmatter, rewrite relative `.md` links to site routes, and emit the static extras
  * (brand assets, favicon, og.png, llms.txt, llms-full.txt, install.sh, install.ps1).
+ *
+ * `research/` is working material (dated notes that quote local machine paths); it stays in the
+ * repository and links to it resolve to the GitHub blob view. Any remaining Windows home-directory
+ * path (`C:\Users\<name>`) is redacted to `<home>` before publishing (Unix examples such as
+ * `/home/ci/repo` are illustrative and stay).
  *
  * Deterministic: the same `docs/` tree always produces byte-identical output. Runs before
  * `astro dev` / `astro build` (see package.json scripts).
@@ -10,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, posix, relative, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -18,20 +23,31 @@ const SITE_ROOT = resolve(here, "..");
 const REPO_ROOT = resolve(SITE_ROOT, "..", "..");
 const DOCS_SRC = join(REPO_ROOT, "docs");
 const BRAND_SRC = join(REPO_ROOT, "assets", "brand");
+const SCHEMAS_SRC = join(REPO_ROOT, "packages", "schema", "schemas");
 const CONTENT_OUT = join(SITE_ROOT, "src", "content", "docs");
 const PUBLIC_OUT = join(SITE_ROOT, "public");
+/** JSON Schemas are served at the `$id` they carry: `<site>/axiom/schemas/v3/<Kind>.schema.json`. */
+const SCHEMAS_OUT = join(PUBLIC_OUT, "schemas", "v3");
 const ASSETS_OUT = join(SITE_ROOT, "src", "assets");
 
 const SITE_URL = "https://dragoscv.github.io";
 const BASE = "/axiom";
 const REPO_URL = "https://github.com/dragoscv/axiom";
-const EXCLUDE_DIRS = new Set(["archive"]);
+/** Top-level docs/ directories that are never published (site pages, llms.txt, llms-full.txt). */
+const EXCLUDE_DIRS = new Set(["archive", "research"]);
 const LANDING = "index.mdx"; // hand-written, never touched by this script
+/**
+ * `docs/spec/**` pages are published at the exact URIs AXIOM writes into statements
+ * (`AXIOM_SPEC_BASE` in packages/canon/src/statement.ts), e.g. `/spec/build/plan@v2/` and
+ * `/spec/attestation/agent-decision/v0.1/`. Astro's default slug would drop `@` and `.`, so these
+ * pages get an explicit `slug` and their routes are not slugified.
+ */
+const VERBATIM_DIR = "spec";
 
 /** Explicit sidebar order per directory. Anything not listed sorts after, alphabetically. */
 const ORDER = {
   "getting-started": ["install", "quickstart", "hooks"],
-  concepts: ["pipeline", "invariants", "trust-model", "cas"],
+  concepts: ["pipeline", "invariants", "trust-model", "cas", "glossary"],
   guides: [
     "apply",
     "checks",
@@ -61,7 +77,8 @@ const ORDER = {
   ],
   integration: ["harnesses", "github-action", "vscode", "codai", "brivio", "metu", "agentq"],
   design: ["v2-architecture", "decisions"],
-  research: [], // dated files — sorted by name (= by date)
+  "spec/attestation/apply": ["v1"],
+  "spec/attestation/agent-decision": ["v0.1"],
 };
 /** Section order for llms.txt / llms-full.txt. */
 const SECTION_ORDER = [
@@ -71,8 +88,8 @@ const SECTION_ORDER = [
   "guides",
   "reference",
   "integration",
+  "spec",
   "design",
-  "research",
 ];
 const SECTION_LABEL = {
   "": "Start here",
@@ -81,12 +98,17 @@ const SECTION_LABEL = {
   guides: "Guides",
   reference: "Reference",
   integration: "Integrations",
+  spec: "Specifications",
   design: "Design",
-  research: "Research",
 };
 
 // ---------------------------------------------------------------------------------------------
 // helpers
+
+/** Replace Windows home-directory paths (`C:\Users\<name>`, `C:/Users/<name>`) with `<home>`. */
+function redactHome(text) {
+  return text.replace(/[A-Za-z]:(\\\\?|\/)Users\1[^\\/\s"'`)]+/g, "<home>");
+}
 
 async function walkMd(dir, rel = "") {
   const out = [];
@@ -96,7 +118,7 @@ async function walkMd(dir, rel = "") {
   for (const e of entries) {
     const r = rel ? posix.join(rel, e.name) : e.name;
     if (e.isDirectory()) {
-      if (EXCLUDE_DIRS.has(e.name)) continue;
+      if (!rel && EXCLUDE_DIRS.has(e.name)) continue;
       out.push(...(await walkMd(join(dir, e.name), r)));
     } else if (e.isFile() && e.name.endsWith(".md")) {
       out.push(r);
@@ -119,7 +141,12 @@ function slugSegment(s) {
 /** docs-relative source path → site route (no base), e.g. `guides/apply.md` → `/guides/apply/`. */
 function routeFor(relPath) {
   if (relPath === "README.md") return "/overview/";
+  if (isVerbatim(relPath)) return `/${relPath.replace(/\.md$/, "")}/`;
   return `/${relPath.replace(/\.md$/, "").split("/").map(slugSegment).join("/")}/`;
+}
+
+function isVerbatim(relPath) {
+  return relPath.split("/")[0] === VERBATIM_DIR;
 }
 
 function yamlString(s) {
@@ -154,7 +181,7 @@ function rewriteTarget(target, srcRel) {
     const repoRel = posix.normalize(posix.join("docs", resolved));
     return `${REPO_URL}/blob/main/${repoRel}${hash ? `#${hash}` : ""}`;
   }
-  if (resolved.split("/")[0] === "archive") {
+  if (EXCLUDE_DIRS.has(resolved.split("/")[0])) {
     return `${REPO_URL}/blob/main/docs/${resolved}${hash ? `#${hash}` : ""}`;
   }
   if (!existsSync(join(DOCS_SRC, resolved))) {
@@ -252,7 +279,7 @@ async function main() {
   const files = await walkMd(DOCS_SRC);
   const pages = [];
   for (const rel of files) {
-    const raw = await readFile(join(DOCS_SRC, rel), "utf8");
+    const raw = redactHome(await readFile(join(DOCS_SRC, rel), "utf8"));
     const { title, description, body } = extractHeader(raw, rel);
     const rewritten = rewriteLinks(body, rel);
     const route = routeFor(rel);
@@ -260,6 +287,7 @@ async function main() {
     const fm = {
       title,
       description,
+      slug: isVerbatim(rel) ? rel.replace(/\.md$/, "") : undefined,
       editUrl: `${REPO_URL}/edit/main/docs/${rel}`,
       sidebar: rel === "README.md" ? { hidden: true } : { order: sidebarOrder(rel) },
     };
@@ -270,8 +298,15 @@ async function main() {
       title,
       description: description ?? "",
       body: rewritten,
-      section: rel === "README.md" ? "" : posix.dirname(rel),
+      section: rel === "README.md" ? "" : rel.split("/")[0],
     });
+  }
+
+  // 2b. JSON Schemas → public/schemas/v3/ (served at their `$id`)
+  await rm(SCHEMAS_OUT, { recursive: true, force: true });
+  await ensureDir(SCHEMAS_OUT);
+  for (const f of (await readdir(SCHEMAS_SRC)).filter((n) => n.endsWith(".schema.json")).sort()) {
+    await copyFile(join(SCHEMAS_SRC, f), join(SCHEMAS_OUT, f));
   }
 
   // 3. ordering for llms.txt: section order, then explicit ORDER, then name

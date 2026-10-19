@@ -16,10 +16,19 @@
  *     the Plan validates, and `compilePlan` reports `ERR_BLOB_MISSING` until the blob is added.
  *
  * Pure with respect to its inputs: the same manifest + options yield a deep-equal Plan.
+ *
+ * `axiom migrate --profile` (3.0, D-42) lives here too: {@link migrateProfile} folds the 2.x
+ * policy files (`.axiom/gate-profile.json` + `.axiom/profiles/<name>.json`) into one
+ * `.axiom/axiom.json`, never deleting the old files.
  */
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import { casPut, encodeBlob, INLINE_BASE64_DECODED_MAX } from "@codai/axiom-plan";
 import {
+  API_VERSION,
+  AXIOM_CONFIG_PATH,
+  AXIOM_CONFIG_VERSION,
   AxiomError,
   type CheckRefInput,
   INLINE_CONTENT_MAX,
@@ -29,6 +38,13 @@ import {
   RelPathSchema,
 } from "@codai/axiom-schema";
 import { z } from "zod";
+import { profileNameFor } from "./init.js";
+import {
+  LEGACY_GATE_PROFILE,
+  LEGACY_PROFILES_DIR,
+  loadAxiomConfig,
+  loadLegacyAxiomConfig,
+} from "./profile-v3.js";
 
 export const MIGRATE_TOOL = "axiom migrate" as const;
 
@@ -351,7 +367,7 @@ function migrateEvidence(ctx: Ctx, evidence: V1Manifest["evidence"]): CheckRefIn
   return checks;
 }
 
-function migrateProfile(ctx: Ctx, profile: string | undefined): CheckRefInput[] {
+function migrateV1Profile(ctx: Ctx, profile: string | undefined): CheckRefInput[] {
   if (profile === undefined) return [];
   const constraints = V1_PROFILE_CONSTRAINTS[profile];
   if (constraints === undefined) {
@@ -412,7 +428,7 @@ export async function migrateV1(manifest: unknown, opts: MigrateOptions): Promis
     });
   }
 
-  const checks = [...migrateProfile(ctx, v1.profile), ...migrateEvidence(ctx, v1.evidence)];
+  const checks = [...migrateV1Profile(ctx, v1.profile), ...migrateEvidence(ctx, v1.evidence)];
 
   const migration: MigrationMetadata = {
     from: "v1",
@@ -423,7 +439,7 @@ export async function migrateV1(manifest: unknown, opts: MigrateOptions): Promis
     warnings: ctx.warnings,
   };
   const plan: PlanInput = {
-    apiVersion: "axiom.dev/v2",
+    apiVersion: API_VERSION,
     kind: "Plan",
     name: toPlanName(opts.name ?? `migrated-v1-${v1.profile ?? "manifest"}`),
     intent: `Migrated from AXIOM v1 manifest (profile ${v1.profile ?? "none"}, ${artifacts.length} artifacts)`,
@@ -464,4 +480,98 @@ export function findClockKeys(value: unknown, prefix = ""): string[] {
     hits.push(...findClockKeys(v, p));
   }
   return hits;
+}
+
+// ------------------------------------------------------------------ migrate --profile (D-42) --
+
+export interface MigrateProfileOptions {
+  /** Compute and return the new file without writing it. */
+  dryRun?: boolean;
+  /**
+   * Which `.axiom/profiles/<name>.json` becomes `checks`. Default: the name `axiom init` gives
+   * this root (`profileNameFor`), else the only file in `.axiom/profiles/`.
+   */
+  profileName?: string;
+}
+
+export interface MigrateProfileResult {
+  /** The new `.axiom/axiom.json` document. */
+  config: Record<string, unknown>;
+  /** Its exact text (2-space JSON + trailing newline). */
+  json: string;
+  /** Absolute path of `.axiom/axiom.json`. */
+  file: string;
+  /** Root-relative POSIX paths of the 2.x files folded in — left in place, safe to remove. */
+  oldFiles: string[];
+  written: boolean;
+  /** Human notes, e.g. that the old files can be removed. */
+  notes: string[];
+}
+
+async function pickLegacyProfileName(rootReal: string, wanted: string | undefined) {
+  if (wanted !== undefined) return wanted;
+  const own = profileNameFor(rootReal);
+  let names: string[];
+  try {
+    names = (await readdir(path.join(rootReal, ...LEGACY_PROFILES_DIR.split("/"))))
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.slice(0, -".json".length));
+  } catch {
+    return own;
+  }
+  if (names.includes(own)) return own;
+  return names.length === 1 && names[0] !== undefined ? names[0] : own;
+}
+
+/**
+ * Fold the 2.x policy files of `root` into `.axiom/axiom.json` (`version: 3`): `gate` from
+ * `.axiom/gate-profile.json`, `checks` from `.axiom/profiles/<name>.json` (minus
+ * `apiVersion`/`kind`). Never deletes or edits the old files. `ERR_EXISTS` when axiom.json is
+ * already there; `ERR_NOT_FOUND` when there is nothing to migrate.
+ */
+export async function migrateProfile(
+  root: string,
+  opts: MigrateProfileOptions = {},
+): Promise<MigrateProfileResult> {
+  const rootReal = path.resolve(root);
+  const file = path.join(rootReal, ...AXIOM_CONFIG_PATH.split("/"));
+  if ((await loadAxiomConfig(rootReal).catch(() => "present")) !== undefined) {
+    throw new AxiomError("ERR_EXISTS", `${AXIOM_CONFIG_PATH} already exists`, {
+      path: AXIOM_CONFIG_PATH,
+    });
+  }
+  const name = await pickLegacyProfileName(rootReal, opts.profileName);
+  const legacy = await loadLegacyAxiomConfig(rootReal, name);
+  if (legacy === undefined) {
+    throw new AxiomError(
+      "ERR_NOT_FOUND",
+      `nothing to migrate: neither ${LEGACY_GATE_PROFILE} nor ${LEGACY_PROFILES_DIR}/${name}.json exists`,
+      { details: { profile: name } },
+    );
+  }
+  const gate: Record<string, unknown> =
+    legacy.gate !== null && typeof legacy.gate === "object" && !Array.isArray(legacy.gate)
+      ? { ...(legacy.gate as Record<string, unknown>) }
+      : {};
+  // The format version now lives at the top level; `$schema` pointed at the 2.x gate schema.
+  delete gate.version;
+  delete gate.$schema;
+  const config: Record<string, unknown> = {
+    $schema: `https://dragoscv.github.io/axiom/schemas/v3/AxiomConfig.schema.json`,
+    version: AXIOM_CONFIG_VERSION,
+    gate,
+    checks: legacy.checks,
+  };
+  const json = `${JSON.stringify(config, null, 2)}\n`;
+  const oldFiles = legacy.sources.map((s) => path.relative(rootReal, s).split(path.sep).join("/"));
+  const notes = [
+    `${oldFiles.join(", ")} folded into ${AXIOM_CONFIG_PATH} (apiVersion ${API_VERSION}); ` +
+      `the old files were left in place — ${AXIOM_CONFIG_PATH} wins while it exists, so they can be removed`,
+  ];
+  if (opts.dryRun !== true) {
+    await mkdir(path.dirname(file), { recursive: true });
+    // `wx`: never clobber an axiom.json created between the check above and this write.
+    await writeFile(file, json, { encoding: "utf8", flag: "wx" });
+  }
+  return { config, json, file, oldFiles, written: opts.dryRun !== true, notes };
 }

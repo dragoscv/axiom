@@ -3,7 +3,7 @@
 *How `axiom_apply` and `axiom_write` make the final "yes, write it" a decision only a human can make.*
 
 `confirmDigest === manifestDigest` (invariant 3) proves the caller looked at **this** change set,
-but an agent can echo a digest it just received. Since 2.6.0 AXIOM adds two layers on top of the
+but an agent can echo a digest it just received. AXIOM adds two layers on top of the
 echo so that the confirm step needs a person.
 
 ## 1. `requiresUserInteraction` on the two write tools
@@ -60,7 +60,7 @@ or stale round just gets asked again.
 
 ## 3. Clients without elicitation
 
-By default nothing changes: the confirmDigest echo alone applies, as in 2.5.
+By default nothing changes: the confirmDigest echo alone applies.
 
 To make the human step mandatory, run the server with `--require-human`
 (`CreateServerOptions.requireHuman: true` when embedding). A client without form elicitation then
@@ -71,7 +71,7 @@ gets `ERR_CONFIRM_DIGEST_MISMATCH` `{ reason: "elicitation-unsupported", manifes
 
 The human step is only as strong as the harness around it:
 
-| Setting | Effect | `axiom doctor` |
+| Setting | Effect | `axiom setup doctor` |
 |---|---|---|
 | Claude Code `Elicitation` hook (`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json`) | can return `action: "accept"` + content, so no dialog appears | `fail elicitation.autoAnswer` |
 | Claude Code `ElicitationResult` hook | can rewrite the human's answer before it reaches the server | `fail elicitation.autoAnswer` |

@@ -109,4 +109,35 @@ describe("JournalSchema", () => {
       JournalSchema.safeParse({ ...valid, steps: [{ path: "a", op: "move", done: true }] }).success,
     ).toBe(false);
   });
+
+  it("backup must be a relative path under .axiom/backup/ (rc3: planted journals)", () => {
+    const step = (backup: string) => ({
+      ...valid,
+      steps: [{ path: "a.txt", op: "delete", backup, done: true }],
+    });
+    expect(JournalSchema.safeParse(step(".axiom/backup/x/a.txt")).success).toBe(true);
+    for (const bad of [
+      "../outside/victim.txt",
+      ".axiom/backup/../../victim.txt",
+      "/etc/passwd",
+      "C:/Windows/x",
+      "src/a.txt",
+      ".axiom/backup/",
+      ".axiom/journal/x.json",
+      ".axiom\\backup\\x\\a.txt",
+    ]) {
+      expect(JournalSchema.safeParse(step(bad)).success, bad).toBe(false);
+    }
+  });
+
+  it("preImage is a sha256 or absent; postImage is a sha256", () => {
+    const s = (extra: Record<string, unknown>) => ({
+      ...valid,
+      steps: [{ path: "a.txt", op: "overwrite", done: false, ...extra }],
+    });
+    expect(JournalSchema.safeParse(s({ preImage: "absent", postImage: HEX_A })).success).toBe(true);
+    expect(JournalSchema.safeParse(s({ preImage: HEX_A })).success).toBe(true);
+    expect(JournalSchema.safeParse(s({ preImage: "missing" })).success).toBe(false);
+    expect(JournalSchema.safeParse(s({ postImage: "absent" })).success).toBe(false);
+  });
 });

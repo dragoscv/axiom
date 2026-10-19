@@ -10,6 +10,10 @@ import { GuardExternalParams, guardEnv, parseLegacyText, resolveGuardCommand } f
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__", "guards");
 
+/** Wall-clock upper bound, ×5 on CI or a loaded box (AXIOM_LOADED_BOX). */
+const perfBound = (ms: number): number =>
+  ms * (process.env.CI || process.env.AXIOM_LOADED_BOX ? 5 : 1);
+
 let root: string;
 let outside: string;
 
@@ -54,7 +58,6 @@ describe("guard.external gating", () => {
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0]?.id).toBe("g");
     expect(code(r)).toBe("ERR_FACT_DISABLED");
-    expect(r.findings[0]?.message).toMatch(/disabled/);
     expect(r.providers.find((p) => p.name === "guard")?.status).toBe("error");
   });
   it("profile forbids guards → error even when the server allows", async () => {
@@ -83,7 +86,7 @@ describe("guard.external command resolution", () => {
     const r = await run({ command: "../axiom-guard-outside.mjs" });
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");
-    expect(r.findings[0]?.message).toMatch(/\.\./);
+    expect(r.findings[0]?.facts.command).toBe("../axiom-guard-outside.mjs");
   });
   it("relative escaping scripts/ via a sibling dir is rejected", async () => {
     await mkdir(join(root, "other"), { recursive: true });
@@ -92,10 +95,11 @@ describe("guard.external command resolution", () => {
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");
   });
   it("absolute path not in the allowlist is rejected", async () => {
-    const r = await run({ command: join(root, "scripts", "ok.mjs") });
+    const abs = join(root, "scripts", "ok.mjs");
+    const r = await run({ command: abs });
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");
-    expect(r.findings[0]?.message).toMatch(/allowlist/);
+    expect(r.findings[0]?.facts.command).toBe(abs);
   });
   it("absolute path in the allowlist runs", async () => {
     const abs = join(root, "scripts", "ok.mjs");
@@ -110,7 +114,9 @@ describe("guard.external command resolution", () => {
     await writeFile(join(root, "scripts", "x.exe"), "");
     const r = await run({ command: "x.exe" });
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");
-    expect(r.findings[0]?.message).toMatch(/mjs/);
+    expect(r.findings[0]?.facts.command).toBe("x.exe");
+    const res = await resolveGuardCommand("x.exe", [], root, []);
+    expect("file" in res).toBe(false);
   });
   it("scripts/ prefix is accepted and resolves to node", async () => {
     const res = await resolveGuardCommand("scripts/ok.mjs", ["--x"], root, []);
@@ -176,7 +182,7 @@ describe("guard.external output mapping", () => {
   it("hang.mjs with timeoutMs 500 → ERR_GUARD_TIMEOUT", async () => {
     const t0 = Date.now();
     const r = await run({ command: "hang.mjs", timeoutMs: 500 });
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(Date.now() - t0).toBeLessThan(perfBound(10_000));
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_GUARD_TIMEOUT");
     expect(r.findings[0]?.facts.timeoutMs).toBe(500);
@@ -204,7 +210,7 @@ describe("guard.external output mapping", () => {
     });
     setTimeout(() => controller.abort(), 300);
     const r = await p;
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(Date.now() - t0).toBeLessThan(perfBound(10_000));
     expect(r.verdict).toBe("error");
     expect(code(r)).toBe("ERR_TASK_CANCELLED");
   });
@@ -229,7 +235,8 @@ describe("guard.external output mapping", () => {
   it("stdin: none → guard sees empty stdin", async () => {
     const r = await run({ command: "echo-stdin.mjs", stdin: "none" });
     expect(r.verdict).toBe("fail");
-    expect(r.findings[0]?.message).toMatch(/not json/);
+    // the guard's own finding is passed through verbatim (id + message are the guard's contract)
+    expect(r.findings[0]).toMatchObject({ id: "stdin", message: "not json" });
   });
   it("env is scrubbed (SECRET_X dropped) and params.env passes through", async () => {
     process.env.SECRET_X = "leak";
@@ -241,7 +248,7 @@ describe("guard.external output mapping", () => {
     }
     const r2 = await run({ command: "env-leak.mjs" });
     expect(r2.verdict).toBe("fail");
-    expect(r2.findings[0]?.message).toMatch(/GUARD_EXTRA missing/);
+    expect(r2.findings[0]).toMatchObject({ id: "env", message: "GUARD_EXTRA missing" });
   });
   it("guardEnv keeps only the whitelist, strips NODE_OPTIONS", () => {
     const e = guardEnv({ A: "1" }, "sha256:x", "/r", {
@@ -284,7 +291,7 @@ describe("guard.external output mapping", () => {
     const t0 = performance.now();
     const r = parseLegacyText(`FAIL ${" ".repeat(100_000)}x${" ".repeat(100_000)}`);
     expect(r?.findings[0]?.id).toBe("x");
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(perfBound(1_000));
   });
   it("cwd: staging without a staging dir → params error", async () => {
     const r = await run({ command: "ok.mjs", cwd: "staging" });

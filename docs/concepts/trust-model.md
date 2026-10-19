@@ -9,6 +9,8 @@ out of the agent's hands and into artefacts a human, a policy or a CI job can in
 
 ```mermaid
 flowchart TB
+  accTitle: AXIOM trust boundaries
+  accDescr: Which parts are untrusted agent input, which are trusted repository policy and keys, and where AXIOM checks the boundary.
   subgraph agent [Untrusted: the agent]
     AG[LLM + harness tools]
   end
@@ -21,7 +23,7 @@ flowchart TB
     HK[gate --stdin<br/>PreToolUse, fail closed]
   end
   subgraph operator [Operator-owned state]
-    PR[.axiom/profiles/*.json<br/>gate-profile.json]
+    PR[.axiom/axiom.json<br/>gate policy + checks]
     TS[.axiom/trust/keys.json<br/>state.json + state.key]
     FL[CLI-only switches:<br/>--allow-guards · --allow-net · gc]
   end
@@ -37,7 +39,7 @@ flowchart TB
   PR --> CK & HK
   TS --> CK
   AP -->|"verify &#8209;&#8209;tree"| AT
-  CP -->|axiom sign, key never in server| SG --> CK
+  CP -->|axiom keys sign, key never in server| SG --> CK
 ```
 
 ## Boundaries, from the outside in
@@ -61,7 +63,7 @@ declared root, not an accident ([hooks.md](../getting-started/hooks.md#root-disc
 
 ### 2. The digest a human confirms
 
-`axiom_apply` (and `axiom apply --confirm`) refuses unless `confirmDigest === manifestDigest`.
+`axiom_apply` (and `axiom plan apply --confirm`) refuses unless `confirmDigest === manifestDigest`.
 The digest is stable across machines (invariant 1) and identifies exactly one set of bytes at
 exactly one set of paths (invariant 2), so an approval prompt that shows it — codai's harness
 does, and a `destructiveHint: true` annotation lets any MCP client ask — is approving something
@@ -80,16 +82,22 @@ rather than advice:
   treats exactly like `fail`. There is no configuration that turns a non-answer into a pass.
 - **The dangerous switches are not tools.** `guard.external` runs only when the *process* was
   started with `--allow-guards` **and** the profile sets `facts.allowGuards`; network fetching of
-  `ref` sources is `axiom compile --allow-net` on the CLI only; `axiom gc` has no MCP tool. An
+  `ref` sources is `axiom plan compile --allow-net` on the CLI only; `axiom gc` has no MCP tool. An
   agent talking to the server cannot enable any of them.
 
 The PreToolUse gate applies the same rule to raw harness writes (D-18): malformed payload, a
 write tool whose target it cannot determine, an unreadable profile — all deny with a reason.
 `--fail-open` exists for editors that must never be blocked by the gate's own bugs, and is the
-operator's choice, in the hook config.
+operator's choice, in the hook config. An override (`axiom-override: <reason>`) is honoured only
+from the call's explanation/goal/description/reason fields or a trailing shell comment outside
+quotes — never from the content being written — and the hard codes `axiom setup init` writes
+(force-push, `reset --hard`, `clean -f`, forced worktree removal) cannot be overridden at all.
 
-Profiles live in the repository (`.axiom/profiles/<name>.json`, `.axiom/gate-profile.json`) and
-are meant to be committed and reviewed like CI configuration ([profiles.md](../reference/profiles.md)).
+Policy lives in the repository — since 3.0 in one `.axiom/axiom.json` (`version: 3`, `gate`,
+`checks`, `extends`); the older `.axiom/gate-profile.json` and `.axiom/profiles/*.json` are still
+read with a deprecation warning. A `version` above the running major denies instead of being
+half-understood. It is meant to be committed and reviewed like CI configuration
+([profiles.md](../reference/profiles.md)).
 
 ### 4. Signed manifests and anti-rollback
 
@@ -108,27 +116,31 @@ Two extensions close the replay holes:
 - **Root binding.** A store with a `rootId` accepts only envelopes signed for that id, so a bundle
   signed for repo A is not a valid signed bundle for repo B.
 
-Private keys never enter the server: signing is `axiom sign` with `AXIOM_SIGNING_KEY` or
+Private keys never enter the server: signing is `axiom keys sign` with `AXIOM_SIGNING_KEY` or
 `--key-file`, typically in a CI job with a protected secret. Full protocol, key ceremony and the
 explicit non-goals (Ed25519 only, no Sigstore keyless, integrity not confidentiality):
 [signing.md](../guides/signing.md).
 
 ### 5. Attestation: proof that outlives the agent
 
-`axiom verify --tree <root>` asks whether a real tree matches a manifest — every artifact present
+`axiom plan verify --tree <root>` asks whether a real tree matches a manifest — every artifact present
 with its digest, every delete absent — and with `--attest` writes an in-toto Statement
-(`predicateType: https://axiom.dev/attestation/apply/v1`, subject = the manifest digest plus one
-entry per path, no clock). The GitHub Action uploads it through `actions/attest`, so months later
+(`predicateType: https://dragoscv.github.io/axiom/spec/attestation/apply/v1` —
+[spec](../spec/attestation/apply/v1.md); the legacy `https://axiom.dev/attestation/apply/v1` is
+still accepted on read — subject = the manifest digest plus one entry per path, no clock). The
+GitHub Action uploads it through `actions/attest`, so months later
 `gh attestation verify` can prove which workflow, on which commit, verified that tree against that
 digest ([verify-tree.md](../guides/verify-tree.md)). This is a different proof from a DSSE
 signature: signing says *who produced the manifest*; attestation says *a tree was checked against
 it, here, then*.
 
-**Agent decisions (2.5.0).** With `record: true` in the gate profile, every write/shell call the
+**Agent decisions.** With `record: true` in the gate policy, every write/shell call the
 gate judged is appended to `.axiom/decisions.jsonl` — the arguments only as `sha256:` of their
-JCS (RFC 8785) form, so the journal can be shared without the content. `axiom attest decisions
+JCS (RFC 8785) form, so the journal can be shared without the content. `axiom journal attest decisions
 [--sign]` emits one in-toto Statement per record with predicateType
-`https://auxidus.dev/attestation/agent-decision/v0.1`, the schema proposed in
+`https://dragoscv.github.io/axiom/spec/attestation/agent-decision/v0.1`
+([spec](../spec/attestation/agent-decision/v0.1.md); the legacy
+`https://auxidus.dev/attestation/agent-decision/v0.1` is accepted on read), the schema proposed in
 [in-toto/attestation#554](https://github.com/in-toto/attestation/issues/554) (`agent_id`,
 `principal`, `policy_evaluations`, `tool_calls[].args_hash`, `decided_at`; the RFC leaves the
 argument canonicalization open, AXIOM pins JCS and records `args_state` as the thread proposes).
@@ -147,7 +159,7 @@ AXIOM sits against it:
 | `axiom gate` on PreToolUse (every harness) | Instrument pillar, `steps/toolCallRequest`; dispositions `allow`/`deny` (§6) | the deny document carries `axiom.verdict` in the ACS vocabulary and `standard: "owasp-acs/0.1"` |
 | path deny/allow, secret scan, shell scan, `steer` | the deterministic policy behind `toolCallRequest` | ACS does not define policy content |
 | fail-closed gate (default), Cursor `failClosed`, Claude `onFailure: block`, `axiom-hook` deny when no gate runs | §6.4 `on_decision_failure: deny` | stricter than the ACS default (`proceed`, audited) |
-| journal hash chain (`chain.jsonl`, `verify --journal`), decision journal | ACS-Core §8 `chain_hash`; `acs-audit` `request_hash` | AXIOM hashes request arguments with JCS + SHA-256 like `acs-audit` |
+| journal hash chain (`chain.jsonl`, `axiom journal verify`), decision journal | ACS-Core §8 `chain_hash`; `acs-audit` `request_hash` | AXIOM hashes request arguments with JCS + SHA-256 like `acs-audit` |
 | content-addressed manifest, `confirmDigest`, pre-image TOCTOU check, atomic apply + rollback | — (closest: `acs-audit` `request_hash`) | transactional apply has no ACS counterpart |
 | DSSE (Ed25519), keyless Sigstore, in-toto attestations | — | ACS-Core uses HMAC envelopes and `acs-crypto` ML-DSA; DSSE/Sigstore are outside ACS |
 

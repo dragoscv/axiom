@@ -6,7 +6,7 @@
  * the remaining features run on the tolerant scanner in `scan.ts` so they keep working while
  * the user is mid-edit and the real parser reports errors.
  */
-import { type Diagnostic as AxmDiagnostic, formatAxm, parseAxm } from "@codai/axiom-axm";
+
 import {
   type CompletionItem,
   CompletionItemKind,
@@ -23,6 +23,7 @@ import {
   SymbolKind,
   type TextEdit,
 } from "vscode-languageserver";
+import { type Diagnostic as AxmDiagnostic, formatAxm, parseAxm } from "../index.js";
 import { depthAt, LineIndex, type ScanToken, scan } from "./scan.js";
 import {
   CAPABILITIES,

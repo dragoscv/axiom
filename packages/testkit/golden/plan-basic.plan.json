@@ -1,5 +1,5 @@
 {
-  "apiVersion": "axiom.dev/v2",
+  "apiVersion": "axiom.codai.ro/v3",
   "kind": "Plan",
   "name": "golden-basic",
   "intent": "Three inline files: text, nested path, and a binary payload. Cross-OS determinism guard.",

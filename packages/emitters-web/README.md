@@ -21,6 +21,19 @@ const { bundle } = await compilePlan(plan, { emitters: createEmitterRegistry([we
 // bundle.manifest.toolchain.emitters → { web: "2.0.0" }
 ```
 
+Since AXIOM 3.0 the CLI no longer bundles this emitter (D-45). Install it next to the repo and
+load it explicitly:
+
+```sh
+pnpm add -D @codai/axiom-emitters-web
+axiom compile plan.json --emitter @codai/axiom-emitters-web
+axiom mcp --root . --emitter @codai/axiom-emitters-web
+```
+
+`--emitter` takes a package name (resolved from the root's `node_modules`) or a path; the module
+must export `emitters` (an array), an emitter as `default`, or named emitter objects. Without it,
+a `template` source fails `ERR_EMITTER_UNKNOWN` with that install hint.
+
 Golden outputs in `src/__golden__/*.txt` are the spec; `pnpm run update-golden` regenerates
 them. Any output change must bump `WEB_EMITTER_VERSION` (it is hashed into every manifest
 digest). Full contract, params and error codes: [docs/guides/emitters.md](../../docs/guides/emitters.md).

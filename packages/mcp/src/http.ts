@@ -51,6 +51,11 @@ export interface StartHttpOptions {
   log: Logger;
   /** D-19 wire mode; default `2026` (both eras). */
   wire?: WireMode;
+  /**
+   * D-43 toolset the factory was built with (`serverFactory(policy, { toolset })` decides what is
+   * served); echoed in the `http listening` log line only.
+   */
+  toolset?: "core" | "full";
   /** Test hook — idle eviction window. */
   idleMs?: number;
   /** Test hook — sweep interval. */
@@ -357,6 +362,7 @@ export async function startHttp(
         host,
         port,
         wire,
+        toolset: opts.toolset ?? "core",
         auth: opts.token !== undefined,
       });
       resolve({

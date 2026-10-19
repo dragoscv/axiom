@@ -18,7 +18,7 @@ async function expectInvalid(text: string): Promise<AxiomError> {
   throw new Error("expected ERR_INVALID_PLAN");
 }
 
-/** YAML rendering of packages/testkit/golden/plan-basic.plan.json. */
+/** YAML rendering of packages/testkit/golden/plan-basic-v2.plan.json (2.x apiVersion, D-41). */
 const BASIC_YAML = `# yaml-language-server: $schema=https://axiom.dev/schemas/plan.json
 $schema: https://axiom.dev/schemas/plan.json
 apiVersion: axiom.dev/v2
@@ -55,10 +55,10 @@ checks:
 describe("parsePlanYaml — equivalence", () => {
   it("compiles a YAML plan to the same manifestDigest as its JSON golden form", async () => {
     const json: unknown = JSON.parse(
-      await readFile(fileURLToPath(new URL("plan-basic.plan.json", GOLDEN)), "utf8"),
+      await readFile(fileURLToPath(new URL("plan-basic-v2.plan.json", GOLDEN)), "utf8"),
     );
     const expected = JSON.parse(
-      await readFile(fileURLToPath(new URL("plan-basic.expected.json", GOLDEN)), "utf8"),
+      await readFile(fileURLToPath(new URL("plan-basic-v2.expected.json", GOLDEN)), "utf8"),
     ) as { manifestDigest: string };
     const fromYaml = await compilePlan(await parsePlanYaml(BASIC_YAML));
     const fromJson = await compilePlan(json);

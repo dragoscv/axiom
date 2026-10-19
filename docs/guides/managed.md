@@ -1,8 +1,8 @@
-# Managed policy — `axiom init --managed --out <dir>`
+# Managed policy — `axiom setup init --managed --out <dir>`
 
 *Write the enterprise/managed hook layers that a user or project cannot switch off: Claude Code managed settings, the Codex `requirements.toml`, Cursor's system hooks file, a Copilot policy hook and the VS Code organisation policies.*
 
-`axiom init --managed --out <dir>` (2.6.0, S-1207) writes the files into `<dir>`. It never
+`axiom setup init --managed --out <dir>` writes the files into `<dir>`. It never
 writes to system paths: installing them is your MDM / endpoint tooling's job. Each file carries
 the AXIOM gate entries with the harness's fail-closed setting where the harness has one. The
 result lists every file as `created` (or `skipped`: up to date / exists without `--force`), and the

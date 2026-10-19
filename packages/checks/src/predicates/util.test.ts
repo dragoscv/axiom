@@ -32,6 +32,27 @@ describe("escapeRouteGroups (S-408)", () => {
   });
 });
 
+describe("globMatcher case sensitivity follows the filesystem", () => {
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+  it.runIf(caseInsensitive)(
+    "win32/darwin: `.ENV` is caught by a `.env` deny glob by default",
+    () => {
+      const m = globMatcher(["**/.env", ".env"], false);
+      expect(m(".ENV")).toBe(true);
+      expect(m("apps/web/.Env")).toBe(true);
+    },
+  );
+  it.runIf(!caseInsensitive)("linux: case-sensitive by default", () => {
+    const m = globMatcher(["**/.env", ".env"], false);
+    expect(m(".ENV")).toBe(false);
+    expect(m(".env")).toBe(true);
+  });
+  it("explicit nocase overrides the platform default both ways", () => {
+    expect(globMatcher([".env"], false, { nocase: true })(".ENV")).toBe(true);
+    expect(globMatcher([".env"], false, { nocase: false })(".ENV")).toBe(false);
+  });
+});
+
 describe("luhnValid / findCardNumber (S-408)", () => {
   it("known test PANs pass, their neighbours fail", () => {
     expect(luhnValid("4111111111111111")).toBe(true);

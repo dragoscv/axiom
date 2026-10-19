@@ -16,6 +16,7 @@ import {
   type KeyObject,
   timingSafeEqual,
 } from "node:crypto";
+import { CanonError } from "./digest.js";
 import { canonicalize } from "./jcs.js";
 import { pae } from "./pae.js";
 
@@ -121,7 +122,10 @@ export function keyidFor(key: KeyObject | Uint8Array | string): string {
   else if (key instanceof Uint8Array) raw = toBuffer(key);
   else raw = rawPublicKeyOf(key.type === "private" ? createPublicKey(key) : key);
   if (raw.length !== ED25519_RAW_PUBLIC_BYTES)
-    throw new Error(`ed25519 public key must be ${ED25519_RAW_PUBLIC_BYTES} raw bytes`);
+    throw new CanonError(
+      "ERR_SIGNATURE_INVALID",
+      `ed25519 public key must be ${ED25519_RAW_PUBLIC_BYTES} raw bytes`,
+    );
   return createHash("sha256").update(raw).digest("hex");
 }
 
@@ -145,9 +149,9 @@ export function privateKeyFrom(material: string): KeyObject {
   try {
     der = Buffer.from(text, "base64");
   } catch {
-    throw new Error("signing key is not valid base64");
+    throw new CanonError("ERR_SIGNATURE_INVALID", "signing key is not valid base64");
   }
-  if (der.length === 0) throw new Error("signing key is empty");
+  if (der.length === 0) throw new CanonError("ERR_SIGNATURE_INVALID", "signing key is empty");
   if (der.length === ED25519_SEED_BYTES) {
     const key = createPrivateKey({
       key: Buffer.concat([PKCS8_PREFIX, der]),
@@ -184,7 +188,10 @@ export function publicKeyFrom(material: string): KeyObject {
 
 function assertEd25519(key: KeyObject): void {
   if (key.asymmetricKeyType !== "ed25519") {
-    throw new Error(`expected an ed25519 key, got ${String(key.asymmetricKeyType)}`);
+    throw new CanonError(
+      "ERR_SIGNATURE_INVALID",
+      `expected an ed25519 key, got ${String(key.asymmetricKeyType)}`,
+    );
   }
 }
 

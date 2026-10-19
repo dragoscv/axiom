@@ -3,7 +3,9 @@ import * as path from "node:path";
 import { AxiomError } from "@codai/axiom-schema";
 import { describe, expect, it } from "vitest";
 import {
+  checkReservedDir,
   checkTargetType,
+  isReservedAxiomPath,
   probeCaseInsensitive,
   resolveContained,
   validateArtifactPaths,
@@ -159,5 +161,35 @@ describe("probeCaseInsensitive", () => {
     if (process.platform === "win32") expect(r).toBe(true);
     const left = await fs.readdir(path.join(root, ".axiom", "tmp"));
     expect(left).toEqual([]);
+  });
+
+  it("create:false on a root without .axiom/ writes nothing and returns the platform default", async () => {
+    const root = await mkRoot();
+    const r = await probeCaseInsensitive(root, { create: false });
+    expect(r).toBe(process.platform === "win32" || process.platform === "darwin");
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+});
+
+describe("reserved .axiom/", () => {
+  it.each([".axiom", ".axiom/x", ".AXIOM/x", ".Axiom/trust/keys.json", ".aXiOm/lock"])(
+    "%s is reserved by name",
+    (p) => {
+      expect(isReservedAxiomPath(p)).toBe(true);
+    },
+  );
+
+  it.each(["axiom/x", "src/.axiom/x", ".axiomx/y", ".axiom-old/y"])("%s is not reserved", (p) => {
+    expect(isReservedAxiomPath(p)).toBe(false);
+  });
+
+  it("checkReservedDir refuses a parent realpath under the .axiom realpath (alias)", () => {
+    const ax = path.join(path.sep, "r", ".axiom");
+    expect(codeOfSync(() => checkReservedDir("AXIOM~1/x", path.join(ax, "trust"), ax))).toBe(
+      "ERR_PATH_RESERVED_DIR",
+    );
+    expect(
+      codeOfSync(() => checkReservedDir("src/x", path.join(path.sep, "r", "src"), ax)),
+    ).toBeUndefined();
   });
 });
