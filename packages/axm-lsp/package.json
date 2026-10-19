@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-axm-lsp",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "DEPRECATED (3.0): the .axm language server moved into @codai/axiom-axm (`@codai/axiom-axm/lsp`, bin `axm-lsp`). This package only re-exports it for 3.x.",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

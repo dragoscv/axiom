@@ -1,5 +1,51 @@
 # @codai/axiom-axm
 
+## 3.0.0
+
+### Major Changes
+
+- 9122967: v3 wire identity and one policy file (D-41, D-42).
+  
+  - New canonical `apiVersion: "axiom.codai.ro/v3"` for every document AXIOM creates (Plan, Manifest,
+    CheckReport, ApplyResult, Profile, RepoSnapshot); `"axiom.dev/v2"` keeps parsing through 3.x and a
+    2.x plan still compiles to its 2.x digest. New plans therefore have new `planDigest`/`manifestDigest`
+    values (golden fixtures re-pinned; `plan-basic-v2` pins the 2.x digest). Schema exports
+    `API_VERSION_V2`, `API_VERSIONS`, `isLegacyApiVersion`. JSON Schema `$id`s move to
+    `https://dragoscv.github.io/axiom/schemas/v3/`.
+  - Attestation predicate URIs move to `https://dragoscv.github.io/axiom/spec/...`
+    (`AXIOM_APPLY_ATTESTATION_V1`, `AGENT_DECISION_V0_1`, build type, builder id); the 2.x URIs stay
+    exported as `*_LEGACY`.
+  - `.axiom/axiom.json` (`version: 3`, `gate`, `checks`, `extends`): `loadAxiomConfig` with
+    relative-file, `axiom:<pack>` and installed `@codai/axiom-pack-*` extends, union of
+    deny/ask/hard/allow, cycle/depth → `ERR_INVALID_PROFILE`, version > 3 → `ERR_PROFILE_VERSION`,
+    unknown keys warn. `loadProfile(name, { config })` reads its `checks` section. `migrateProfile`
+    folds `.axiom/gate-profile.json` + `.axiom/profiles/<name>.json` into it without deleting them.
+    New `AxiomConfig` JSON Schema.
+- 9122967: 3.0 (D-43 / D-45, S-1312 / S-1319):
+  
+  - **mcp — core toolset by default.** `createServer` / `serverFactory` take `toolset: "core" | "full"`;
+    `core` (default) serves `axiom_write`, `axiom_status`, `axiom_rollback`, `axiom_check`,
+    `axiom_apply`, `axiom_apply_dry_run`; `full` serves every tool. `parseToolset(value)` parses the
+    `--tools core|full` flag (`ERR_USAGE` otherwise). `spec/tools.json` and `spec/codai-tools.json`
+    mark each tool `"toolset": "core" | "full"` (codai spec format version 3.0.0).
+  - **mcp — emitters-web is no longer bundled.** `template` sources need an emitter loaded with
+    `--emitter <pkg>` (`loadEmitters(specs, root)`: package name resolved from the root's
+    `node_modules`, or a path). Without one they fail `ERR_EMITTER_UNKNOWN` with
+    `details.hint` "install @codai/axiom-emitters-web and pass --emitter @codai/axiom-emitters-web".
+    `axiom://emitters` is empty by default.
+  - **axm — language server merged in.** `@codai/axiom-axm/lsp` (+ bin `axm-lsp`) is the `.axm`
+    language server; the main entry stays LSP-free. Fixed: a plan named `meta` (or any keyword) no
+    longer mis-lexes its body as a JSON block; `KEYWORD_IMAGES` is exported.
+  - **axm-lsp — deprecated.** Thin re-export of `@codai/axiom-axm/lsp` for 3.x; not published for 4.0.
+  - **emitters-web** — banners derive from `WEB_EMITTER_VERSION` (`generatedBanner`); exports
+    `emitters` for `--emitter` loading.
+
+### Patch Changes
+
+- Updated dependencies [9122967]
+- Updated dependencies [9122967]
+  - @codai/axiom-schema@3.0.0
+
 ## 2.7.0
 
 ### Patch Changes

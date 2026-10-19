@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-axm",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "AXIOM `.axm` front-end: Chevrotain lexer + CST parser that compiles the .axm DSL 1:1 into a Plan, with position-bearing diagnostics and a deterministic inverse printer — plus the `.axm` language server (`@codai/axiom-axm/lsp`, bin `axm-lsp`)",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

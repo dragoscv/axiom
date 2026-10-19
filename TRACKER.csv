@@ -179,3 +179,4 @@ S-1320,story,13,Docs + site: profile reference for every key; error-codes Fix co
 S-1321,story,13,QA: mutation workflow paths include gate/command-rules; mutants for rollback/recovery/lock/forcePush/noSecrets/fail-open; message-text asser,done,agent,D-41,see PLAN.md Phase 13,32 mutants killed; vacuous guard; perfBound; pre-push hook
 S-1322,story,13,Release hygiene: draft-until-assets release; v2/v3 tag moves only forward; CITATION/SECURITY/server.json/Cargo/vscode versions guarded; CI n,done,agent,D-41,see PLAN.md Phase 13,draft-until-assets; v3 tag forward-only; version sync; SBOM; CI matrix 4 jobs
 S-1323,story,13,Release v3.0.0 on every surface + consumers codai/brivio/metu/user-level migrated (axiom.json; hooks; catalog) + doctor ok + Hooks.log clean,doing,agent,D-41,see PLAN.md Phase 13,release + consumers + visual
+D-46,decision,13,2.x unsupported after 3.0.0,done,owner,D-41,,2026-10-19 decided in chat

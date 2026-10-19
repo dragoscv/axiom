@@ -6,9 +6,9 @@
 
 | Version | Status |
 |---------|--------|
-| 3.x | Upcoming — becomes the supported line when 3.0.0 is released |
-| 2.7.x | Supported — fixes and security patches, released as patch versions of the fixed group (all `@codai/axiom-*` share one version) |
-| < 2.7 | Unsupported — upgrade to 2.7.x (no breaking change within 2.x) |
+| **3.x** | Supported — current line |
+| 2.7.x | Unsupported — the 2.x gate has bypasses fixed in 3.0; upgrade to 3.x |
+| < 2.7 | Unsupported — upgrade to 3.x |
 | 1.0.x | Deprecated on npm, no fixes. Known issues: manifest hash not content-bound, `git` spawned with `shell: true` and user strings, no rollback. Upgrade — see [MIGRATION.md](MIGRATION.md) |
 
 ## Reporting a vulnerability

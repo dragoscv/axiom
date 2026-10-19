@@ -1,6 +1,6 @@
 {
   "name": "@codai/axiom-hook-linux-x64",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "Native axiom-hook gate client for linux-x64 (installed as an optional dependency of @codai/axiom-mcp)",
   "license": "MIT",
   "author": "Dragos Catalin Vladulescu",

@@ -35,9 +35,9 @@ The issue form asks for these; the fastest fixes come from reports that include 
 
 | Series | Status | What you get |
 |---|---|---|
-| 3.x | Upcoming — becomes the supported line when 3.0.0 is released | See [MIGRATION.md](MIGRATION.md) for the 2.x → 3.0 changes |
-| **2.7.x** | Supported | Fixes and security patches, released as patch versions of the fixed group |
-| < 2.7 | Unsupported | Upgrade to 2.7.x (no breaking change within 2.x) |
+| **3.x** | Supported — current line | See [MIGRATION.md](MIGRATION.md) for the 2.x → 3.0 changes |
+| 2.7.x | Unsupported | Upgrade to 3.x: the 2.x gate has bypasses fixed in 3.0 |
+| < 2.7 | Unsupported | Upgrade to 3.x |
 | 1.0.x | **Deprecated** on npm, no fixes | See [MIGRATION.md](MIGRATION.md) and `axiom migrate v1` |
 
 The same table as [SECURITY.md](SECURITY.md#supported-versions). Every published

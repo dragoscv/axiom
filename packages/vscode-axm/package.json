@@ -2,7 +2,7 @@
   "name": "axiom-axm",
   "displayName": "AXIOM — agent write gate + .axm",
   "description": "AXIOM, the transactional write gate for coding agents, in VS Code: a status bar showing the gate state of the workspace, Doctor / Init / Stats / Explain commands, and full language support for .axm plans (diagnostics, completion, hover, outline, formatting, semantic highlighting).",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "private": true,
   "publisher": "dragoscv",
   "license": "MIT",
