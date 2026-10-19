@@ -130,6 +130,14 @@ export const MUTANTS = [
     why: "a denied path must produce a path.deny finding",
   },
   {
+    id: "gate-ask-off",
+    file: "packages/mcp/src/gate.ts",
+    pkg: "packages/mcp",
+    find: "    if (pendingAsk !== undefined) return recorded(deny(pendingAsk));",
+    replace: "",
+    why: "a write matching a profile ask glob must be handed to the human (path.ask), not allowed",
+  },
+  {
     id: "roots-inside",
     file: "packages/mcp/src/roots.ts",
     pkg: "packages/mcp",

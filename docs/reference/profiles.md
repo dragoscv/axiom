@@ -150,6 +150,7 @@ sees one write at a time:
 |---|---|---|---|
 | `deny` | `string[]` | built-in: `[".git/**", ".axiom/**", "**/*.lock", "pnpm-lock.yaml", ".env", ".env.*", "**/node_modules/**"]` | any match → deny `path.deny` |
 | `allow` | `string[]?` | — | when present every target must match one glob → else `path.allow` |
+| `ask` | `string[]` | `[]` | any match → `path.ask`: the human confirms (`permissionDecision: "ask"`; deny on formats without an ask prompt); every deny wins |
 | `noSecrets` | `boolean` | `true` | `content.noSecrets` on supplied content |
 | `pii` | `boolean` | `false` | also the PII patterns |
 | `maxBytes` | `int?` | — | `content.maxBytes` on supplied content |

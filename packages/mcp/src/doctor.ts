@@ -13,6 +13,7 @@ import { HEALTH_PATH, readDaemonState } from "./daemon-proto.js";
 import { GateProfileSchema } from "./gate.js";
 import { findHookLogs, type HookLogStats, readHookLogStats } from "./hooklog.js";
 import {
+  ASK_MIN_VERSION,
   type BinLocator,
   binAtLeast,
   CLAUDE_HOOK_ENTRY,
@@ -34,6 +35,7 @@ import {
 import { realDir } from "./roots.js";
 
 export {
+  ASK_MIN_VERSION,
   type BinLocator,
   compareVersions,
   DAEMON_HEALTH_TIMEOUT_MS,
@@ -688,16 +690,24 @@ async function checkDaemon(
   return check("daemon", "ok", `daemon pid ${pid} at ${where} serves ${roots.join(", ")}`);
 }
 
-const STEER_KEYS = ["steer", "steerGlobs", "record"] as const;
+/** Gate profile keys newer than 2.4 and the first version whose strict schema knows each. */
+const VERSIONED_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["steer", STEER_MIN_VERSION],
+  ["steerGlobs", STEER_MIN_VERSION],
+  ["record", STEER_MIN_VERSION],
+  ["ask", ASK_MIN_VERSION],
+];
 
 async function checkSteerCompat(root: string, bin: Bin): Promise<DoctorCheck | undefined> {
   const gp = await readJsonFile(path.join(root, INIT_FILES.gateProfile));
   if (gp === undefined || !isRecord(gp.doc)) return undefined;
   const doc = gp.doc;
-  const used = STEER_KEYS.filter((k) => doc[k] !== undefined);
-  if (used.length === 0) return undefined;
+  const usedKeys = VERSIONED_KEYS.filter(([k]) => doc[k] !== undefined);
+  if (usedKeys.length === 0) return undefined;
   if (bin?.version === undefined) return undefined;
-  if (compareVersions(bin.version, STEER_MIN_VERSION) >= 0) {
+  const used = usedKeys.map(([k]) => k);
+  const need = usedKeys.map(([, v]) => v).reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+  if (compareVersions(bin.version, need) >= 0) {
     return check(
       "bin.profile",
       "ok",
@@ -707,7 +717,7 @@ async function checkSteerCompat(root: string, bin: Bin): Promise<DoctorCheck | u
   return check(
     "bin.profile",
     "fail",
-    `${INIT_FILES.gateProfile} uses ${used.join(", ")} but the global axiom is ${bin.version} (< ${STEER_MIN_VERSION}): its strict profile schema rejects unknown keys and the gate denies EVERY write`,
+    `${INIT_FILES.gateProfile} uses ${used.join(", ")} but the global axiom is ${bin.version} (< ${need}): its strict profile schema rejects unknown keys and the gate denies EVERY write`,
     "npm install -g @codai/axiom-mcp@latest",
   );
 }

@@ -23,7 +23,7 @@ checklist below — fill it in, it is what review looks at first.
 | `pnpm test` / `pnpm test:coverage` | Vitest 5 (thresholds 85/85/80/85) |
 | `pnpm lint` / `pnpm lint:fix` | Biome 2.5 — the only linter/formatter |
 | `pnpm guards` | `node scripts/run-guards.mjs` — all repo guards, parallel, 60 s each |
-| `pnpm test:mutation` | Mutation smoke: 14 mutants on the gate's security decisions, every one must be killed (`scripts/mutation-smoke.mjs`; add a mutant when you add a security check) |
+| `pnpm test:mutation` | Mutation smoke: 15 mutants on the gate's security decisions, every one must be killed (`scripts/mutation-smoke.mjs`; add a mutant when you add a security check) |
 | `pnpm --filter @codai/axiom-schema build:jsonschema` | regenerate `packages/schema/schemas/*.json` |
 | `pnpm --filter @codai/axiom-testkit update-golden` | re-pin golden digests (format change only) |
 | `pnpm --filter @codai/axiom-mcp build:sea` | bundle the CLI into one inlined CJS file (`packages/mcp/dist/sea/axiom.cjs`) for the standalone binary |

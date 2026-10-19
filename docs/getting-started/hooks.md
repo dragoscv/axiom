@@ -454,6 +454,7 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 |---|---|---|---|
 | `deny` | `string[]` | `[]` (built-in profile: the list above) | picomatch globs, `dot: true`; any match → `path.deny` |
 | `allow` | `string[]?` | — | when present every target must match one glob → else `path.allow` |
+| `ask` | `string[]` | `[]` | same globs as `deny`, but a match (write target or shell operand) → `path.ask`: `permissionDecision: "ask"`, the human confirms (`auto`/`claude`/`copilot`/`vscode`; every other format gets a deny). Every deny wins: `deny`, `allow`, content checks, `steer: "require"` and session rules are judged first. Recorded as `ask` in `decisions.jsonl` |
 | `noSecrets` | `boolean` | `true` | run `content.noSecrets` on supplied content → `content.noSecrets.<pattern>` |
 | `pii` | `boolean` | `false` | also scan for personal data (`cnp`, `email`, `phoneRo`, `card`) — opt-in since S-414, see [checks.md](../guides/checks.md#contentnosecrets) |
 | `maxBytes` | `number?` | — | run `content.maxBytes` on supplied content → `content.maxBytes` |
@@ -463,6 +464,7 @@ Search order: `--profile <file>` → `<root>/.axiom/gate-profile.json` → `~/.a
 
 A gate profile that uses `steer`, `steerGlobs` or `record` needs axiom ≥ 2.5.0 on every machine
 that runs the hook: older gates reject unknown keys and deny every write (`axiom doctor` checks).
+`ask` needs axiom ≥ 2.7.0 for the same reason.
 
 ### Steering writes to the transaction (S-905)
 

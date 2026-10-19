@@ -149,7 +149,7 @@ axiom doctor [--root <dir>] [--json]
 Is this machine + root wired correctly? Read-only apart from spawning the gate (which never
 writes). Each check is `ok | warn | fail` with a message and, when not `ok`, a `fix:` hint.
 Checks: `root`, `bin` (global `axiom` on `PATH`, version vs this CLI), `bin.profile` (gate profile
-uses `steer`/`steerGlobs`/`record` but the global bin is < 2.5.0 → fail), `hook.copilot` /
+uses `steer`/`steerGlobs`/`record` but the global bin is < 2.5.0, or `ask` and < 2.7.0 → fail), `hook.copilot` /
 `hook.claude` / `hook.cursor` / `hook.windsurf` / `hook.codex` / `hook.gemini` / `hook.junie` /
 `hook.cline` / `hook` (an entry running `axiom gate --stdin` or `axiom-hook gate --stdin`, or the
 Claude HTTP hook; `npx` entries do not count; Cursor without `failClosed` → warn), `daemon`

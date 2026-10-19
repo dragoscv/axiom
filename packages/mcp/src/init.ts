@@ -508,6 +508,8 @@ export const GATE_PROFILE = {
 
 /** First version whose strict gate profile schema knows `steer` / `steerGlobs` / `record`. */
 export const STEER_MIN_VERSION = "2.5.0";
+/** First version whose strict gate profile schema knows `ask`. */
+export const ASK_MIN_VERSION = "2.7.0";
 export const DAEMON_HEALTH_TIMEOUT_MS = 1000;
 
 export function compareVersions(a: string, b: string): number {

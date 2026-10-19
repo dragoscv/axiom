@@ -22,7 +22,8 @@
  *           `--fail-open` restores the 2.1 behaviour (exit 0 + stderr warn) for those cases.
  *   Shell tools (`Bash`, `run_in_terminal`, …) are scanned for write primitives
  *           (`>`, `>>`, `tee`, `rm`, `mv`, `cp`, `sed -i`, `git checkout|reset|clean`, …); a
- *           protected path among their operands → deny. Heuristic, documented as such.
+ *           protected path among their operands → deny (an `ask`-glob operand → ask; deny
+ *           wins). Heuristic, documented as such.
  *   Root: payload `cwd` → walk up to the nearest ancestor holding `.axiom/` or `.git/`
  *           (so a sub-directory cwd still sees `.git/**` in the profile) → `--root` → cwd.
  *           A target outside the root but inside another worktree of the SAME repository
@@ -110,6 +111,14 @@ export const GateProfileSchema = z
   .object({
     /** picomatch globs (dot: true) — any match denies. */
     deny: z.array(z.string().min(1)).default([]),
+    /**
+     * picomatch globs (dot: true), same semantics as `deny`, but a match hands the decision to
+     * the human (`path.ask` → `permissionDecision: "ask"` on auto/claude/copilot/vscode; a plain
+     * deny on formats without an ask prompt — fail-closed). Applies to write tools and to shell
+     * operands alike. Every deny wins: `deny`, `allow`, content checks (`noSecrets`, `maxBytes`),
+     * `steer: "require"` and session rules are judged first.
+     */
+    ask: z.array(z.string().min(1)).default([]),
     /** When present, every target must match at least one glob. */
     allow: z.array(z.string().min(1)).optional(),
     /** Run `content.noSecrets` on the new content when the payload carries it. */
@@ -158,6 +167,7 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
     ".env.*",
     "**/node_modules/**",
   ],
+  ask: [],
   noSecrets: true,
   pii: false,
   // Phase 8 decision: the builtin profile hints; an explicit profile file defaults to "off".
@@ -903,6 +913,34 @@ export async function runGatePredicates(
   return new GateDeny(f.id, f.message, f.path);
 }
 
+/** Ask id of a target matching the profile's `ask` globs (predicate-style, like `path.deny`). */
+export const PATH_ASK_CODE = "path.ask";
+
+function askDeny(relPath: string | undefined): GateDeny {
+  return new GateDeny(
+    PATH_ASK_CODE,
+    `"${relPath ?? "."}" is a sensitive path (gate profile "ask"): confirm before the agent edits it`,
+    relPath,
+    { ask: true },
+  );
+}
+
+/**
+ * Profile `ask` globs: a target matching one → an `ask` verdict (the human confirms). Same glob
+ * semantics as `path.deny` (it IS `path.deny` over the ask globs). Callers run it only after
+ * every deny-class check passed, so a deny always wins.
+ */
+export async function runAskGlobs(
+  targets: readonly ResolvedGateTarget[],
+  profile: GateProfile,
+): Promise<GateDeny | undefined> {
+  if (profile.ask.length === 0) return undefined;
+  const findings = await pathDeny.run(buildGateContext(targets), { globs: profile.ask });
+  const f = findings[0];
+  if (f === undefined) return undefined;
+  return askDeny(f.path);
+}
+
 /** Deny id of `steer: "require"` (predicate-style, like `path.deny`). */
 export const STEER_REQUIRE_CODE = "steer.requireApply";
 
@@ -1591,6 +1629,8 @@ export async function runGate(
     }
     /** Targets grouped by the root they are judged against (the main root, or a sibling worktree). */
     const groups = new Map<string, ResolvedGateTarget[]>();
+    /** First `ask` verdict (profile `ask` globs); returned only once every deny check passed. */
+    let pendingAsk: GateDeny | undefined;
     const add = (root: string, r: ResolvedGateTarget) => {
       judgedPaths.push(r.relPath);
       const g = groups.get(root);
@@ -1625,6 +1665,7 @@ export async function runGate(
           if (profile.deny.length > 0) {
             throw new GateDeny("path.deny", "destructive git command on the whole tree", ".");
           }
+          if (profile.ask.length > 0) pendingAsk ??= askDeny(".");
           continue;
         }
         throw err;
@@ -1639,6 +1680,7 @@ export async function runGate(
         await noteDeniedCreate(rootReal, extracted.cls, payload.toolName, resolved, root, profile);
         return recorded(deny(verdict));
       }
+      pendingAsk ??= await runAskGlobs(resolved, p);
       n += resolved.length;
     }
     const sessionTargets = toSessionTargets(groups.get(rootReal) ?? [], payload.toolName);
@@ -1668,6 +1710,8 @@ export async function runGate(
         if (r !== undefined) return r;
       }
     }
+    // Every deny passed: an `ask` glob hands the decision to the human (deny on non-ask formats).
+    if (pendingAsk !== undefined) return recorded(deny(pendingAsk));
     if (sessionTargets.length > 0) {
       // Allowed: capture the pre-image for `axiom undo` and remember who is writing what.
       if (profile.undo) {

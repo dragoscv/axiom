@@ -22,6 +22,7 @@ import {
   isWriteTool,
   loadGateProfile,
   normalizePayload,
+  PATH_ASK_CODE,
   parseApplyPatch,
   readStdin,
   runGate,
@@ -202,6 +203,7 @@ describe("gate: profile", () => {
   it("schema: strict object, defaults deny=[] noSecrets=true pii=false steer=off record=false undo=false shadow=false", () => {
     expect(GateProfileSchema.parse({})).toStrictEqual({
       deny: [],
+      ask: [],
       noSecrets: true,
       pii: false,
       steer: "off",
@@ -238,6 +240,7 @@ describe("gate: profile", () => {
     const r = await loadGateProfile({ root: repo.root, home: home.root, profilePath: explicit });
     expect(r.profile).toStrictEqual({
       deny: ["custom/**"],
+      ask: [],
       noSecrets: false,
       pii: false,
       steer: "off",
@@ -1374,5 +1377,113 @@ describe("gate: steering and decision journal (Phase 8)", () => {
     await profile({ deny: [".env"] });
     await runGate(write(".env"), { home: home.root });
     expect(await readDecisions(repo.root)).toStrictEqual([]);
+  });
+});
+
+describe("gate: ask globs (human confirms instead of a deny)", () => {
+  let repo: Awaited<ReturnType<typeof tmpRepo>>;
+  let home: Awaited<ReturnType<typeof tmpRepo>>;
+  beforeEach(async () => {
+    repo = await tmpRepo("axiom-gate-ask-");
+    home = await tmpRepo("axiom-gate-home-");
+    await mkdir(join(repo.root, ".github", "workflows"), { recursive: true });
+  });
+  afterEach(async () => {
+    await repo.cleanup();
+    await home.cleanup();
+  });
+  const profile = async (doc: Record<string, unknown>) => {
+    await mkdir(join(repo.root, ".axiom"), { recursive: true });
+    await writeFile(join(repo.root, ".axiom", "gate-profile.json"), JSON.stringify(doc));
+  };
+  const write = (file: string, content = "name: ci") =>
+    claude("Write", { file_path: file, content }, repo.root);
+  const wf = ".github/workflows/x.yml";
+
+  it("schema: accepts `ask`, defaults it to [], still strict", () => {
+    expect(GateProfileSchema.parse({ ask: [".github/**"] }).ask).toStrictEqual([".github/**"]);
+    expect(GateProfileSchema.parse({}).ask).toStrictEqual([]);
+    expect(GateProfileSchema.safeParse({ ask: [""] }).success).toBe(false);
+    expect(GateProfileSchema.safeParse({ ask: [".github/**"], asks: [] }).success).toBe(false);
+  });
+
+  it.each(["vscode", "copilot", "claude", "auto"] as const)(
+    "ask path → permissionDecision ask (%s)",
+    async (format) => {
+      await profile({ deny: [], ask: [".github/**"] });
+      const r = await runGate(write(wf), { home: home.root, format });
+      expect(r.code).toBe(PATH_ASK_CODE);
+      expect(r.verdict).toBe("ask");
+      expect(r.path).toBe(wf);
+      expect(r.exitCode).toBe(GATE_DENY_EXIT_DEFAULT);
+      const doc = JSON.parse(r.stdout ?? "{}");
+      expect(doc.permissionDecision).toBe("ask");
+      expect(doc.hookSpecificOutput.permissionDecision).toBe("ask");
+      expect(doc.permissionDecisionReason).toContain("AXIOM GATE ASK path.ask");
+      expect(doc.permissionDecisionReason).toContain('gate profile "ask"');
+      expect(doc.axiom.verdict).toBe("ask");
+    },
+  );
+
+  it("non-ask formats get a plain deny (fail-closed)", async () => {
+    await profile({ deny: [], ask: [".github/**"] });
+    const codex = await runGate(write(wf), { home: home.root, format: "codex" });
+    expect(codex.verdict).toBe("deny");
+    expect(JSON.parse(codex.stdout ?? "{}").hookSpecificOutput.permissionDecision).toBe("deny");
+    const cursor = await runGate(write(wf), { home: home.root, format: "cursor" });
+    expect(JSON.parse(cursor.stdout ?? "{}")).toMatchObject({ permission: "deny" });
+    const gemini = await runGate(write(wf), { home: home.root, format: "gemini" });
+    expect(JSON.parse(gemini.stdout ?? "{}")).toMatchObject({ decision: "deny" });
+  });
+
+  it("deny wins over ask; a secret in an ask path is denied; other paths allowed", async () => {
+    await profile({ deny: [".github/workflows/**"], ask: [".github/**"] });
+    const both = await runGate(write(wf), { home: home.root, format: "vscode" });
+    expect(both.code).toBe("path.deny");
+    expect(both.verdict).toBe("deny");
+    expect(JSON.parse(both.stdout ?? "{}").permissionDecision).toBe("deny");
+
+    await profile({ deny: [], ask: [".github/**"] });
+    const secret = await runGate(write(".github/dependabot.yml", `key: ${AWS_KEY}`), {
+      home: home.root,
+      format: "vscode",
+    });
+    expect(secret.code).toMatch(/^content\.noSecrets\./);
+    expect(secret.verdict).toBe("deny");
+
+    const other = await runGate(write("src/a.ts"), { home: home.root, format: "vscode" });
+    expect(other.decision).toBe("allow");
+    expect(other.stdout).toBeUndefined();
+  });
+
+  it("shell operands: an ask-glob operand → ask; a deny-glob operand among them → deny", async () => {
+    await profile({ deny: [".env"], ask: [".github/**"] });
+    const sh = (command: string) => claude("Bash", { command }, repo.root);
+    const asked = await runGate(sh(`echo x > ${wf}`), { home: home.root, format: "claude" });
+    expect(asked.code).toBe(PATH_ASK_CODE);
+    expect(asked.verdict).toBe("ask");
+    const mixed = await runGate(sh(`rm ${wf} .env`), { home: home.root, format: "claude" });
+    expect(mixed.code).toBe("path.deny");
+    expect(mixed.verdict).toBe("deny");
+    const plain = await runGate(sh("echo x > out.txt"), { home: home.root, format: "claude" });
+    expect(plain.decision).toBe("allow");
+  });
+
+  it("record and shadow journal the ask verdict as `ask`", async () => {
+    await profile({ deny: [], ask: [".github/**"], record: true });
+    await runGate(write(wf), { home: home.root, format: "vscode" });
+    await runGate(write(wf), { home: home.root, format: "cursor" });
+    let recs = await readDecisions(repo.root);
+    expect(recs.map((r) => r.decision)).toStrictEqual(["ask", "deny"]);
+    expect(recs[0]?.code).toBe(PATH_ASK_CODE);
+    expect(recs[0]?.paths).toStrictEqual([wf]);
+
+    await rm(join(repo.root, ".axiom", "decisions.jsonl"));
+    await profile({ deny: [], ask: [".github/**"], shadow: true });
+    const r = await runGate(write(wf), { home: home.root, format: "vscode" });
+    expect(r.verdict).toBe("ask");
+    recs = await readDecisions(repo.root);
+    expect(recs.map((x) => x.decision)).toStrictEqual(["ask"]);
+    expect(recs[0]?.shadow).toBe(true);
   });
 });

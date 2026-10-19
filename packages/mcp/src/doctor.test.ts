@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { newJournal, writeJournal } from "@codai/axiom-apply";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ASK_MIN_VERSION,
   compareVersions,
   type DoctorOptions,
   defaultHealthFetch,
@@ -296,6 +297,20 @@ describe("axiom doctor — gate profile vs global bin", () => {
     ).toBe("ok");
     await put(".axiom/gate-profile.json", { deny: [] });
     expect(await statusOf("bin.profile")).toBeUndefined();
+  });
+
+  it("ask globs need a global bin ≥ ASK_MIN_VERSION", async () => {
+    await put(".axiom/gate-profile.json", { deny: [], ask: [".github/**"] });
+    const old = await runDoctor(
+      base({ locateBin: async () => ({ path: "/a", version: "2.6.1" }) }),
+    );
+    expect(byId(old, "bin.profile")?.status).toBe("fail");
+    expect(byId(old, "bin.profile")?.message).toContain(`< ${ASK_MIN_VERSION}`);
+    expect(
+      await statusOf("bin.profile", {
+        locateBin: async () => ({ path: "/a", version: ASK_MIN_VERSION }),
+      }),
+    ).toBe("ok");
   });
 
   it("compareVersions orders semver triples", () => {

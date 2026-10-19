@@ -274,7 +274,10 @@ A hook stops bad writes; it does not make an agent *choose* the transactional pa
 in this repository do that with a short instruction file the harness loads; since 2.5.0 the gate
 itself adds a once-per-session `additionalContext` pointing at **`axiom_write`** (two calls:
 preview, then the same files + `confirmDigest`) when the gate profile sets `steer: "hint"`
-(`init` default), and `steer: "require"` + `steerGlobs` denies direct writes to chosen paths:
+(`init` default), and `steer: "require"` + `steerGlobs` denies direct writes to chosen paths.
+Paths that agents may change but only with the human's confirmation (e.g. `.github/**`) go in the
+profile's `ask` globs: the gate answers `permissionDecision: "ask"` on Claude Code, Copilot CLI and
+VS Code (a deny elsewhere), and any deny still wins. Consumers:
 
 - codai: the SWE harness calls the engines in-process by default ([codai.md](codai.md)).
 - metu: a `.github/skills/axiom-plan-apply/SKILL.md` — "never raw multi-file writes when AXIOM is
