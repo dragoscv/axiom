@@ -266,7 +266,8 @@ const md = [
   `| rule | impact | pages | nodes | help |`,
   `|---|---|---|---|---|`,
   ...report.summary.topRules.map(
-    (r) => `| ${r.id} | ${r.impact} | ${r.pages} | ${r.nodes} | ${r.help.replace(/\|/g, "\\|")} |`,
+    (r) =>
+      `| ${r.id} | ${r.impact} | ${r.pages} | ${r.nodes} | ${r.help.replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`,
   ),
   "",
   `## Capture errors`,

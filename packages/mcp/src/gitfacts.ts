@@ -16,8 +16,11 @@
 import { createHash } from "node:crypto";
 import {
   type BigIntStats,
+  closeSync,
   type Dirent,
+  fstatSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -108,14 +111,27 @@ function samePath(a: string, b: string): boolean {
  */
 export async function gitDirs(root: string): Promise<GitDirs | undefined> {
   const dotGit = path.join(root, ".git");
-  const st = await lstat(dotGit).catch(() => undefined);
-  if (st === undefined) return undefined;
-  if (st.isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
-  if (!st.isFile()) return undefined;
+  // Open first, verify after: the lstat confirms `.git` is a regular file (symlinks refused)
+  // and is the very inode we hold, so nothing can be swapped in between check and read.
   let text: string;
   try {
-    text = await readFile(dotGit, "utf8");
-  } catch {
+    const fh = await open(dotGit, "r");
+    try {
+      const held = await fh.stat();
+      const st = await lstat(dotGit);
+      if (held.ino !== st.ino || held.dev !== st.dev) return undefined;
+      if (st.isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+      if (!st.isFile()) return undefined;
+      text = await fh.readFile("utf8");
+    } finally {
+      await fh.close();
+    }
+  } catch (err) {
+    // Windows refuses to open a directory for reading (EISDIR/EPERM): a plain `.git` directory.
+    const st = await lstat(dotGit).catch(() => undefined);
+    if (st?.isDirectory() === true && errCode(err) !== "ENOENT") {
+      return { gitDir: dotGit, commonDir: dotGit };
+    }
     return undefined;
   }
   const m = /^gitdir:[ \t]*(\S[^\r\n]*)$/m.exec(text);
@@ -524,29 +540,47 @@ function indexTreeOid(entries: readonly IndexEntry[], algo: string): Buffer {
 
 function entryDiffers(root: string, e: IndexEntry, algo: string, indexMtimeNs: bigint): boolean {
   const abs = path.join(root, ...e.path.split("/"));
-  let st: BigIntStats;
+  // Open first, verify after: a regular file is read through the descriptor whose inode was
+  // compared with the lstat, so nothing can be swapped in between. A symlink (or a dangling
+  // one) fails or follows the open; it is judged from the lstat + readlink alone.
+  let fd: number | undefined;
   try {
-    st = lstatSync(abs, { bigint: true });
+    fd = openSync(abs, "r");
   } catch {
-    return true; // deleted
+    fd = undefined;
   }
-  const isLink = (e.mode & MODE_TYPE) === MODE_LINK;
-  // core.symlinks=false checks a link out as a plain file holding the target: accept both.
-  if (!(st.isFile() || (isLink && st.isSymbolicLink()))) return true;
-  const sizeOk = Number(st.size & 0xffffffffn) === e.size;
-  const mS = Number(st.mtimeNs / NS_PER_S);
-  const mNs = Number(st.mtimeNs % NS_PER_S);
-  // A git built without nanosecond stat data stores 0: compare seconds only then.
-  const timeOk = mS === e.mtimeS && (e.mtimeNs === 0 || mNs === e.mtimeNs);
-  const racy = st.mtimeNs >= indexMtimeNs;
-  if (sizeOk && timeOk && !racy) return false;
-  const bytes =
-    isLink && st.isSymbolicLink()
-      ? Buffer.from(readlinkSync(abs).replace(/\\/g, "/"))
-      : readFileSync(abs);
-  if (blobOid(algo, bytes).equals(e.oid)) return false;
-  // core.autocrlf / eol=crlf checkouts: the blob holds LF, the worktree CRLF.
-  return !(bytes.includes(0x0d) && blobOid(algo, crlfToLf(bytes)).equals(e.oid));
+  try {
+    let st: BigIntStats;
+    try {
+      st = lstatSync(abs, { bigint: true });
+    } catch {
+      return true; // deleted
+    }
+    const isLink = (e.mode & MODE_TYPE) === MODE_LINK;
+    // core.symlinks=false checks a link out as a plain file holding the target: accept both.
+    if (!(st.isFile() || (isLink && st.isSymbolicLink()))) return true;
+    if (st.isFile()) {
+      if (fd === undefined) return true;
+      const held = fstatSync(fd, { bigint: true });
+      if (held.ino !== st.ino || held.dev !== st.dev) return true;
+    }
+    const sizeOk = Number(st.size & 0xffffffffn) === e.size;
+    const mS = Number(st.mtimeNs / NS_PER_S);
+    const mNs = Number(st.mtimeNs % NS_PER_S);
+    // A git built without nanosecond stat data stores 0: compare seconds only then.
+    const timeOk = mS === e.mtimeS && (e.mtimeNs === 0 || mNs === e.mtimeNs);
+    const racy = st.mtimeNs >= indexMtimeNs;
+    if (sizeOk && timeOk && !racy) return false;
+    let bytes: Buffer;
+    if (st.isSymbolicLink()) bytes = Buffer.from(readlinkSync(abs).replace(/\\/g, "/"));
+    else if (fd !== undefined) bytes = readFileSync(fd);
+    else return true;
+    if (blobOid(algo, bytes).equals(e.oid)) return false;
+    // core.autocrlf / eol=crlf checkouts: the blob holds LF, the worktree CRLF.
+    return !(bytes.includes(0x0d) && blobOid(algo, crlfToLf(bytes)).equals(e.oid));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 // ------------------------------------------------------------------ untracked --

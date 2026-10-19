@@ -13,7 +13,7 @@
  * (default) or denies with rule id `sessions.budget`.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import { z } from "zod";
@@ -170,9 +170,15 @@ export async function hashFile(root: string, relPath: string): Promise<string | 
   if (rel === undefined) return undefined;
   const abs = path.join(root, ...rel.split("/"));
   try {
-    const st = await stat(abs);
-    if (!st.isFile() || st.size > HASH_BYTES_MAX) return undefined;
-    return sha256Hex(new Uint8Array(await readFile(abs)));
+    // Open first, then fstat the held descriptor: the checks and the read see the same file.
+    const fh = await open(abs, "r");
+    try {
+      const st = await fh.stat();
+      if (!st.isFile() || st.size > HASH_BYTES_MAX) return undefined;
+      return sha256Hex(new Uint8Array(await fh.readFile()));
+    } finally {
+      await fh.close();
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? ABSENT : undefined;

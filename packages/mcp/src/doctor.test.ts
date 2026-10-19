@@ -358,6 +358,7 @@ describe("axiom doctor — resident daemon", () => {
         ...(protocol === 2 ? { key: "ab".repeat(32) } : {}),
         ...(token === undefined ? {} : { token }),
       }),
+      { mode: 0o600 },
     );
   };
 
@@ -374,6 +375,22 @@ describe("axiom doctor — resident daemon", () => {
     await new Promise<void>((r) => server?.listen(0, "127.0.0.1", () => r()));
     return (server.address() as AddressInfo).port;
   };
+
+  it.runIf(process.platform !== "win32")(
+    // POSIX only: Windows has no mode bits (the daemon sets an ACL instead).
+    "a group-readable daemon.json warns instead of looking like no daemon",
+    async () => {
+      await mkdir(join(home.root, ".axiom"), { recursive: true });
+      await writeFile(
+        join(home.root, ".axiom", "daemon.json"),
+        JSON.stringify({ protocol: 2, pid: 1, host: "127.0.0.1", port: 1, key: "ab".repeat(32) }),
+        { mode: 0o644 },
+      );
+      const d = byId(await runDoctor(base()), "daemon");
+      expect(d?.status).toBe("warn");
+      expect(d?.hint).toMatch(/chmod 600/);
+    },
+  );
 
   it("no daemon.json → ok (in-process)", async () => {
     expect(await statusOf("daemon")).toBe("ok");
@@ -662,6 +679,7 @@ describe("axiom doctor — 3.0 refinements (D-45)", () => {
     await writeFile(
       join(home.root, ".axiom", "daemon.json"),
       JSON.stringify({ ...state, protocol: 1, token: "t" }),
+      { mode: 0o600 },
     );
     const d = byId(
       await runDoctor(

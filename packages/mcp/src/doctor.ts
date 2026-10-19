@@ -677,6 +677,17 @@ async function checkDaemon(
 ): Promise<DoctorCheck> {
   const state = await readDaemonState(home);
   if (state === undefined) {
+    if (platform !== "win32") {
+      const st = await stat(path.join(home, ".axiom", "daemon.json")).catch(() => undefined);
+      if (st !== undefined && (st.mode & 0o077) !== 0) {
+        return check(
+          "daemon",
+          "warn",
+          "~/.axiom/daemon.json is readable by group/other: clients ignore it (its key would be public) and every hook runs in-process",
+          "chmod 600 ~/.axiom/daemon.json, or restart the daemon (it rewrites the file 0600)",
+        );
+      }
+    }
     return check("daemon", "ok", "no resident daemon (hooks run in-process)");
   }
   const where = `${state.host}:${state.port}`;

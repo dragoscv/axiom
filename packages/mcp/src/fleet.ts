@@ -9,7 +9,7 @@
  * understands the profile's keys. Plus the resident daemon's protocol, once.
  */
 import { createHash } from "node:crypto";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
@@ -205,7 +205,16 @@ async function profileInfo(
 ): Promise<{ mtimeMs: number; sha256: string; doc?: unknown; file: string } | undefined> {
   const file = path.join(root, INIT_FILES.gateProfile);
   try {
-    const [st, buf] = await Promise.all([stat(file), readFile(file)]);
+    // One descriptor for both the stat and the read: they describe the same file.
+    const fh = await open(file, "r");
+    let st: Awaited<ReturnType<typeof fh.stat>>;
+    let buf: Buffer;
+    try {
+      st = await fh.stat();
+      buf = await fh.readFile();
+    } finally {
+      await fh.close();
+    }
     let doc: unknown;
     try {
       doc = JSON.parse(buf.toString("utf8")) as unknown;

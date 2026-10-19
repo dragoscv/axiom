@@ -2,7 +2,7 @@
  * Reality-check 2026-10-19 regressions (S-1301..S-1303, S-1307, S-1313): every case here was
  * ALLOWED by the published 2.7.0 gate under an enforce profile.
  */
-import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readDecisions } from "./decisions.js";
@@ -238,7 +238,10 @@ describe("gate hardening (reality check 2026-10-19)", () => {
         await writeFile(join(gitdir, "gitdir"), `${join(slot.root, ".git")}\n`);
         await writeFile(join(gitdir, "commondir"), "../..\n");
         const loaded = await loadGateProfileForRoot(slot.root, { home: home.root });
-        expect(loaded.source).toContain(repo.root);
+        // The main clone's file (compare realpaths: CI temp dirs are 8.3 / symlinked).
+        expect(await realpath(loaded.source)).toBe(
+          await realpath(join(repo.root, ".axiom", "gate-profile.json")),
+        );
         // An older own profile is also superseded by the main clone's newer one.
         await writeProfile({ deny: [] }, slot.root);
         const old = new Date(Date.now() - 3_600_000);

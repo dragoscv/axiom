@@ -129,7 +129,8 @@ export function classify(prFiles, prefix, covered, gated) {
   return out;
 }
 
-const cell = (s) => String(s).replace(/\|/g, "\\|").replace(/`/g, "'");
+const cell = (s) =>
+  String(s).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "'");
 function list(title, files) {
   if (files.length === 0) return null;
   const shown = files.slice(0, MAX_LIST).map((f) => `- \`${cell(f)}\``);
@@ -205,6 +206,18 @@ export function renderBody({ verify, check, cls, decisions, coverage, attestatio
   let body = lines.filter((l) => l !== null).join("\n");
   if (body.length > MAX_BODY) body = `${body.slice(0, MAX_BODY)}\n\n… (truncated)`;
   return body;
+}
+
+/** `raw` when it is an https URL on `server`'s host with no whitespace/control chars. */
+export function safeCommentUrl(raw, server) {
+  if (typeof raw !== "string" || /[\s\u0000-\u001f\u007f]/.test(raw)) return undefined;
+  try {
+    const u = new URL(raw);
+    const host = new URL(server).host;
+    return u.protocol === "https:" && u.host === host ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function gh(method, url, token, body) {
@@ -305,7 +318,12 @@ async function main() {
       ? await gh("PATCH", `${api}/repos/${repo}/issues/comments/${mine.id}`, token, { body })
       : await gh("POST", `${api}/repos/${repo}/issues/${pr.number}/comments`, token, { body });
     console.log(`pr-comment: ${mine ? "updated" : "posted"} ${res.html_url}`);
-    if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `comment_url=${res.html_url}\n`);
+    // The URL comes from an HTTP response: write it only when it is a plain https URL on the
+    // server we talk to, so a newline can never inject another output into GITHUB_OUTPUT.
+    const url = safeCommentUrl(res?.html_url, server);
+    if (env.GITHUB_OUTPUT && url !== undefined) {
+      appendFileSync(env.GITHUB_OUTPUT, `comment_url=${url}\n`);
+    }
   } catch (err) {
     if (err.status === 403 || err.status === 404) {
       warn(

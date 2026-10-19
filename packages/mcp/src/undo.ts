@@ -14,6 +14,7 @@ import { realpath as realpathCb } from "node:fs";
 import {
   appendFile,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -97,18 +98,30 @@ async function preImage(root: string, rel: string, store: boolean): Promise<stri
 
 /** Like `preImage`, for any absolute file; blobs always go into `root`'s CAS. */
 async function preImageAbs(root: string, abs: string, store: boolean): Promise<string> {
+  let bytes: Uint8Array;
   try {
-    const st = await stat(abs);
-    if (!st.isFile()) return "absent";
-    if (st.size > UNDO_BYTES_MAX) return "toolarge";
-    const bytes = new Uint8Array(await readFile(abs));
-    const hex = store ? await casPut(root, bytes) : sha256Hex(bytes);
-    return `sha256:${hex}`;
+    // Open first, then fstat the held descriptor: the checks and the read see the same file.
+    const fh = await open(abs, "r");
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return "absent";
+      if (st.size > UNDO_BYTES_MAX) return "toolarge";
+      bytes = new Uint8Array(await fh.readFile());
+    } finally {
+      await fh.close();
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return "absent";
+    // Windows refuses to open a directory for reading: not a file, same as before.
+    if (code === "EISDIR" || code === "EPERM" || code === "EACCES") {
+      const st = await stat(abs).catch(() => undefined);
+      if (st !== undefined && !st.isFile()) return "absent";
+    }
     throw err;
   }
+  const hex = store ? await casPut(root, bytes) : sha256Hex(bytes);
+  return `sha256:${hex}`;
 }
 
 export async function captureUndo(

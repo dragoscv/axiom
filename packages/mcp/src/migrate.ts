@@ -21,7 +21,7 @@
  * policy files (`.axiom/gate-profile.json` + `.axiom/profiles/<name>.json`) into one
  * `.axiom/axiom.json`, never deleting the old files.
  */
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import { casPut, encodeBlob, INLINE_BASE64_DECODED_MAX } from "@codai/axiom-plan";
@@ -533,7 +533,8 @@ export async function migrateProfile(
   root: string,
   opts: MigrateProfileOptions = {},
 ): Promise<MigrateProfileResult> {
-  const rootReal = path.resolve(root);
+  // realpath: the legacy loader reports realpath'd sources (8.3 RUNNER~1, macOS /var symlink).
+  const rootReal = await realpath(path.resolve(root)).catch(() => path.resolve(root));
   const file = path.join(rootReal, ...AXIOM_CONFIG_PATH.split("/"));
   if ((await loadAxiomConfig(rootReal).catch(() => "present")) !== undefined) {
     throw new AxiomError("ERR_EXISTS", `${AXIOM_CONFIG_PATH} already exists`, {

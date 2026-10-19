@@ -23,7 +23,9 @@ const all = patterns(grammar);
 /** Keyword as a whole word inside a regex source (alternation member or literal). */
 const mentions = (kw: string) =>
   all.some((p) =>
-    new RegExp(`(^|[^A-Za-z0-9_-])${kw.replace(/-/g, "\\-")}($|[^A-Za-z0-9_-])`).test(p),
+    new RegExp(
+      `(^|[^A-Za-z0-9_-])${kw.replace(/[\\^$.*+?()[\]{}|-]/g, "\\$&")}($|[^A-Za-z0-9_-])`,
+    ).test(p),
   );
 
 describe("axm.tmLanguage.json covers the lexer vocabulary", () => {

@@ -1,5 +1,5 @@
 // @ts-check
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
@@ -34,12 +34,24 @@ const noindex404 = {
     /** @param {{ dir: URL }} options */
     "astro:build:done": ({ dir }) => {
       const file = fileURLToPath(new URL("404.html", dir));
-      if (!existsSync(file)) return;
-      const html = readFileSync(file, "utf8")
-        .replace(/<link rel="canonical"[^>]*>/g, "")
-        .replace(/<meta property="og:url"[^>]*>/g, "")
-        .replace(/<head>/, '<head><meta name="robots" content="noindex">');
-      writeFileSync(file, html);
+      // Read and rewrite through one descriptor (no exists-then-open race).
+      let fd;
+      try {
+        fd = openSync(file, "r+");
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === "ENOENT") return;
+        throw err;
+      }
+      try {
+        const html = readFileSync(fd, "utf8")
+          .replace(/<link rel="canonical"[^>]*>/g, "")
+          .replace(/<meta property="og:url"[^>]*>/g, "")
+          .replace(/<head>/, '<head><meta name="robots" content="noindex">');
+        ftruncateSync(fd, 0);
+        writeSync(fd, html, 0, "utf8");
+      } finally {
+        closeSync(fd);
+      }
     },
   },
 };
@@ -83,6 +95,13 @@ export default defineConfig({
         },
         { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
         { tag: "meta", attrs: { name: "twitter:image", content: `${site}${base}/og.png` } },
+        {
+          // Wide tables scroll horizontally: give each overflowing one keyboard access
+          // (WCAG 2.1.1; axe scrollable-region-focusable).
+          tag: "script",
+          content:
+            "addEventListener('DOMContentLoaded',()=>{for(const t of document.querySelectorAll('.sl-markdown-content table')){if(t.scrollWidth>t.clientWidth){t.tabIndex=0;if(!t.hasAttribute('aria-label'))t.setAttribute('aria-label',(t.querySelector('th')?.textContent?.trim()||'Table')+' (scrollable table)')}}})",
+        },
         {
           tag: "meta",
           attrs: {

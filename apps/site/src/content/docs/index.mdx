@@ -37,8 +37,9 @@ AXIOM sits between a coding agent and your repository. Every write and shell com
 attempts is judged **before it runs**, and a change set the agent submits is applied as **one
 transaction** you can undo byte for byte.
 
-<div class="ax-pipeline not-content" aria-label="Plan, Manifest, checks, apply, journal — every arrow is a hash boundary">
-<svg viewBox="0 0 880 120" role="img">
+<div class="ax-pipeline not-content">
+<svg viewBox="0 0 880 120" role="img" aria-labelledby="ax-pipeline-title">
+  <title id="ax-pipeline-title">Plan, Manifest, checks, apply, journal: every arrow is a hash boundary</title>
   <path class="line" d="M96 60 H176 M272 60 H352 M448 60 H528 M624 60 H704" />
   <g class="node"><rect x="8" y="38" width="88" height="44" rx="3"/><text x="52" y="65" text-anchor="middle">Plan</text></g>
   <g class="node seal"><rect x="176" y="38" width="96" height="44" rx="3"/><text x="224" y="65" text-anchor="middle">Manifest</text></g>
