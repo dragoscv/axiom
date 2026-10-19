@@ -73,14 +73,16 @@ export function findCnp(text: string): boolean {
 
 /**
  * Email addresses that are not personal data: RFC 2606/6761 reserved domains, the git SSH
- * remote form (`git@github.com`), GitHub noreply/bot senders, and pseudo-addresses produced
- * by `@2x.png`-style asset names or decorators. S-414 corpus scan: 110/3240 OSS files
+ * remote form (`git@github.com`), GitHub noreply/bot senders, Google Cloud service accounts
+ * (`*@*.iam.gserviceaccount.com`, `*-compute@developer.gserviceaccount.com`,
+ * `*@appspot.gserviceaccount.com` — machine identities, not people), and pseudo-addresses
+ * produced by `@2x.png`-style asset names or decorators. S-414 corpus scan: 110/3240 OSS files
  * matched the bare regex — every one a maintainer `pyproject.toml` author, a CONTRIBUTING
  * `git@github.com`, or a docs `user@example.com`.
  */
 const EMAIL_RE = /\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g;
 const EMAIL_SKIP_DOMAIN =
-  /(^|\.)(example\.(com|net|org)|example|test|invalid|localhost|localdomain)$|(^|\.)github\.com$/i;
+  /(^|\.)(example\.(com|net|org)|example|test|invalid|localhost|localdomain)$|(^|\.)github\.com$|\.gserviceaccount\.com$/i;
 const EMAIL_SKIP_LOCAL = /^(git|noreply|no-reply|donotreply|do-not-reply)$/i;
 const EMAIL_SKIP_TLD_AS_EXT =
   /\.(png|jpe?g|gif|svg|webp|ico|css|js|ts|json|md|txt|html?|xml|yml|yaml|py)$/i;

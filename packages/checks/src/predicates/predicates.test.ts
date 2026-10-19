@@ -167,6 +167,9 @@ describe("content.noSecrets", () => {
       "noreply@company.io",
       "icon docset-icon@2x.png",
       "jane@doe.invalid",
+      "codai-hub@codai-inference.iam.gserviceaccount.com",
+      "123456789012-compute@developer.gserviceaccount.com",
+      "my-project@appspot.gserviceaccount.com",
     ];
     for (const text of clean) {
       it(`does not flag ${JSON.stringify(text)}`, async () => {
@@ -176,7 +179,14 @@ describe("content.noSecrets", () => {
         );
       });
     }
-    for (const text of ["hs@ox.cx", "alex.gronholm@nextday.fi", "contact: ion.popescu@firma.ro"]) {
+    for (const text of [
+      "hs@ox.cx",
+      "alex.gronholm@nextday.fi",
+      "contact: ion.popescu@firma.ro",
+      "ion.popescu@gmail.com",
+      "x@gserviceaccount.com.evil.ro",
+      "x@gserviceaccount.com",
+    ]) {
       it(`still flags ${text}`, async () => {
         const b = makeBundle([{ path: "x.toml", content: text }]);
         expect((await ids(b, "content.noSecrets", { pii: true })).ids).toContain(
