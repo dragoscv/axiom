@@ -6,8 +6,8 @@ packages:
 catalog:
   typescript: 7.0.2
   zod: 4.6.7
-  vitest: 5.0.4
-  "@vitest/coverage-v8": 5.0.4
+  vitest: 5.0.5
+  "@vitest/coverage-v8": 5.0.5
   tsdown: 0.23.1
   "@biomejs/biome": 2.5.15
   "@changesets/cli": 3.0.3
@@ -32,11 +32,11 @@ catalog:
   # @types/vscode is newer than the engines floor (release run 38486626658). Bump both together.
   "@types/vscode": 1.138.0
   "@vscode/vsce": 4.0.0
-  astro: 7.3.8
+  astro: 7.4.0
   "@astrojs/starlight": 0.42.6
   astro-mermaid: 2.1.0
-  mermaid: 12.1.0
-  happy-dom: 21.0.1
+  mermaid: 12.2.0
+  happy-dom: 21.0.3
   starlight-links-validator: 0.27.0
   starlight-github-alerts: 0.5.0
   sharp: 0.35.5
