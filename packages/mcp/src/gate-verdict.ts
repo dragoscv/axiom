@@ -17,6 +17,12 @@ export interface RuleVerdict {
   fix?: string;
   /** `ask` = let the human decide (Claude / VS Code / Copilot honour it); default `deny`. */
   decision?: "deny" | "ask";
+  /**
+   * 4.0 contract: advice, never a block — the gate core allows the call and attaches the reason
+   * as a warning. With `oncePerSession` the warning is shown once per (root, session, rule).
+   */
+  advisory?: boolean;
+  oncePerSession?: boolean;
 }
 
 /** Sub-rule ids, for docs and tests. */

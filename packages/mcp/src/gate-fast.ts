@@ -169,6 +169,8 @@ export interface StdinRead {
   text: string | undefined;
   timedOut: boolean;
   tooLarge: boolean;
+  /** 4.0 contract: bytes received before a timeout (0 = the harness sent nothing). */
+  bytes?: number;
 }
 
 /** Read all of `stream` (≤ maxBytes) or give up after `timeoutMs` — a hook must never hang. */
