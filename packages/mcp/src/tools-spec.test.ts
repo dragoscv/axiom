@@ -13,6 +13,26 @@ import { CORE_TOOL_NAMES, TOOL_DEFS, toolsFor } from "./tools.js";
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("spec/tools.json parity", () => {
+  it("every tool inputSchema is acyclic and carries items on every array (Gemini/VS Code safe)", () => {
+    function walk(node: unknown, path: string): void {
+      if (Array.isArray(node)) {
+        for (const [idx, child] of node.entries()) walk(child, `${path}[${idx}]`);
+        return;
+      }
+      if (!node || typeof node !== "object") return;
+      const rec = node as Record<string, unknown>;
+      expect(rec, path).not.toHaveProperty("$ref");
+      expect(rec, path).not.toHaveProperty("$defs");
+      if (rec.type === "array") {
+        expect(rec, `${path} array must define items`).toHaveProperty("items");
+      }
+      for (const [k, v] of Object.entries(rec)) walk(v, `${path}.${k}`);
+    }
+    for (const entry of buildToolsSpec()) {
+      walk(entry.inputSchema, entry.name);
+    }
+  });
+
   it("committed spec equals a fresh generation from TOOL_DEFS", () => {
     const committed = readFileSync(join(here, "..", "spec", "tools.json"), "utf8");
     expect(committed).toBe(renderToolsSpec());
