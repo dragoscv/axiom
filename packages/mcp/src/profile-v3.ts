@@ -5,17 +5,21 @@
  * `extends` entries, resolved in order (later wins, the file itself last):
  *   - `./base.json` / `../x.json` — relative to the declaring file; must stay inside the repo root
  *     or the user's `~/.axiom` (realpath'd, so a symlink cannot smuggle a file in);
- *   - `axiom:default` / `axiom:strict` / `axiom:permissive` — built-in packs: the matching
- *     built-in check profile (by `extends`, resolved by `@codai/axiom-checks`) + a gate pack;
+ *   - `axiom:default` / `axiom:core` / `axiom:shared-clone` / `axiom:strict` / `axiom:permissive`
+ *     — built-in packs: the matching built-in check profile (by `extends`, resolved by
+ *     `@codai/axiom-checks`) + a gate pack;
  *   - `@codai/axiom-pack-<name>` (or any npm name when `allowNpmPacks`) — resolved with
  *     `createRequire` from the repo root; the package must already be in node_modules (nothing is
  *     ever installed) and ship `axiom-pack.json` (via `exports["./axiom-pack.json"]` or
- *     `package.json#axiomPack`).
+ *     `package.json#axiomPack`). `<name>@sha256:<hex>` pins the pack file's content (4.0, EN-8):
+ *     a pack whose bytes do not hash to the pin is refused, so editing `node_modules` cannot
+ *     flip a deny into an allow.
  *
  * Merge: objects deep-merge, scalars are replaced, the policy arrays `deny`/`ask`/`hard`/`allow`
- * are UNIONED (a pack can never silently drop a deny), other arrays are replaced. Cycles and a
- * depth over {@link MAX_EXTENDS_DEPTH} → `ERR_INVALID_PROFILE`; `version` above
- * {@link AXIOM_CONFIG_VERSION} → `ERR_PROFILE_VERSION`; unknown keys → a warning, ignored.
+ * are UNIONED (a pack can never silently drop a deny), `commands.pack` joins on the pack lattice
+ * (`core` + `shared-clone` = `house`), other arrays are replaced. Cycles and a depth over
+ * {@link MAX_EXTENDS_DEPTH} → `ERR_INVALID_PROFILE`; `version` above {@link AXIOM_CONFIG_VERSION}
+ * → `ERR_PROFILE_VERSION`; unknown keys → a warning, ignored.
  *
  * Validation of `gate` (GateProfileSchema) and `checks` (ProfileSchema) is the caller's job:
  * this module only resolves and merges, so it stays free of the gate and checks engines.
@@ -24,6 +28,7 @@ import { readFile, realpath as realpathFs } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
+import { sha256Hex } from "@codai/axiom-canon";
 import {
   AXIOM_CONFIG_PATH,
   AXIOM_CONFIG_VERSION,
@@ -63,6 +68,33 @@ export const BUILTIN_GATE_DENY: readonly string[] = [
   "**/node_modules/**",
 ];
 
+/**
+ * Base command packs on the lattice `none < core, shared-clone < house` (`house` = both; the
+ * 3.x name). Kept local so this loader stays free of the command engine.
+ */
+const PACK_RANK: Readonly<Record<string, number>> = { none: 0, core: 1, "shared-clone": 1, house: 2 };
+
+/** Join of two base packs: the smallest pack that contains both (`core` + `shared-clone` = `house`). */
+export function joinPacks(a: string, b: string): string {
+  if (a === b) return a;
+  const ra = PACK_RANK[a];
+  const rb = PACK_RANK[b];
+  if (ra === undefined || rb === undefined) return b;
+  if (ra === 0) return b;
+  if (rb === 0) return a;
+  return "house";
+}
+
+/** The portable 4.0 preset `setup init` writes (D-48): core command pack, enforce, undo, record. */
+const CORE_GATE: Readonly<Record<string, unknown>> = {
+  deny: [...BUILTIN_GATE_DENY],
+  steer: "hint",
+  mode: "enforce",
+  commands: { pack: "core" },
+  undo: true,
+  record: true,
+};
+
 /** `axiom:<name>` → the check profile it extends and the gate fields it contributes. */
 export const BUILTIN_PACKS: Readonly<
   Record<string, { checks: Record<string, unknown>; gate: Record<string, unknown> }>
@@ -70,6 +102,19 @@ export const BUILTIN_PACKS: Readonly<
   default: {
     checks: { name: "default", extends: "default" },
     gate: { deny: [...BUILTIN_GATE_DENY], steer: "hint" },
+  },
+  /** Portable preset: every repository wants these (force push, reset --hard, root deletes ...). */
+  core: {
+    checks: { name: "core", extends: "default" },
+    gate: structuredClone(CORE_GATE) as Record<string, unknown>,
+  },
+  /**
+   * Multi-agent shared-clone workflow (pathspec commits, leased worktrees, queued builds) ON TOP
+   * of `core`: `pack: "house"` = core + shared-clone rules.
+   */
+  "shared-clone": {
+    checks: { name: "shared-clone", extends: "default" },
+    gate: { ...(structuredClone(CORE_GATE) as Record<string, unknown>), commands: { pack: "house" } },
   },
   strict: {
     checks: { name: "strict", extends: "strict" },
@@ -93,6 +138,16 @@ export interface LoadAxiomConfigOptions {
   home?: string;
   /** Allow npm packs outside the `@codai` scope (also enabled by `allowNpmPacks: true` in the root file). */
   allowNpmPacks?: boolean;
+}
+
+export interface LoadAxiomConfigFileOptions extends LoadAxiomConfigOptions {
+  /**
+   * Repository root the file belongs to: base of npm pack resolution and the first containment
+   * root for relative `extends`. Default: the file's own directory.
+   */
+  root?: string;
+  /** Extra directories a relative `extends` may resolve into (besides `root` and `~/.axiom`). */
+  containRoots?: readonly string[];
 }
 
 export interface AxiomConfig {
@@ -138,6 +193,9 @@ export function mergeConfig(base: unknown, over: unknown, key?: string): unknown
       return [...byId.values()];
     }
   }
+  if (key === "pack" && typeof base === "string" && typeof over === "string") {
+    return joinPacks(base, over);
+  }
   if (Array.isArray(base) && Array.isArray(over) && key !== undefined && UNION_KEYS.has(key)) {
     const out = [...base];
     const seen = new Set(base.map((v) => JSON.stringify(v)));
@@ -175,7 +233,8 @@ function inside(child: string, parent: string): boolean {
 
 interface Ctx {
   rootReal: string;
-  homeAxiomReal: string | undefined;
+  /** Realpath'd directories a relative `extends` may live in (root, ~/.axiom, extra). */
+  containReal: readonly string[];
   allowNpm: boolean;
   sources: string[];
   warnings: string[];
@@ -232,9 +291,7 @@ async function resolveFileRef(ref: string, fromDir: string, ctx: Ctx): Promise<s
   const abs = path.resolve(fromDir, ref);
   const real = await realpathOrUndefined(abs);
   if (real === undefined) throw invalid(`extends: ${ref} not found (from ${fromDir})`, { ref });
-  const ok =
-    inside(real, ctx.rootReal) ||
-    (ctx.homeAxiomReal !== undefined && inside(real, ctx.homeAxiomReal));
+  const ok = ctx.containReal.some((dir) => inside(real, dir));
   if (!ok) {
     // ERR_INVALID_PROFILE (not ERR_CONTAINMENT): an unusable policy must never be covered by
     // the gate's --fail-open.
@@ -288,8 +345,8 @@ async function resolveNpmPack(name: string, ctx: Ctx): Promise<{ file: string; l
   }
   if (file === undefined) {
     throw invalid(
-      `extends: npm pack ${name} is not installed under ${ctx.rootReal} (axiom never installs packs) or ships no axiom-pack.json`,
-      { ref: name },
+      `extends: npm pack ${name} is not installed under ${ctx.rootReal} (axiom never installs packs) or ships no axiom-pack.json; install it (or remove it from extends) - until then the policy is unusable and every write is refused`,
+      { ref: name, reason: "packMissing", fix: `install ${name} under ${ctx.rootReal}` },
     );
   }
   return { file, label: `npm:${name}` };
@@ -297,6 +354,13 @@ async function resolveNpmPack(name: string, ctx: Ctx): Promise<{ file: string; l
 
 function isNpmRef(ref: string): boolean {
   return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(ref);
+}
+
+/** `<npm name>@sha256:<64 hex>` → the name and the pinned digest (4.0, EN-8). */
+export function splitPinnedRef(ref: string): { name: string; sha256: string } | undefined {
+  const m = /^(.+?)@sha256:([0-9a-f]{64})$/.exec(ref);
+  if (m?.[1] === undefined || m[2] === undefined) return undefined;
+  return { name: m[1], sha256: m[2] };
 }
 
 function isFileRef(ref: string): boolean {
@@ -307,10 +371,43 @@ async function resolveRef(
   ref: string,
   fromDir: string,
   ctx: Ctx,
-): Promise<{ file: string; label?: string }> {
+): Promise<{ file: string; label?: string; pin?: string }> {
   if (isFileRef(ref)) return { file: await resolveFileRef(ref, fromDir, ctx) };
+  const pinned = splitPinnedRef(ref);
+  if (pinned !== undefined) {
+    if (!isNpmRef(pinned.name)) {
+      throw invalid(`extends: only npm packs can be pinned (${JSON.stringify(ref)})`, { ref });
+    }
+    return { ...(await resolveNpmPack(pinned.name, ctx)), pin: pinned.sha256 };
+  }
   if (isNpmRef(ref)) return resolveNpmPack(ref, ctx);
   throw invalid(`extends: unrecognised entry ${JSON.stringify(ref)}`, { ref });
+}
+
+/** Read a pack file and refuse it when its bytes do not hash to the pin. */
+async function readPinned(file: string, pin: string, ref: string): Promise<unknown> {
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await readFile(file));
+  } catch (cause) {
+    throw new AxiomError("ERR_INVALID_PROFILE", `cannot read ${file}`, { cause, details: { file } });
+  }
+  const actual = sha256Hex(bytes);
+  if (actual !== pin) {
+    throw invalid(
+      `extends: ${ref} does not match its pin (pack content sha256:${actual.slice(0, 12)}...); re-pin with 'axiom setup pin-policy' only if the change is yours`,
+      { ref, reason: "packDigest", expected: `sha256:${pin}`, actual: `sha256:${actual}`, file },
+    );
+  }
+  const text = new TextDecoder().decode(bytes);
+  try {
+    return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch (cause) {
+    throw new AxiomError("ERR_INVALID_PROFILE", `${file}: not valid JSON`, {
+      cause,
+      details: { file },
+    });
+  }
 }
 
 async function loadLayer(
@@ -334,15 +431,13 @@ async function loadLayer(
       ctx.sources.push(ref);
       child = { gate: structuredClone(pack.gate), checks: structuredClone(pack.checks) };
     } else {
-      const { file, label: childLabel } = await resolveRef(ref, fromDir, ctx);
+      const { file, label: childLabel, pin } = await resolveRef(ref, fromDir, ctx);
       const id = (await realpathOrUndefined(file)) ?? file;
       if (stack.includes(id)) {
         throw invalid(`extends cycle at ${ref}`, { chain: [...stack, id] });
       }
-      child = await loadLayer(await readJsonFile(id), childLabel ?? id, path.dirname(id), ctx, [
-        ...stack,
-        id,
-      ]);
+      const doc = pin === undefined ? await readJsonFile(id) : await readPinned(id, pin, ref);
+      child = await loadLayer(doc, childLabel ?? id, path.dirname(id), ctx, [...stack, id]);
     }
     acc = {
       gate: mergeConfig(acc.gate, child.gate),
@@ -364,13 +459,40 @@ export async function loadAxiomConfig(
   opts: LoadAxiomConfigOptions = {},
 ): Promise<AxiomConfig | undefined> {
   const rootReal = (await realpathOrUndefined(root)) ?? path.resolve(root);
-  const file = path.join(rootReal, ...AXIOM_CONFIG_PATH.split("/"));
+  return loadAxiomConfigFile(path.join(rootReal, ...AXIOM_CONFIG_PATH.split("/")), {
+    ...opts,
+    root: rootReal,
+  });
+}
+
+/**
+ * Load and merge ANY `axiom.json`-shaped file (4.0): the repo file, `~/.axiom/axiom.json` (user
+ * layer), the org policy, or a `--profile` document. `undefined` when the file does not exist.
+ * Same errors as {@link loadAxiomConfig}. Relative `extends` must stay inside `root`, `~/.axiom`
+ * or one of `containRoots`.
+ */
+export async function loadAxiomConfigFile(
+  file: string,
+  opts: LoadAxiomConfigFileOptions = {},
+): Promise<AxiomConfig | undefined> {
   const fileReal = await realpathOrUndefined(file);
   if (fileReal === undefined) return undefined;
+  const rootReal =
+    opts.root === undefined
+      ? path.dirname(fileReal)
+      : ((await realpathOrUndefined(opts.root)) ?? path.resolve(opts.root));
   const raw = await readJsonFile(fileReal);
+  const containReal: string[] = [rootReal];
+  for (const dir of [
+    path.join(opts.home ?? homedir(), ".axiom"),
+    ...(opts.containRoots ?? []),
+  ]) {
+    const real = await realpathOrUndefined(dir);
+    if (real !== undefined && !containReal.includes(real)) containReal.push(real);
+  }
   const ctx: Ctx = {
     rootReal,
-    homeAxiomReal: await realpathOrUndefined(path.join(opts.home ?? homedir(), ".axiom")),
+    containReal,
     allowNpm: opts.allowNpmPacks === true || (isObject(raw) && raw.allowNpmPacks === true),
     sources: [],
     warnings: [],
@@ -429,7 +551,7 @@ export async function loadLegacyAxiomConfig(
     checks,
     sources,
     warnings: [
-      `deprecated: ${sources.map((s) => path.relative(rootReal, s).split(path.sep).join("/")).join(" + ")} — run 'axiom migrate --profile' to move to ${AXIOM_CONFIG_PATH}`,
+      `deprecated: ${sources.map((s) => path.relative(rootReal, s).split(path.sep).join("/")).join(" + ")} still work in 4.x; run 'axiom setup migrate --profile' to move them into ${AXIOM_CONFIG_PATH}`,
     ],
     legacy: true,
   };

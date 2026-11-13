@@ -88,6 +88,27 @@ export const GateProfileSchema = z
      * operating-system directories).
      */
     outside: z.enum(["deny", "warn", "allow"]).default("deny"),
+    // ---- 4.0 contract keys (names frozen; D-54). Absent = the documented default. ----------
+    /** Decision journal: retention of rotated months, in days (default 90). */
+    journal: z.strictObject({ retentionDays: z.int().positive().optional() }).optional(),
+    /**
+     * Override governance (replaces the bare `override: true` meaning "any reason passes"):
+     * `bindCode` = the override must name the rule it lifts (`axiom-override(<code>): reason`);
+     * budgets are counted per session and per rolling hour; `allowOnce` enables one-time codes
+     * typed by the human (`axiom allow-once`). Only read when `override` is true.
+     */
+    overrides: z
+      .strictObject({
+        bindCode: z.boolean().optional(),
+        perSession: z.int().min(0).optional(),
+        perHour: z.int().min(0).optional(),
+        allowOnce: z.boolean().optional(),
+      })
+      .optional(),
+    /** Lowest axiom version that may judge with this policy (older bin → `ERR_PROFILE_VERSION`). */
+    minAxiomVersion: z.string().min(1).optional(),
+    /** Keys a lower layer (user < org, repo < user) may not weaken; meaningful in org/user layers. */
+    locked: z.array(z.string().min(1)).optional(),
   })
   // Unknown keys are ignored with a warning (3.0, D-42): a newer profile read by an older bin
   // must neither deny every write nor (with --fail-open) switch the gate off.

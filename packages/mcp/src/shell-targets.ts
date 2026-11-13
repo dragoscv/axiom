@@ -29,6 +29,20 @@ export interface GateTarget {
    * second name for the pointee, so the pointee is judged as a write.
    */
   linkTo?: boolean;
+  /**
+   * 4.0 contract: the command resets or cleans the WHOLE work tree (`git clean -f…`,
+   * `git reset --hard`, `git checkout -- .`, `git restore .`). `rawPath` is `.`. A plain `.`
+   * operand of any other command (`Copy-Item . dest`, `ls .`) never sets it.
+   */
+  wholeTree?: boolean;
+}
+
+/** 4.0 contract: context the shell scan needs to turn a token into a path. */
+export interface ShellScanOptions {
+  /** Home directory: `~`, `$HOME`, `${HOME}`, `$env:USERPROFILE`, `%USERPROFILE%` expand to it. */
+  home?: string;
+  /** Windows semantics for `\` (a separator, never an escape) — default: `process.platform === "win32"`. */
+  win32?: boolean;
 }
 
 // ------------------------------------------------------------ shell scan --

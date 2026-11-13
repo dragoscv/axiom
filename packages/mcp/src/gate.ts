@@ -83,12 +83,7 @@ import {
   normalizePayload,
   PATH_KEYS,
 } from "./gate-payload.js";
-import {
-  type GateProfile,
-  GateProfileError,
-  loadGateProfile,
-  loadGateProfileForRoot,
-} from "./gate-profile.js";
+import { type GateProfile, GateProfileError } from "./gate-profile.js";
 import {
   canonicalizeExisting,
   discoverRoot,
@@ -97,6 +92,7 @@ import {
 } from "./gate-roots.js";
 import type { RuleVerdict } from "./gate-verdict.js";
 import { evaluateGit, type GitRules } from "./gitfacts.js";
+import { resolvePolicy } from "./policy.js";
 import { postMain } from "./post-write.js";
 import {
   checkSessionWrite,
@@ -430,8 +426,9 @@ async function noteDeniedCreate(
   resolved: readonly ResolvedGateTarget[],
   targetRoot: string,
   profile: GateProfile,
+  dryRun = false,
 ): Promise<void> {
-  if (cls !== "write" || !isWholeFileTool(toolName)) return;
+  if (dryRun || cls !== "write" || !isWholeFileTool(toolName)) return;
   if (profile.sessions !== undefined && !profile.sessions.staleScript) return;
   for (const r of resolved) await recordDeniedCreate(rootReal, path.join(targetRoot, r.relPath));
 }
@@ -543,6 +540,12 @@ export interface GateOptions {
   /** Harness output contract (`--format`); default `auto` = combined Claude + Copilot document. */
   format?: GateFormat;
   logLevel?: GateLogLevel;
+  /**
+   * 4.0 contract: judge only. No decision-journal line, no session / undo / hint / stale-script
+   * state is written. Used by `axiom explain '<command or path>'`, `axiom try` and the doctor
+   * probes, so a question about the gate never shows up as an agent action.
+   */
+  dryRun?: boolean;
   /** Test hook for `~/.axiom/gate-profile.json`. */
   home?: string;
   /**
@@ -569,8 +572,7 @@ async function trackRead(
     const cwdReal = await realOrResolved(path.resolve(rootArg));
     const rootReal =
       opts.noRootDiscovery === true ? cwdReal : await discoverRoot(cwdReal, opts.home);
-    const { profile } = await loadGateProfile({
-      root: rootReal,
+    const { gate: profile } = await resolvePolicy(rootReal, {
       ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
       ...(opts.home === undefined ? {} : { home: opts.home }),
     });
@@ -728,7 +730,7 @@ export async function runGate(
   const extracted = extractTargets(payload);
   toolClass = extracted.cls;
   if (extracted.cls === "other") {
-    if (opts.trackReads === true) await trackRead(payload, opts, log);
+    if (opts.trackReads === true && opts.dryRun !== true) await trackRead(payload, opts, log);
     return allow(`tool ${payload.toolName} is not a write/shell tool`);
   }
   if (extracted.cls === "shell" && opts.noShellScan === true) {
@@ -791,7 +793,7 @@ export async function runGate(
     return true;
   };
   const recorded = async (r: GateResult): Promise<GateResult> => {
-    if (rec === undefined) return r;
+    if (rec === undefined || opts.dryRun === true) return r;
     // Relaxed decisions (warn / override) are always journaled: they are the audit trail D-40
     // promised. Plain allow/deny lines need `record` or `shadow`.
     const relaxedHere = r.decision === "allow" && relaxedKind !== undefined;
@@ -874,13 +876,13 @@ export async function runGate(
     const loadFor = async (root: string): Promise<{ profile: GateProfile; source: string }> => {
       const hit = profiles.get(root);
       if (hit !== undefined) return hit;
-      const loaded = await loadGateProfileForRoot(root, opts);
-      if (loaded.unknownKeys !== undefined) {
-        log(
-          "warn",
-          `${loaded.source}: ignoring unknown key(s) ${loaded.unknownKeys.join(", ")} (written for a newer axiom?)`,
-        );
-      }
+      // ONE resolver for every consumer of the policy (4.0, S-1407).
+      const policy = await resolvePolicy(root, {
+        ...(opts.profilePath === undefined ? {} : { profilePath: opts.profilePath }),
+        ...(opts.home === undefined ? {} : { home: opts.home }),
+      });
+      for (const w of policy.warnings) log("warn", `${policy.source}: ${w}`);
+      const loaded = { profile: policy.gate, source: policy.source };
       log("debug", `root=${root} profile=${loaded.source}`);
       profiles.set(root, loaded);
       return loaded;
@@ -988,7 +990,15 @@ export async function runGate(
         found.find((d) => isHardCode(p.hard, d.code)) ?? found.find((d) => !relax(d, p));
       if (blocking !== undefined) {
         if (loadedP.source !== main.source) decidingProfile = loadedP.source;
-        await noteDeniedCreate(rootReal, extracted.cls, payload.toolName, resolved, root, profile);
+        await noteDeniedCreate(
+          rootReal,
+          extracted.cls,
+          payload.toolName,
+          resolved,
+          root,
+          profile,
+          opts.dryRun === true,
+        );
         return recorded(deny(blocking));
       }
       pendingAsk ??= await runAskGlobs(resolved, p);
@@ -1016,6 +1026,7 @@ export async function runGate(
             groups.get(rootReal) ?? [],
             rootReal,
             profile,
+            opts.dryRun === true,
           );
         }
         if (r !== undefined) return r;
@@ -1023,7 +1034,8 @@ export async function runGate(
     }
     // Every deny passed: an `ask` glob hands the decision to the human (deny on non-ask formats).
     if (pendingAsk !== undefined) return recorded(deny(pendingAsk));
-    if (profile.undo && outsideAbs.length > 0) {
+    const live = opts.dryRun !== true;
+    if (live && profile.undo && outsideAbs.length > 0) {
       await captureOutsideUndo(rootReal, {
         ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
         agentId,
@@ -1031,7 +1043,7 @@ export async function runGate(
         absPaths: outsideAbs,
       });
     }
-    if (sessionTargets.length > 0) {
+    if (live && sessionTargets.length > 0) {
       // Allowed: capture the pre-image for `axiom undo` and remember who is writing what.
       if (profile.undo) {
         await captureUndo(rootReal, {
@@ -1053,6 +1065,7 @@ export async function runGate(
     }
     let hint: string | undefined;
     if (
+      live &&
       extracted.cls === "write" &&
       profile.steer !== "off" &&
       payload.sessionId !== undefined &&

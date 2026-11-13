@@ -48,6 +48,8 @@ export const ERROR_CODES = [
   "ERR_PREDICATE_UNKNOWN",
   "ERR_PREDICATE_PARAMS",
   "ERR_PROVIDER_FAILED",
+  /** A plan or a caller tried to replace or weaken a check of the repository policy (4.0, D-50). */
+  "ERR_POLICY_FLOOR",
   "ERR_GUARD_TIMEOUT",
   "ERR_GUARD_OUTPUT",
   /** A fact provider / predicate is disabled by the profile or a CLI gate (`--allow-guards`). */
@@ -96,6 +98,8 @@ export const ERROR_CODES = [
   "ERR_DAEMON_AUTH",
   /** Command-line usage error: unknown verb/option, missing argument (S-1311). */
   "ERR_USAGE",
+  /** Tool or resource arguments fail the declared input schema (MCP input validation) (S-1421). */
+  "ERR_INVALID_INPUT",
   "ERR_UNSUPPORTED_OP",
   "ERR_INTERNAL",
 ] as const;

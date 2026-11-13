@@ -91,6 +91,9 @@
         "allowGuards": {
           "default": false,
           "type": "boolean"
+        },
+        "allowPlanGuards": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

@@ -73,9 +73,23 @@ export const CommandRuleSchema = z
   });
 export type CommandRule = z.infer<typeof CommandRuleSchema>;
 
+/**
+ * Built-in base packs (4.0, D-48). `core` = portable destructive-command rules every repository
+ * wants; `shared-clone` = the multi-agent shared-clone workflow rules (queue wrapper, pathspec
+ * commits, leased worktrees); `house` = both (the 3.x name, kept so existing policies keep
+ * meaning the same thing). Rule ids are stable names and do not change with the pack.
+ */
+export const BASE_PACKS = ["none", "core", "shared-clone", "house"] as const;
+export type BasePack = (typeof BASE_PACKS)[number];
+/** Opt-in topic packs (4.0, S-1422); none is enabled by a preset. */
+export const EXTRA_PACKS = ["cloud", "kubernetes", "database", "iac", "secrets"] as const;
+export type ExtraPack = (typeof EXTRA_PACKS)[number];
+
 export const CommandsConfigSchema = z.strictObject({
   deny: z.array(CommandRuleSchema).default([]),
-  pack: z.enum(["none", "house"]).default("none"),
+  pack: z.enum(BASE_PACKS).default("none"),
+  /** Absent = no topic pack (kept optional so a 3.x config parses to the same object). */
+  packs: z.array(z.enum(EXTRA_PACKS)).optional(),
 });
 export type CommandsConfig = z.infer<typeof CommandsConfigSchema>;
 
@@ -453,8 +467,11 @@ function verdictFor(rule: CommandRule): RuleVerdict {
  * `command.deny` verdict at its position — fail closed.
  */
 export function evaluateCommandRules(command: string, cfg: CommandsConfig): RuleVerdict[] {
+  // 4.0 contract: `core` and `shared-clone` are subsets of the house pack (S-1411 splits the
+  // list); until then every non-`none` base pack evaluates the whole list, which is the
+  // stricter reading.
   const lists: readonly (readonly CommandRule[])[] =
-    cfg.pack === "house" ? [cfg.deny, HOUSE_PACK] : [cfg.deny];
+    cfg.pack === "none" ? [cfg.deny] : [cfg.deny, HOUSE_PACK];
   const parsed = new Parsed(command);
   const out: RuleVerdict[] = [];
   for (const list of lists) {
