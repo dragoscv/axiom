@@ -234,7 +234,7 @@
                   "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*$"
                 },
                 "params": {
-                  "$ref": "#/$defs/__schema0"
+                  "description": "JSON predicate parameters"
                 },
                 "severity": {
                   "default": "error",
@@ -265,79 +265,13 @@
             "propertyNames": {
               "type": "string"
             },
-            "additionalProperties": {
-              "$ref": "#/$defs/__schema1"
-            }
+            "additionalProperties": {}
           }
         },
         "required": [
           "name",
           "intent"
-        ],
-        "$defs": {
-          "__schema0": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/__schema0"
-                }
-              },
-              {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {
-                  "$ref": "#/$defs/__schema0"
-                }
-              }
-            ]
-          },
-          "__schema1": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/__schema1"
-                }
-              },
-              {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {
-                  "$ref": "#/$defs/__schema1"
-                }
-              }
-            ]
-          }
-        }
+        ]
       }
     },
     {

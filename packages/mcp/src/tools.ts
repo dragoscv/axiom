@@ -8,6 +8,7 @@ import {
   ApplyResultSchema,
   ArtifactModeSchema,
   AxiomError,
+  CheckRefSchema,
   type CheckReport,
   CheckReportSchema,
   type DigestRef,
@@ -388,7 +389,30 @@ export const TaskGetOutput = TaskDescriptorOutput.extend({
   error: TaskErrorSchema.optional(),
 });
 
+/** Acyclic CheckRef input shape for MCP tools/list: `z.json()` in `PlanSchema` emits a
+ * self-referential `$defs` loop that Gemini rejects ("ref loops...") and VS Code unrolls into
+ * `{ type: "array" }` without `items` (400 INVALID_ARGUMENT). Strict JSON validation still
+ * runs synchronously via `StrictPlanHeaderSchema` in `axiom_plan_begin` and on seal. */
+const CheckRefInputArg = z
+  .object({
+    id: CheckRefSchema.shape.id,
+    predicate: CheckRefSchema.shape.predicate,
+    params: z.unknown().describe("JSON predicate parameters"),
+    severity: CheckRefSchema.shape.severity,
+  })
+  .strict();
+
 const PlanHeaderShape = {
+  name: PlanSchema.shape.name,
+  intent: PlanSchema.shape.intent,
+  profile: PlanSchema.shape.profile.optional(),
+  capabilities: PlanSchema.shape.capabilities.optional(),
+  checks: z.array(CheckRefInputArg).default([]).optional(),
+  counter: PlanSchema.shape.counter,
+  metadata: LooseObject.default({}).optional(),
+};
+
+const StrictPlanHeaderSchema = z.object({
   name: PlanSchema.shape.name,
   intent: PlanSchema.shape.intent,
   profile: PlanSchema.shape.profile.optional(),
@@ -396,7 +420,7 @@ const PlanHeaderShape = {
   checks: PlanSchema.shape.checks.optional(),
   counter: PlanSchema.shape.counter,
   metadata: PlanSchema.shape.metadata.optional(),
-};
+});
 
 export const PlanSessionOutput = z.object({
   sessionId: z.string(),
@@ -879,8 +903,18 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     outputSchema: PlanSessionOutput,
     annotations: ACT,
     async handler(ctx, header) {
-      const s = ctx.planSessions.begin(header);
-      ctx.log.debug("plan session opened", { sessionId: s.sessionId, name: header.name });
+      const parsed = StrictPlanHeaderSchema.safeParse(header);
+      if (!parsed.success) {
+        throw new AxiomError("ERR_INVALID_PLAN", "header does not match PlanSchema", {
+          details: {
+            issues: parsed.error.issues
+              .slice(0, SUMMARY_LIST_MAX)
+              .map((i) => ({ path: i.path.map(String).join("."), message: i.message })),
+          },
+        });
+      }
+      const s = ctx.planSessions.begin(parsed.data);
+      ctx.log.debug("plan session opened", { sessionId: s.sessionId, name: parsed.data.name });
       return describeSession(ctx.planSessions, s);
     },
     summarize: (o) => o,
