@@ -65,6 +65,14 @@ export interface DecisionRecord {
    * the decision. Set by appendDecision when the caller leaves it out.
    */
   enforced?: boolean;
+  /** 4.0: `sha256:<hex>` of the effective policy that judged the call (`resolvePolicy().policyDigest`). */
+  policy_digest?: string;
+  /** 4.0: harness recognised from the payload or `--format` (`vscode`, `claude`, `cursor`, …). */
+  harness?: string;
+  /** 4.0: session id as sent by the harness, or the synthetic one the gate derived. */
+  session?: string;
+  /** 4.0: write-named tool with nothing on disk to judge (`create_issue`, `TodoWrite`): allowed, recorded. */
+  no_target?: true;
 }
 
 /**
