@@ -5,7 +5,13 @@ import { compilePlan } from "@codai/axiom-plan";
 import type { Plan } from "@codai/axiom-schema";
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { type Diagnostic, formatAxm, hereDocTerminator, parseAxm } from "./index.js";
+import {
+  AXM_SOURCE_MAX,
+  type Diagnostic,
+  formatAxm,
+  hereDocTerminator,
+  parseAxm,
+} from "./index.js";
 import { planArb } from "./test-helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -378,5 +384,34 @@ describe("formatAxm", () => {
     expect(text).toMatch(
       /\n {2}artifact "src\/notes.ts" \{\n {4}mode 0644\n {4}op create\n {4}inline <<EOF\n/,
     );
+  });
+});
+
+describe("parseAxm — hardening (A3-15)", () => {
+  it("returns a diagnostic, not a RangeError, for the 44 KB malformed document from the audit", () => {
+    const bomb = "check c using a.b {\n".repeat(2000);
+    expect(bomb.length).toBeGreaterThan(39_000);
+    const r = parseAxm(bomb);
+    expect(r.plan).toBeUndefined();
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+    expect(r.diagnostics.every((d) => d.severity === "error")).toBe(true);
+    expect(r.diagnostics.some((d) => d.code === "ERR_INVALID_PLAN")).toBe(true);
+  });
+
+  it("survives nesting far past the stack budget instead of throwing", () => {
+    const r = parseAxm("{".repeat(50_000));
+    expect(r.plan).toBeUndefined();
+    expect(r.diagnostics.some((d) => d.code === "ERR_INVALID_PLAN")).toBe(true);
+  });
+
+  it("refuses a source over AXM_SOURCE_MAX with one diagnostic at 1:1, before any parsing", () => {
+    const r = parseAxm("x".repeat(AXM_SOURCE_MAX + 1));
+    expect(r.plan).toBeUndefined();
+    expect(r.diagnostics).toHaveLength(1);
+    expect(r.diagnostics[0]?.code).toBe("ERR_INVALID_PLAN");
+    expect(r.diagnostics[0]?.range).toEqual({
+      start: { line: 1, column: 1 },
+      end: { line: 1, column: 1 },
+    });
   });
 });

@@ -670,7 +670,7 @@ describe("compilePlan — template sources", () => {
   });
 
   it("createEmitterRegistry rejects duplicate ids and lists sorted", () => {
-    expect(() => createEmitterRegistry([emitter("1"), emitter("2")])).toThrow(/duplicate/);
+    expect(() => createEmitterRegistry([emitter("1"), emitter("2")])).toThrow();
     let dup: unknown;
     try {
       createEmitterRegistry([emitter("1"), emitter("2")]);
@@ -683,5 +683,82 @@ describe("compilePlan — template sources", () => {
     expect(r.list()).toEqual(["demo", "zeta"]);
     expect(r.get("zeta")?.version).toBe("1");
     expect(r.get("x")).toBeUndefined();
+  });
+});
+
+describe("compilePlan — plan-input hardening (A1-15, A1-16, A1-28)", () => {
+  const highSurrogate = String.fromCharCode(0xd800);
+
+  it("A1-16: `toolchainVersion` names the producing tool in the manifest and the attestation", async () => {
+    const { bundle, statement } = await compilePlan(plan([inline("a", "x")]), {
+      toolchainVersion: "4.2.1",
+    });
+    expect(bundle.manifest.toolchain).toEqual({ axiom: "4.2.1", emitters: {} });
+    expect(statement.predicate.runDetails.builder.version.axiom).toBe("4.2.1");
+    // an explicit `toolchain.axiom` still wins over the parameter
+    const explicit = await compilePlan(plan([inline("a", "x")]), {
+      toolchain: { axiom: "9.9.9" },
+      toolchainVersion: "4.2.1",
+    });
+    expect(explicit.bundle.manifest.toolchain).toEqual({ axiom: "9.9.9", emitters: {} });
+    expect(explicit.statement.predicate.runDetails.builder.version.axiom).toBe("9.9.9");
+    // and the parameter changes the digest, so it cannot be faked after the fact
+    const other = await compilePlan(plan([inline("a", "x")]), { toolchainVersion: "4.2.2" });
+    expect(other.bundle.manifestDigest).not.toBe(bundle.manifestDigest);
+  });
+
+  it("A1-15: an unpaired surrogate in inline content is ERR_INVALID_PLAN, never a silent U+FFFD", async () => {
+    const err = await expectAxiom(
+      compilePlan(plan([inline("a.txt", `x${highSurrogate}y`)])),
+      "ERR_INVALID_PLAN",
+    );
+    expect(err.path).toBe("a.txt");
+    expect(err.details?.index).toBe(1);
+    // a real astral character is a valid pair and still hashes to its 4 UTF-8 bytes
+    const ok = await compilePlan(plan([inline("a.txt", String.fromCodePoint(0x1f600))]));
+    expect(ok.bundle.manifest.artifacts[0]?.bytes).toBe(4);
+  });
+
+  it("A1-15: a lone surrogate anywhere in the plan digests as ERR_INVALID_PLAN", async () => {
+    const withMetadata = {
+      ...plan([inline("a", "x")]),
+      metadata: { note: `n${highSurrogate}` },
+    } as unknown;
+    const err = await expectAxiom(compilePlan(withMetadata), "ERR_INVALID_PLAN");
+    expect(typeof err.details?.reason).toBe("string");
+  });
+
+  it("A1-15: 2000-deep metadata is ERR_INVALID_PLAN, not a RangeError", async () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 2000; i++) deep = { a: deep };
+    const shaped = { ...plan([inline("a", "x")]), metadata: { deep } } as unknown;
+    const err = await expectAxiom(compilePlan(shaped), "ERR_INVALID_PLAN");
+    expect(err.details?.depth).toBeGreaterThan(256);
+  });
+
+  it("A1-15: a top-level $schema editor hint is dropped, so both front-ends agree", async () => {
+    const bare = plan([inline("a", "x")]);
+    const withHint = { ...bare, $schema: "https://example.test/plan.json" } as unknown;
+    const hinted = await compilePlan(withHint);
+    const plain = await compilePlan(bare);
+    expect(hinted.bundle.manifestDigest).toBe(plain.bundle.manifestDigest);
+  });
+
+  it("A1-28: Plan.capabilities are part of the plan digest", async () => {
+    const fs = await compilePlan(plan([inline("a", "x")], { capabilities: ["fs"] }));
+    const fsNet = await compilePlan(plan([inline("a", "x")], { capabilities: ["fs", "net"] }));
+    const none = await compilePlan(plan([inline("a", "x")]));
+    expect(fs.bundle.manifest.planDigest).not.toBe(fsNet.bundle.manifest.planDigest);
+    expect(fs.bundle.manifest.planDigest).not.toBe(none.bundle.manifest.planDigest);
+    expect(fs.bundle.manifestDigest).not.toBe(fsNet.bundle.manifestDigest);
+  });
+
+  it("A1-15: a `__proto__` key is refused, never inherited as plan data", async () => {
+    const poisoned = JSON.parse(
+      '{"$schema":"x","apiVersion":"axiom.codai.ro/v3","kind":"Plan","name":"p","intent":"i",' +
+        '"artifacts":[{"path":"a","source":{"type":"inline","content":"x"}}],' +
+        '"__proto__":{"checks":[{"id":"z","predicate":"path.deny","params":[]}]}}',
+    ) as unknown;
+    await expectAxiom(compilePlan(poisoned), "ERR_INVALID_PLAN");
   });
 });

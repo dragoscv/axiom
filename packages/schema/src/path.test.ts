@@ -10,8 +10,17 @@ const cases: ReadonlyArray<readonly [string, string, string | null]> = [
   ["unicode NFC", "docs/caf\u00e9.md", null],
   ["hyphen underscore", "my-pkg/some_file.v2.json", null],
   ["con as prefix is fine", "console.log", null],
-  ["com0 is not reserved", "COM0", null],
+  ["com0", "COM0", "ERR_PATH_RESERVED_NAME"],
   ["com10 is not reserved", "com10.txt", null],
+  ["nul with two extensions", "nul.tar.gz", "ERR_PATH_RESERVED_NAME"],
+  ["con with two extensions", "con.a.b", "ERR_PATH_RESERVED_NAME"],
+  ["aux with a space before the dot", "aux .txt", "ERR_PATH_RESERVED_NAME"],
+  ["COM with a superscript one", "COM\u00b9", "ERR_PATH_RESERVED_NAME"],
+  ["LPT with a superscript three", "dir/LPT\u00b3.log", "ERR_PATH_RESERVED_NAME"],
+  ["console input device", "CONIN$", "ERR_PATH_RESERVED_NAME"],
+  ["console output device", "CONOUT$", "ERR_PATH_RESERVED_NAME"],
+  ["uppercase NUL with an extension", "src/NUL.TXT", "ERR_PATH_RESERVED_NAME"],
+  ["prn with an extension", "prn.bak", "ERR_PATH_RESERVED_NAME"],
   ["1024 chars", `${"a".repeat(1019)}/b.ts`, null],
   ["parent segment", "../x", "ERR_PATH_SEGMENT"],
   ["parent in middle", "a/../b", "ERR_PATH_SEGMENT"],
@@ -74,6 +83,9 @@ describe("RelPath", () => {
     expect(r.success).toBe(false);
     if (!r.success) {
       expect(r.error.issues.map((i) => i.message)).toContain("ERR_PATH_INVALID_CHAR");
+      expect(
+        r.error.issues.map((i) => (i as { params?: { code?: string } }).params?.code),
+      ).toContain("ERR_PATH_INVALID_CHAR");
     }
   });
 });

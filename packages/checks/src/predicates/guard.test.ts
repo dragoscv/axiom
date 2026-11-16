@@ -143,25 +143,23 @@ describe("guard.external output mapping", () => {
     expect(r.findings).toEqual([]);
     expect(r.providers.find((p) => p.name === "guard")?.status).toBe("ok");
   });
-  it("fail.mjs (exit 1 + JSON) → findings mapped, severity from output or check", async () => {
+  it("A1-10: fail.mjs (exit 1 + valid JSON) → ERR_GUARD_OUTPUT, never a pass", async () => {
     const r = await run({ command: "fail.mjs" });
-    expect(r.verdict).toBe("fail");
-    expect(r.findings.map((f) => [f.id, f.severity, f.path ?? ""])).toEqual([
-      ["lint.note", "error", ""],
-      ["lint.todo", "error", "src/a.ts"],
-    ]);
-    expect(r.findings[0]?.facts.n).toBe(1);
-    expect(r.findings[1]?.predicate).toBe("guard.external");
-    // S-408: every guard finding carries the raw process evidence for audit.
-    const ev = r.findings[0]?.facts.evidence as {
-      exitCode: number;
-      stdout: string;
-      stderr: string;
-    };
+    expect(r.verdict).toBe("error");
+    const ev = r.findings[0]?.facts.evidence as { exitCode: number; stdout: string };
     expect(ev.exitCode).toBe(1);
+    expect(r.findings).toHaveLength(1);
+    expect(code(r)).toBe("ERR_GUARD_OUTPUT");
+    expect(r.providers.find((p) => p.name === "guard")?.status).toBe("error");
+    // the raw process evidence stays attached for audit (S-408)
     expect(ev.stdout).toContain('"lint.todo"');
-    expect(typeof ev.stderr).toBe("string");
-    expect(r.findings[1]?.facts.evidence).toEqual(ev);
+  });
+  it("A1-10: ok-then-crash.mjs (exit 3, ok:true on stdout) → ERR_GUARD_OUTPUT", async () => {
+    const r = await run({ command: "ok-then-crash.mjs" });
+    expect(r.verdict).toBe("error");
+    expect(code(r)).toBe("ERR_GUARD_OUTPUT");
+    const ev = r.findings[0]?.facts.evidence as { exitCode: number };
+    expect(ev.exitCode).toBe(3);
   });
   it("bad-output.mjs (exit 0, non-JSON) → ERR_GUARD_OUTPUT, fail closed", async () => {
     const r = await run({ command: "bad-output.mjs" });
@@ -297,25 +295,31 @@ describe("guard.external output mapping", () => {
     const r = await run({ command: "ok.mjs", cwd: "staging" });
     expect(code(r)).toBe("ERR_PREDICATE_PARAMS");
   });
-  it("check severity re-labels non-provider findings", async () => {
-    const r = await runChecks({
-      bundle,
-      root,
-      allowGuards: true,
-      profile: profileWith(
-        [
-          {
-            id: "g",
-            predicate: "guard.external",
-            params: { command: "fail.mjs" } as never,
-            severity: "warn",
-          },
-        ],
-        { allowGuards: true },
-      ),
-    });
-    expect(r.verdict).toBe("pass");
-    expect(r.findings.every((f) => f.severity === "warn")).toBe(true);
+  it("A1-10/A1-23: a non-provider guard finding keeps its own severity, the CheckRef may only tighten", async () => {
+    // env-leak.mjs exits 0 and reports ok:false with one finding (no exit-code involvement).
+    const withSeverity = (severity: "error" | "warn") =>
+      runChecks({
+        bundle,
+        root,
+        allowGuards: true,
+        profile: profileWith(
+          [
+            {
+              id: "g",
+              predicate: "guard.external",
+              params: { command: "env-leak.mjs" } as never,
+              severity,
+            },
+          ],
+          { allowGuards: true },
+        ),
+      });
+    const strict = await withSeverity("error");
+    expect(strict.verdict).toBe("fail");
+    expect(strict.findings[0]?.id).toBe("env");
+    const warn = await withSeverity("warn");
+    expect(warn.verdict).toBe("pass");
+    expect(warn.findings.every((f) => f.severity === "warn")).toBe(true);
   });
 });
 

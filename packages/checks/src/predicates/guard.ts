@@ -450,6 +450,18 @@ export async function runGuard(ctx: FactContext, params: GuardExternalParamsT): 
       }),
     ];
   }
+  // A1-10: the exit code is part of the contract. A guard that prints {"ok":true} and then
+  // crashes (non-zero) or is killed (null) is an ERR_GUARD_OUTPUT failure, never a pass —
+  // an exit-status-only stdout was enough to fake a green run.
+  if (r.code !== 0) {
+    return [
+      providerError(
+        "ERR_GUARD_OUTPUT",
+        `guard exited with code ${r.code ?? "null"}; a guard must exit 0`,
+        { command: params.command, evidence: evidenceOf(r) },
+      ),
+    ];
+  }
   const out =
     parseJsonOutput(r.stdout) ?? (params.legacyText ? parseLegacyText(r.stdout) : undefined);
   if (out === undefined) {

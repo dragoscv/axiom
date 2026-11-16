@@ -68,7 +68,7 @@ describe("repo.requireReference", () => {
     expect(repoRequireReference.requires).toEqual(["manifest", "content", "repo"]);
   });
 
-  it("is skipped without a root (repo predicates are not evaluable)", async () => {
+  it("A1-30: fails closed without a root; only facts.allowRepo:false skips it", async () => {
     const b = makeBundle([{ path: "packages/mcp/src/tools/new.ts", content: "" }]);
     const r = await runChecks({
       bundle: b,
@@ -76,8 +76,18 @@ describe("repo.requireReference", () => {
         { id: PRED, predicate: PRED, params: rule() as never, severity: "error" },
       ]),
     });
-    expect(r.verdict).toBe("pass");
-    expect(r.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_FACT_DISABLED");
+    expect(r.providers.find((p) => p.name === "repo")?.status).toBe("error");
+    const off = await runChecks({
+      bundle: b,
+      profile: profileWith(
+        [{ id: PRED, predicate: PRED, params: rule() as never, severity: "error" }],
+        { allowRepo: false },
+      ),
+    });
+    expect(off.verdict).toBe("pass");
+    expect(off.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
   });
 
   it("rejects params without rules, unknown keys, or a malformed jsonPointer", async () => {

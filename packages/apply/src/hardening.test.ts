@@ -3,9 +3,15 @@ import fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { sha256Hex } from "@codai/axiom-canon";
-import { AxiomError, type CheckReport, type ManifestBundle } from "@codai/axiom-schema";
+import {
+  AxiomError,
+  type CheckReport,
+  type DigestRef,
+  type ManifestBundle,
+} from "@codai/axiom-schema";
 import { describe, expect, it } from "vitest";
 import { apply, rollback } from "./apply.js";
+import { newJournal, readJournal, writeJournal } from "./journal.js";
 import { exists, makeBundle, mkRoot, readText, writeTree } from "./test-helpers.js";
 
 const execFileP = promisify(execFile);
@@ -282,6 +288,85 @@ describe("dry-run is read-only (rc3 P2)", () => {
     expect(r.diff).toContain("+v2");
     expect(await exists(root, ".axiom")).toBe(false);
   });
+
+  it("A1-13: never runs crash recovery; it reports the interrupted journal and leaves it alone", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "made.txt": "half-applied" });
+    const digest: DigestRef = `sha256:${"9c".repeat(32)}`;
+    await writeJournal(root, {
+      ...newJournal(digest, [{ path: "made.txt", op: "create", preImage: "absent", done: true }]),
+      phase: "committing",
+    });
+    const r = await apply({
+      bundle: makeBundle([{ path: "preview.txt", content: "p" }]),
+      root,
+      mode: "dry-run",
+    });
+    expect(r.status).toBe("applied");
+    expect(r.interrupted).toEqual([digest]);
+    // The half-applied file is still there and the journal is still interrupted: a preview
+    // (axiom_apply_dry_run is READ-annotated) must never mutate the tree.
+    expect(await readText(root, "made.txt")).toBe("half-applied");
+    expect((await readJournal(root, digest))?.phase).toBe("committing");
+    // A real apply afterwards does recover it.
+    const done = await fsApply(makeBundle([{ path: "preview.txt", content: "p" }]), root);
+    expect(done.status).toBe("applied");
+    expect(await exists(root, "made.txt")).toBe(false);
+  });
+
+  it("A1-13: nothing to report on a clean root", async () => {
+    const root = await mkRoot();
+    const r = await apply({
+      bundle: makeBundle([{ path: "clean.txt", content: "c" }]),
+      root,
+      mode: "dry-run",
+    });
+    expect(r.status).toBe("applied");
+    expect(r.interrupted).toBeUndefined();
+  });
+});
+
+describe("reserved .git/ is refused by apply (A1-14 / A1-29)", () => {
+  it.each([".git/config", ".GIT/config", ".Git/hooks/pre-commit", ".git", ".git/index"])(
+    "%s -> ERR_PATH_RESERVED_DIR; .git untouched",
+    async (p) => {
+      const root = await mkRoot();
+      await writeTree(root, { ".git/config": "[core]\n\trepositoryformatversion = 0\n" });
+      const before = await readText(root, ".git/config");
+      const r = await fsApply(makeBundle([{ path: p, content: "pwned\n" }]), root);
+      expect(r.status).toBe("failed");
+      expect(r.error?.code).toBe("ERR_PATH_RESERVED_DIR");
+      expect(await readText(root, ".git/config")).toBe(before);
+      expect(await exists(root, ".git/hooks/pre-commit")).toBe(false);
+    },
+  );
+
+  it("a dry-run refuses it too", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { ".git/config": "[core]\n" });
+    const r = await apply({
+      bundle: makeBundle([{ path: ".GIT/config", content: "pwned\n" }]),
+      root,
+      mode: "dry-run",
+    });
+    expect(r.error?.code).toBe("ERR_PATH_RESERVED_DIR");
+  });
+
+  // runIf: a case-aliased segment only resolves to an existing directory on a case-insensitive FS.
+  it.runIf(CASE_INSENSITIVE_OS)(
+    "a case-aliased DIRECTORY segment is refused, not written through (SRC vs src)",
+    async () => {
+      const root = await mkRoot();
+      await writeTree(root, { "src/keep.txt": "keep\n" });
+      const r = await fsApply(makeBundle([{ path: "SRC/new.txt", content: "x\n" }]), root);
+      expect(r.status).toBe("failed");
+      expect(r.error?.code).toBe("ERR_PATH_CASE_COLLISION");
+      expect(r.error?.details?.kind).toBe("case");
+      expect(r.error?.details?.segment).toBe("SRC");
+      expect(await exists(root, "src/new.txt")).toBe(false);
+      expect(await readText(root, "src/keep.txt")).toBe("keep\n");
+    },
+  );
 });
 
 describe("on-disk case / normalisation collision for every op (rc3 P2)", () => {

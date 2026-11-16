@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { canonicalHash, sha256Hex, verifyCanonical } from "./digest.js";
-import { CanonicalizeError, canonicalize } from "./jcs.js";
+import { CanonicalizeError, canonicalize, findLoneSurrogate, MAX_CANONICAL_DEPTH } from "./jcs.js";
 
 describe("canonicalize (RFC 8785)", () => {
   it("matches the RFC 8785 Appendix B number vectors", () => {
@@ -77,6 +77,36 @@ describe("canonicalize (RFC 8785)", () => {
     expect(() => canonicalize({ [hi]: 1 })).toThrow(CanonicalizeError);
     const emoji = String.fromCodePoint(0x1f600);
     expect(canonicalize(emoji)).toBe(JSON.stringify(emoji));
+  });
+
+  it("findLoneSurrogate finds the first unpaired unit and accepts a valid pair", () => {
+    const hi = String.fromCharCode(0xd800);
+    const lo = String.fromCharCode(0xdc00);
+    const emoji = String.fromCodePoint(0x1f600);
+    expect(findLoneSurrogate("abc")).toBe(-1);
+    expect(findLoneSurrogate(emoji)).toBe(-1);
+    expect(findLoneSurrogate(`${emoji}${hi}`)).toBe(2);
+    expect(findLoneSurrogate(`${lo}`)).toBe(0);
+    expect(findLoneSurrogate(`${hi}x`)).toBe(0);
+    // a high surrogate followed by a low one is a pair, not two errors
+    expect(findLoneSurrogate(`a${hi}${lo}b`)).toBe(-1);
+  });
+
+  it("caps nesting at MAX_CANONICAL_DEPTH instead of overflowing the stack", () => {
+    const nest = (levels: number): unknown => {
+      let v: unknown = 1;
+      for (let i = 0; i < levels; i++) v = { a: v };
+      return v;
+    };
+    expect(() => canonicalize(nest(MAX_CANONICAL_DEPTH + 5))).toThrow(CanonicalizeError);
+    expect(() => canonicalize(nest(MAX_CANONICAL_DEPTH + 5))).not.toThrow(RangeError);
+    expect(canonicalize(nest(MAX_CANONICAL_DEPTH - 2))).toContain("1");
+  });
+
+  it("caps nesting for arrays too", () => {
+    let v: unknown = 1;
+    for (let i = 0; i < MAX_CANONICAL_DEPTH + 5; i++) v = [v];
+    expect(() => canonicalize(v)).toThrow(CanonicalizeError);
   });
 
   it("is idempotent on its own output", () => {

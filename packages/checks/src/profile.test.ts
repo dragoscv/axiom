@@ -13,6 +13,7 @@ describe("builtin profiles", () => {
     const p = await loadProfile("default");
     expect(p.checks.map((c) => c.id)).toEqual([
       "path.reservedNames",
+      "self.protect",
       "content.noSecrets",
       "manifest.maxArtifacts",
       "manifest.maxTotalBytes",
@@ -20,11 +21,29 @@ describe("builtin profiles", () => {
     ]);
     expect(p.extends).toBeUndefined();
   });
+  it("A1-29: `self.protect` denies .git and the HARD self-protection list in the built-in default", async () => {
+    const p = await loadProfile("default");
+    const guard = p.checks.find((c) => c.id === "self.protect");
+    expect(guard?.predicate).toBe("path.deny");
+    const globs = (guard?.params as { globs?: string[] } | undefined)?.globs ?? [];
+    expect(globs[0]).toBe(".git/**");
+    for (const g of [
+      ".axiom/axiom.json",
+      ".axiom/gate-profile.json",
+      ".axiom/profiles/**",
+      ".axiom/trust/**",
+      ".github/hooks/axiom-gate.json",
+      "**/.axiom/profiles/**",
+    ]) {
+      expect(globs).toContain(g);
+    }
+  });
   it("strict extends default (parent checks first, then own)", async () => {
     const p = await loadProfile("strict");
     expect(p.name).toBe("strict");
     expect(p.checks.map((c) => c.id)).toEqual([
       "path.reservedNames",
+      "self.protect",
       "content.noSecrets",
       "manifest.maxArtifacts",
       "manifest.maxTotalBytes",
@@ -67,7 +86,79 @@ describe("axiom.json `checks` section (D-42)", () => {
   });
   it("other names still resolve normally", async () => {
     const p = await loadProfile("permissive", { config });
-    expect(p.checks.map((c) => c.id)).toEqual(["path.reservedNames"]);
+    // 4.0 (D-50, A1-6/A2-6): the repository policy is a FLOOR — naming a weaker profile is not
+    // a way to drop it. The named profile's checks are ADDED on top; an id the repository already
+    // has (here `path.reservedNames`) is never replaced.
+    // The report names the policy that judged the bundle: repository first, then the named one.
+    expect(p.name).toBe(`${AXIOM_CONFIG_PROFILE_NAME}.permissive`);
+    expect(p.checks.map((c) => c.id)).toEqual([
+      "path.reservedNames",
+      "self.protect",
+      "content.noSecrets",
+      "manifest.maxArtifacts",
+      "manifest.maxTotalBytes",
+      "repo.noOverwriteOf",
+      "manifest.noDeletes",
+      "deps.max",
+      "path.deny",
+    ]);
+    expect(p.checks.filter((c) => c.id === "path.reservedNames")).toHaveLength(1);
+    expect(p.checks.find((c) => c.id === "deps.max")?.params).toEqual({ max: 7 });
+  });
+  it("A1-6: a named profile may only ADD — a same-id check of the floor is never replaced", async () => {
+    const v2 = { apiVersion: "axiom.dev/v2", kind: "Profile" };
+    const dir2 = await mkdtemp(join(tmpdir(), "axiom-profiles-floor-"));
+    try {
+      await writeFile(
+        join(dir2, "weak.json"),
+        JSON.stringify({
+          ...v2,
+          name: "weak",
+          checks: [
+            // Same id as the repository check, harmless predicate: must be dropped.
+            { id: "content.noSecrets", predicate: "manifest.noDeletes", params: {} },
+            { id: "extra.check", predicate: "path.deny", params: { globs: ["tmp/**"] } },
+          ],
+        }),
+      );
+      const p = await loadProfile("weak", {
+        searchDirs: [dir2],
+        config: {
+          checks: [
+            { id: "content.noSecrets", predicate: "content.noSecrets", params: { pii: true } },
+          ],
+        },
+      });
+      const secrets = p.checks.find((c) => c.id === "content.noSecrets");
+      expect(secrets?.predicate).toBe("content.noSecrets");
+      expect(secrets?.params).toEqual({ pii: true });
+      expect(p.checks.map((c) => c.id)).toContain("extra.check");
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+  it("A1-6: a named profile cannot relax the repository facts", async () => {
+    const v2 = { apiVersion: "axiom.dev/v2", kind: "Profile" };
+    const dir3 = await mkdtemp(join(tmpdir(), "axiom-profiles-facts-"));
+    try {
+      await writeFile(
+        join(dir3, "loose.json"),
+        JSON.stringify({
+          ...v2,
+          name: "loose",
+          checks: [],
+          facts: { allowGuards: true, allowPlanGuards: true },
+        }),
+      );
+      const p = await loadProfile("loose", {
+        searchDirs: [dir3],
+        config: { checks: [], facts: { allowGuards: false, allowRepo: true } },
+      });
+      expect(p.facts.allowGuards).toBe(false);
+      expect(p.facts.allowPlanGuards).toBeUndefined();
+    } finally {
+      await rm(dir3, { recursive: true, force: true });
+    }
   });
   it("an empty section is never weaker than the builtin default", async () => {
     const builtin = await loadProfile("default");

@@ -1,9 +1,9 @@
 import { relPathIssues } from "@codai/axiom-schema";
 import { z } from "zod";
 import { definePredicate } from "../types.js";
-import { finding, globMatcher } from "./util.js";
+import { finding, GlobListSchema, globMatcher } from "./util.js";
 
-const Globs = z.object({ globs: z.array(z.string().min(1)).min(1) }).strict();
+const Globs = z.object({ globs: GlobListSchema.min(1) }).strict();
 
 /** Every artifact path must match at least one glob. */
 export const pathAllow = definePredicate<z.infer<typeof Globs>>({
@@ -32,7 +32,10 @@ export const pathDeny = definePredicate<z.infer<typeof Globs>>({
   params: Globs,
   requires: ["manifest"],
   async run(ctx, { globs }) {
-    const denied = globMatcher(globs, false);
+    // A1-14: a deny is case-insensitive on EVERY platform. A Linux process on a case-insensitive
+    // mount (WSL `/mnt/e`, a Docker bind mount) must still deny `.GIT/config`, which is the same
+    // file as `.git/config` there.
+    const denied = globMatcher(globs, false, { nocase: true });
     return ctx.facts.manifest.paths.filter(denied).map((p) =>
       finding({
         id: "path.deny",

@@ -153,9 +153,14 @@ describe("axiom journal replay (I-9)", () => {
     const p = join(home.root, "p.json");
     await writeFile(p, JSON.stringify({ deny: [] }));
     out.length = 0;
+    // 4.0 (contract 1): `--profile` is an EXTRA layer that may only TIGHTEN the repository policy,
+    // so an empty `deny` list can no longer clear the repo's `secrets/**`: the recorded allow is
+    // replayed as a deny again -> exit 1 (3.0 replaced the repo layer here and answered 0).
     expect(
       await replayMain(["--session", "s1", "--root", repo.root, "--profile", p, "--json"], io),
-    ).toBe(0);
-    expect(JSON.parse(out.join("\n")).profile).toBe(p);
+    ).toBe(1);
+    const doc = JSON.parse(out.join("\n")) as { session: string; changed: number };
+    expect(doc.session).toBe("s1");
+    expect(doc.changed).toBeGreaterThan(0);
   });
 });

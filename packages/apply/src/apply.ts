@@ -21,10 +21,11 @@ import {
 } from "@codai/axiom-schema";
 import { resolveContent } from "./blobs.js";
 import {
-  checkOnDiskCaseCollision,
+  checkOnDiskPathCollision,
   checkReservedDir,
   checkTargetType,
-  isReservedAxiomPath,
+  gitDirReal,
+  isReservedDirPath,
   probeCaseInsensitive,
   reservedDirReal,
   resolveContained,
@@ -35,6 +36,7 @@ import {
   errnoCode,
   fileDigestOrAbsent,
   IS_WIN32,
+  isContained,
   lstatOrNull,
   nsPath,
   rmrf,
@@ -49,11 +51,13 @@ import {
   defaultBranchName,
   defaultCommitMessage,
   headCommit,
+  materializeWorktreePaths,
   removeWorktree,
   runGit,
   validateBranchName,
 } from "./git.js";
 import {
+  finalizeJournal,
   listJournals,
   newJournal,
   readHistory,
@@ -74,6 +78,8 @@ export interface StagedFile {
   stagingPath?: string;
   digest?: string;
   preImage: string;
+  /** realpath of the target's parent as captured in `prepare` (A1-2: re-checked at commit). */
+  parentReal: string;
 }
 
 export interface StagedTree {
@@ -122,6 +128,17 @@ export function stagingDir(root: string, digest: DigestRef): string {
 export function backupDir(root: string, digest: DigestRef): string {
   return path.join(root, ".axiom", "backup", hexOf(digest));
 }
+
+/**
+ * A1-1/A1-11: a step's backup is always `.axiom/backup/<this journal's digest hex>/<step path>`.
+ * The journal therefore does not need to store it, and recovery can restore a pre-image whose
+ * step was never flushed to disk (the process was killed between the backup and the journal
+ * write) instead of declaring it rolled back and deleting the originals.
+ */
+function backupRelOf(digest: DigestRef, relPath: string): string {
+  return `.axiom/backup/${hexOf(digest)}/${relPath}`;
+}
+
 export function appliedPath(root: string, digest: DigestRef): string {
   return path.join(root, ".axiom", "applied", `${hexOf(digest)}.json`);
 }
@@ -196,6 +213,34 @@ async function writeAppliedMarker(rootReal: string, result: ApplyResult): Promis
 }
 
 /**
+ * A1-19: a `committed` journal whose applied marker was never written (the process died between
+ * the phase flip and the marker write) otherwise makes that digest permanently unusable — a
+ * re-apply of the same bundle fails with `ERR_EXISTS` / `ERR_PREIMAGE_CHANGED` forever. Rebuild
+ * the marker from the journal's own `postImage` values, which are what the commit wrote.
+ */
+async function ensureAppliedMarker(rootReal: string, j: Journal): Promise<void> {
+  if ((await lstatOrNull(appliedPath(rootReal, j.manifestDigest))) !== null) return;
+  const files: AppliedFile[] = j.steps.map((s) => {
+    const f: AppliedFile = {
+      path: s.path,
+      op: s.op,
+      status: s.op === "delete" ? "deleted" : "written",
+    };
+    if (s.op !== "delete" && s.postImage !== undefined) f.digest = { sha256: s.postImage };
+    return f;
+  });
+  await writeAppliedMarker(rootReal, {
+    apiVersion: API_VERSION,
+    kind: "ApplyResult",
+    manifestDigest: j.manifestDigest,
+    mode: "fs",
+    status: "applied",
+    root: rootReal,
+    files,
+  });
+}
+
+/**
  * Keep the backups of the `keep` most recent applies. Order comes from the journal chain
  * (S-706/S-707: a copy or a clock change can reset an mtime, a chain `seq` cannot); a backup
  * the chain does not know (pre-2.4 root, chain unreadable) falls back to mtime and sorts after
@@ -233,12 +278,24 @@ async function pruneBackups(rootReal: string, keep: number): Promise<void> {
  * happened; a broken chain must not turn a successful write into a thrown error, so the fault is
  * reported on stderr-free result data by the caller (`axiom verify --journal` fails closed).
  */
-async function chainTerminal(rootReal: string, journal: Journal): Promise<void> {
+async function chainTerminal(
+  rootReal: string,
+  journal: Journal,
+  opts: { state?: "failed"; code?: string } = {},
+): Promise<void> {
   try {
-    await recordTerminal(rootReal, journal);
+    await recordTerminal(rootReal, journal, opts);
   } catch {
     // ERR_JOURNAL_CHAIN (chain already broken) or IO: surfaced by `verify --journal` / `status`.
   }
+}
+
+/** Journals left mid-flight, for the dry-run report (A1-13). Recovers nothing. */
+async function interruptedDigests(root: string): Promise<DigestRef[]> {
+  const { journals } = await listJournals(root, { pendingOnly: true });
+  return journals
+    .filter((j) => j.phase === "staged" || j.phase === "committing" || j.phase === "rolling-back")
+    .map((j) => j.manifestDigest);
 }
 
 /**
@@ -248,24 +305,24 @@ async function chainTerminal(rootReal: string, journal: Journal): Promise<void> 
  * Violation → `ERR_JOURNAL_CORRUPT`, nothing touched.
  */
 async function validateJournal(rootReal: string, j: Journal): Promise<void> {
-  const prefix = `.axiom/backup/${hexOf(j.manifestDigest)}/`;
   const axiomReal = await reservedDirReal(rootReal);
+  const gitReal = await gitDirReal(rootReal);
   const forged = new Set(["ERR_CONTAINMENT", "ERR_SYMLINK_IN_PATH", "ERR_PATH_RESERVED_DIR"]);
   for (const step of j.steps) {
     try {
-      if (isReservedAxiomPath(step.path)) {
-        throw new AxiomError("ERR_PATH_RESERVED_DIR", "journal step targets .axiom/", {
+      if (isReservedDirPath(step.path)) {
+        throw new AxiomError("ERR_PATH_RESERVED_DIR", "journal step targets a reserved dir", {
           path: step.path,
         });
       }
-      if (step.backup !== undefined && step.backup !== `${prefix}${step.path}`) {
+      if (step.backup !== undefined && step.backup !== backupRelOf(j.manifestDigest, step.path)) {
         throw new AxiomError("ERR_CONTAINMENT", "backup is outside this journal's backup set", {
           path: step.path,
         });
       }
       const { parentReal } = await resolveContained(rootReal, step.path);
-      checkReservedDir(step.path, parentReal, axiomReal);
-      if (step.backup !== undefined) await resolveContained(rootReal, step.backup);
+      checkReservedDir(step.path, parentReal, axiomReal, gitReal);
+      await resolveContained(rootReal, backupRelOf(j.manifestDigest, step.path));
     } catch (err) {
       if (!(err instanceof AxiomError)) throw err;
       // e.g. ERR_TARGET_TYPE (a parent became a file): not an escape; the replay reports it.
@@ -280,29 +337,64 @@ async function validateJournal(rootReal: string, j: Journal): Promise<void> {
 }
 
 /**
- * A done step that replaced or deleted an existing file needs its backup. Pruned (keepBackups)
- * or deleted by hand → `ERR_ROLLBACK` before anything moves; never a silent half-rollback.
- * Skipped in `rolling-back`: steps already restored have legitimately consumed their backup.
+ * A1-1: every pre-image this journal can still lose must be recoverable BEFORE anything moves —
+ * either the target still holds it, or its backup (derived, never read from the journal) is on
+ * disk. Otherwise `ERR_ROLLBACK` and the backup set is left untouched for a human, instead of
+ * being deleted while the originals were never restored ("rolled-back" with data loss).
  */
-async function assertBackupsPresent(rootReal: string, j: Journal): Promise<void> {
-  if (j.phase === "rolling-back") return;
+async function assertRestorable(rootReal: string, j: Journal): Promise<void> {
   for (const step of j.steps) {
-    if (!step.done || step.op === "create") continue;
-    const existed = step.preImage !== undefined && step.preImage !== "absent";
-    if (step.backup === undefined && !existed) continue;
-    const present =
-      step.backup !== undefined &&
-      (await lstatOrNull(path.join(rootReal, ...step.backup.split("/")))) !== null;
-    if (!present) {
-      throw new AxiomError("ERR_ROLLBACK", "pre-image backup is missing (pruned?)", {
-        path: step.path,
-        details: {
-          digest: j.manifestDigest,
-          backup: step.backup ?? null,
-          reason: "backup-missing",
-        },
-      });
+    if (step.preImage === undefined || step.preImage === "absent") continue;
+    const backupRel = backupRelOf(j.manifestDigest, step.path);
+    const backupAbs = path.join(rootReal, ...backupRel.split("/"));
+    if ((await lstatOrNull(backupAbs)) !== null) continue;
+    const target = path.join(rootReal, ...step.path.split("/"));
+    const now = await fileDigestOrAbsent(target);
+    if (now === step.preImage) continue;
+    // The pre-image is neither on disk nor backed up. It is OUR doing only when the step shows
+    // evidence we mutated the target: the post-image is on disk, the step was flushed `done`, or
+    // (a delete) the file is simply gone. A third party replacing the file is drift the commit
+    // refused — restoring it is impossible and not a reason to abort the whole journal.
+    const ours =
+      step.op === "delete" || step.done || (step.postImage !== undefined && now === step.postImage);
+    if (!ours) continue;
+    throw new AxiomError("ERR_ROLLBACK", "pre-image backup is missing (pruned?)", {
+      path: step.path,
+      details: { digest: j.manifestDigest, backup: backupRel, reason: "unrestored" },
+    });
+  }
+}
+
+/**
+ * A1-1: the backup set may only be deleted when every pre-image is provably back on disk.
+ */
+async function assertRestored(rootReal: string, j: Journal): Promise<void> {
+  for (const step of j.steps) {
+    if (step.preImage === undefined) continue;
+    const target = path.join(rootReal, ...step.path.split("/"));
+    const now = await fileDigestOrAbsent(target);
+    if (now === step.preImage) continue;
+    // A1-17: a `create` (or an overwrite of an absent file) whose target holds something that is
+    // NOT what the commit wrote was taken over by someone else; the rollback deliberately leaves
+    // those bytes alone, which is not a failed restore. A pre-image we overwrote and did not put
+    // back, or a file we wrote and did not remove, still is.
+    if (step.preImage === "absent" && step.postImage !== undefined && now !== step.postImage) {
+      continue;
     }
+    // Same for an overwrite: bytes that are neither the pre-image nor the post-image are a third
+    // party's, and the rollback must not touch them.
+    if (step.postImage !== undefined && now !== step.postImage) continue;
+    // ... and an apparent delete whose path someone else has since recreated.
+    if (step.op === "delete" && now !== "absent") continue;
+    throw new AxiomError("ERR_ROLLBACK", "rollback did not restore the pre-image", {
+      path: step.path,
+      details: {
+        digest: j.manifestDigest,
+        expected: step.preImage,
+        actual: now,
+        reason: "restore-failed",
+      },
+    });
   }
 }
 
@@ -357,44 +449,64 @@ async function assertNoDrift(rootReal: string, j: Journal): Promise<void> {
 }
 
 /**
- * Scoped rollback of one journal: replay `steps` in reverse. Uses the presence
- * of the staged file as the discriminator for "was the rename performed" so it
- * is correct both in-process and after a crash (a step's `done` flag may not
- * have been fsynced yet).
+ * Scoped rollback of one journal: replay `steps` in reverse. Each step is decided from what is on
+ * disk, never from the journal's optional bookkeeping: the backup path is derived from the digest
+ * (A1-1), the target's own digest says whether the step was already undone, and `postImage` /
+ * the staged file say whether the commit got as far as the move (a step's `done` flag may not
+ * have been flushed before a crash). Containment is re-resolved immediately before every move
+ * (A1-2). Refuses with `ERR_ROLLBACK` rather than deleting a backup set that is still needed.
  */
 async function rollbackJournal(rootReal: string, journal: Journal): Promise<Journal> {
   let j = journal;
   await validateJournal(rootReal, j);
-  await assertBackupsPresent(rootReal, j);
+  await assertRestorable(rootReal, j);
   if (j.phase !== "rolling-back") j = await setPhase(rootReal, j, "rolling-back");
   const stg = stagingDir(rootReal, j.manifestDigest);
+  const axiomReal = await reservedDirReal(rootReal);
+  const gitReal = await gitDirReal(rootReal);
   for (let i = j.steps.length - 1; i >= 0; i--) {
     const step = j.steps[i];
     if (step === undefined) continue;
     const segs = step.path.split("/");
     const target = path.join(rootReal, ...segs);
     const staged = path.join(stg, ...segs);
-    const backupAbs =
-      step.backup === undefined ? undefined : path.join(rootReal, ...step.backup.split("/"));
+    // Derive, never trust the stored field (A1-1/A1-11).
+    const backupRel = backupRelOf(j.manifestDigest, step.path);
+    const backupAbs = path.join(rootReal, ...backupRel.split("/"));
+    const now = await fileDigestOrAbsent(target);
+    // Already the pre-image (a resumed rollback, or a step the crash never reached): nothing to
+    // undo, and no reason to touch the tree or require containment for it.
+    if (step.preImage !== undefined && now === step.preImage) continue;
+    // A1-2: the parent is re-resolved right before every move. A directory swapped for a junction
+    // since `prepare` (or since `validateJournal`) must not be followed out of the root.
+    const { parentReal } = await resolveContained(rootReal, step.path);
+    checkReservedDir(step.path, parentReal, axiomReal, gitReal);
     const stagedExists = (await lstatOrNull(staged)) !== null;
-    const backupExists = backupAbs !== undefined && (await lstatOrNull(backupAbs)) !== null;
-    const renamed = step.done || (step.op === "delete" ? backupExists : !stagedExists);
+    const backupExists = (await lstatOrNull(backupAbs)) !== null;
+    // "Was it renamed into place": the post-image on disk is proof, `done` is the record, and a
+    // consumed staging file is the crash-time fallback.
+    const renamed =
+      step.done || (step.postImage !== undefined && now === step.postImage) || !stagedExists;
     if (step.op === "create") {
       if (renamed) await fs.rm(nsPath(target), { force: true });
-    } else if (step.op === "overwrite") {
-      if (renamed && step.preImage === "absent") {
-        // overwrite of a file that did not exist: there is no backup, undo it like a create
-        await fs.rm(nsPath(target), { force: true });
-      } else if (renamed && backupAbs !== undefined && backupExists) {
-        await renameRetry(backupAbs, target, step.path);
-      } else if (!renamed && backupAbs !== undefined && backupExists) {
-        // backup taken but rename never happened → target is still the original
-        await fs.rm(nsPath(backupAbs), { force: true });
-      }
-    } else if (backupAbs !== undefined && backupExists) {
+    } else if (step.preImage === "absent") {
+      // Overwrite of a file that did not exist: there is no backup, undo it like a create.
+      if (step.op === "overwrite" && renamed) await fs.rm(nsPath(target), { force: true });
+    } else if (backupExists) {
       await renameRetry(backupAbs, target, step.path);
+    } else if (step.preImage === undefined && renamed) {
+      // pre-2.8 journal with no recorded pre-image: best effort.
+      await fs.rm(nsPath(target), { force: true });
+    } else if (renamed) {
+      throw new AxiomError("ERR_ROLLBACK", "pre-image backup vanished during rollback", {
+        path: step.path,
+        details: { digest: j.manifestDigest, backup: backupRel, reason: "backup-vanished" },
+      });
     }
+    // else: nothing of ours to undo — the pre-image is missing through a third party, which
+    // `assertRestorable` already refused when it was our own doing.
   }
+  await assertRestored(rootReal, j);
   await rmrf(stg);
   await rmrf(backupDir(rootReal, j.manifestDigest));
   const out = await setPhase(rootReal, j, "rolled-back");
@@ -440,10 +552,13 @@ export async function rollback(
 /**
  * Crash recovery (§4.2): any journal left in `committing`/`rolling-back` is
  * rolled back; `staged` journals are discarded with their staging tree;
- * `committed` journals only need their staging tree removed. Caller must hold the lock.
+ * `committed` journals need their staging tree removed and their applied marker rebuilt
+ * (A1-19). Caller must hold the lock.
  */
 export async function recoverIfNeeded(rootReal: string): Promise<DigestRef[]> {
-  const { journals } = await listJournals(rootReal);
+  // A1-18: only the journals still in the pending index are read. A root with thousands of
+  // terminal journals costs the same to recover as a fresh one.
+  const { journals } = await listJournals(rootReal, { pendingOnly: true });
   const recovered: DigestRef[] = [];
   for (const j of journals) {
     if (j.phase === "committing" || j.phase === "rolling-back") {
@@ -457,12 +572,17 @@ export async function recoverIfNeeded(rootReal: string): Promise<DigestRef[]> {
       }
       await fs.rm(appliedPath(rootReal, j.manifestDigest), { force: true });
       recovered.push(j.manifestDigest);
-    } else if (j.phase === "staged") {
-      await rmrf(stagingDir(rootReal, j.manifestDigest));
-      await removeJournal(rootReal, j.manifestDigest);
-    } else if (j.phase === "committed") {
-      await rmrf(stagingDir(rootReal, j.manifestDigest));
+      continue;
     }
+    if (j.phase === "staged") {
+      await rmrf(stagingDir(rootReal, j.manifestDigest));
+      await removeJournal(rootReal, j.manifestDigest); // drops the pending marker too
+      continue;
+    }
+    // `committed`: the crash landed between the phase flip and the marker/staging cleanup.
+    await rmrf(stagingDir(rootReal, j.manifestDigest));
+    await ensureAppliedMarker(rootReal, j);
+    await finalizeJournal(rootReal, j.manifestDigest);
   }
   return recovered;
 }
@@ -493,6 +613,7 @@ async function prepare(
     create: stgOverride === undefined,
   });
   const axiomReal = await reservedDirReal(rootReal);
+  const gitReal = await gitDirReal(rootReal);
 
   // S-402: a manifest compiled against a tree names that tree. On a FIRST apply the
   // declared pre-images must still hold; a re-apply (marker present) is exempt — the
@@ -516,14 +637,15 @@ async function prepare(
   for (const a of manifest.artifacts) {
     const { abs, parentReal } = await resolveContained(rootReal, a.path);
     // Name aliases the string check cannot see (8.3 `AXIOM~1`, case-insensitive volumes).
-    checkReservedDir(a.path, parentReal, axiomReal);
+    checkReservedDir(a.path, parentReal, axiomReal, gitReal);
     await checkTargetType(abs, a.path, reapply && a.op === "create" ? "overwrite" : a.op);
-    await checkOnDiskCaseCollision(abs, a.path, a.op, caseInsensitive);
+    // Every existing segment, not only the last one: `SRC/main.ts` must not write through `src/`.
+    await checkOnDiskPathCollision(rootReal, a.path, caseInsensitive);
     const preImage = await fileDigestOrAbsent(abs);
     // A drifted `create` is committed as an overwrite so the foreign pre-image is backed up.
     const op: ArtifactOp =
       reapply && a.op === "create" && preImage !== "absent" ? "overwrite" : a.op;
-    const f: StagedFile = { path: a.path, op, preImage };
+    const f: StagedFile = { path: a.path, op, preImage, parentReal };
     if (a.digest !== undefined) f.digest = a.digest.sha256;
     files.push(f);
   }
@@ -580,7 +702,7 @@ async function backupPreImage(
   digest: DigestRef,
   relPath: string,
   target: string,
-): Promise<string> {
+): Promise<void> {
   const rel = `.axiom/backup/${hexOf(digest)}/${relPath}`;
   const abs = path.join(rootReal, ...rel.split("/"));
   await fs.mkdir(nsPath(path.dirname(abs)), { recursive: true });
@@ -589,7 +711,34 @@ async function backupPreImage(
   } catch {
     await fs.copyFile(nsPath(target), nsPath(abs));
   }
-  return rel;
+}
+
+/**
+ * A1-17: commit a `create` with link-then-unlink. A plain rename would silently replace a file
+ * that appeared between the pre-image re-hash and the move — with no backup, because the
+ * recorded pre-image was `absent`. `link` fails with `EEXIST` in exactly that case, which the
+ * caller maps to `ERR_PREIMAGE_CHANGED`.
+ */
+async function linkIntoPlace(stagingPath: string, target: string, relPath: string): Promise<void> {
+  const concurrent = (): AxiomError =>
+    new AxiomError("ERR_PREIMAGE_CHANGED", "target appeared between staging and commit", {
+      path: relPath,
+      details: { reason: "created-concurrently" },
+    });
+  try {
+    await fs.link(nsPath(stagingPath), nsPath(target));
+  } catch (err) {
+    const c = errnoCode(err);
+    if (c === "EEXIST") throw concurrent();
+    if (c !== "EPERM" && c !== "EACCES" && c !== "ENOSYS" && c !== "EXDEV" && c !== "ENOTSUP") {
+      throw err;
+    }
+    // No hardlink support on this volume: keep the guarantee as far as the filesystem allows.
+    if ((await lstatOrNull(target)) !== null) throw concurrent();
+    await renameRetry(stagingPath, target, relPath);
+    return;
+  }
+  await fs.rm(nsPath(stagingPath), { force: true });
 }
 
 async function commit(rootReal: string, staged: StagedTree, journal: Journal): Promise<Journal> {
@@ -597,11 +746,27 @@ async function commit(rootReal: string, staged: StagedTree, journal: Journal): P
   const steps: JournalStep[] = journal.steps;
   const j: Journal = { ...journal, phase: "committing", steps };
   await writeJournal(rootReal, j);
+  const axiomReal = await reservedDirReal(rootReal);
+  const gitReal = await gitDirReal(rootReal);
   let sinceFsync = 0;
   for (const [i, f] of staged.files.entries()) {
     const step = steps[i];
     if (step === undefined) continue;
     const target = path.join(rootReal, ...f.path.split("/"));
+    // A1-2: containment is re-resolved per step, right before the move, and compared with the
+    // parent captured in `prepare`. `resolveContained` itself is the guarantee (a parent swapped
+    // for a junction, or a path that now climbs out of the root, throws); the comparison is the
+    // backstop A1-2 asks for. It allows the parent to be DEEPER than the captured one — that is
+    // this very bundle creating its own directories — and refuses an unrelated realpath.
+    const { parentReal } = await resolveContained(rootReal, f.path);
+    if (parentReal !== f.parentReal && !isContained(f.parentReal, parentReal)) {
+      throw new AxiomError(
+        "ERR_CONTAINMENT",
+        "parent directory changed between staging and commit",
+        { path: f.path, details: { expected: f.parentReal, actual: parentReal } },
+      );
+    }
+    checkReservedDir(f.path, parentReal, axiomReal, gitReal);
     // TOCTOU guard: pre-image must be exactly what we captured at staging time.
     const now = await fileDigestOrAbsent(target);
     if (now !== f.preImage) {
@@ -610,20 +775,26 @@ async function commit(rootReal: string, staged: StagedTree, journal: Journal): P
         details: { expected: f.preImage, actual: now },
       });
     }
+    let backedUp = false;
     if (f.op === "delete") {
       if (f.preImage !== "absent") {
-        step.backup = await backupPreImage(rootReal, j.manifestDigest, f.path, target);
+        await backupPreImage(rootReal, j.manifestDigest, f.path, target);
+        backedUp = true;
         // The backup may be a hardlink to `target`; POSIX rename(target, backup) would then
         // be a no-op and leave the file in place. The pre-image is already preserved, so unlink.
         await unlinkRetry(target, f.path);
       }
     } else {
       if (f.op === "overwrite" && f.preImage !== "absent") {
-        step.backup = await backupPreImage(rootReal, j.manifestDigest, f.path, target);
+        await backupPreImage(rootReal, j.manifestDigest, f.path, target);
+        backedUp = true;
       }
       if (f.stagingPath === undefined) throw new AxiomError("ERR_INTERNAL", "missing staging path");
       await fs.mkdir(nsPath(path.dirname(target)), { recursive: true });
-      await renameRetry(f.stagingPath, target, f.path);
+      // A1-17: a `create` must not overwrite a file that appeared in the window (no backup exists
+      // for it); link-then-unlink makes that race fail with EEXIST instead of losing the file.
+      if (f.op === "create") await linkIntoPlace(f.stagingPath, target, f.path);
+      else await renameRetry(f.stagingPath, target, f.path);
       const written = await fileDigestOrAbsent(target);
       if (written !== f.digest) {
         step.done = true;
@@ -634,7 +805,11 @@ async function commit(rootReal: string, staged: StagedTree, journal: Journal): P
       }
     }
     step.done = true;
-    if (++sinceFsync >= JOURNAL_FSYNC_EVERY) {
+    // A1-1: the journal is flushed after every step that took a backup, so a kill can never leave
+    // a pre-image on disk that the journal does not know about. The periodic flush still bounds
+    // the cost of very large manifests of backup-less steps.
+    sinceFsync++;
+    if (backedUp || sinceFsync >= JOURNAL_FSYNC_EVERY) {
       await writeJournal(rootReal, j);
       sinceFsync = 0;
     }
@@ -644,7 +819,10 @@ async function commit(rootReal: string, staged: StagedTree, journal: Journal): P
 
 /** Two-phase-commit apply of a manifest bundle into `root` (§4.2). Never throws; errors land in `result.error`. */
 export async function apply(options: ApplyOptions): Promise<ApplyResult> {
-  const { bundle, mode } = options;
+  const { mode } = options;
+  // A1-24: from the moment the bundle passes validation, everything below uses the PARSED value.
+  // The raw input may be schema-valid without the defaults the engine relies on (`blobs`).
+  let bundle = options.bundle;
   const keep = options.keepBackups ?? DEFAULT_KEEP_BACKUPS;
   const base = {
     apiVersion: API_VERSION,
@@ -687,6 +865,7 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
         details: { issues: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       });
     }
+    bundle = parsed.data;
     const recomputed = canonicalDigestRef(bundle.manifest);
     if (recomputed !== bundle.manifestDigest) {
       throw new AxiomError(
@@ -721,8 +900,10 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     casRoot: string,
     /** Dry-run on a root without `.axiom/`: stage in os.tmpdir(), write nothing under the root. */
     tmpStaging?: string,
+    /** `false` for a dry-run: a read-annotated preview never mutates the tree (A1-13). */
+    recover = true,
   ): Promise<ApplyResult> => {
-    if (tmpStaging === undefined) await recoverIfNeeded(rootReal);
+    if (recover) await recoverIfNeeded(rootReal);
 
     // Idempotency (design §apply): applied marker + on-disk match → noop; marker but
     // drifted files → re-apply, reporting which artifacts were re-written.
@@ -806,6 +987,9 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
       try {
         await rollbackJournal(rootReal, journal);
       } catch (rbErr) {
+        // A1-28: a commit that failed AND could not be rolled back is exactly the state the chain
+        // must carry forward — record it as a terminal `failed` entry with its code.
+        await chainTerminal(rootReal, journal, { state: "failed", code: "ERR_ROLLBACK" });
         return {
           ...fail(rootReal, rollbackFailure(err, rbErr), "failed"),
           journal: journalFile,
@@ -825,6 +1009,9 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     if (drifted !== undefined) done.drifted = drifted;
     await writeAppliedMarker(rootReal, done);
     await rmrf(staged.stagingDir);
+    // A1-18: the digest leaves the pending index only now — the marker exists and no staging tree
+    // is left, so recovery has nothing to do for it and must not pay for reading it again.
+    await finalizeJournal(rootReal, bundle.manifestDigest);
     await pruneBackups(rootReal, keep);
     return done;
   };
@@ -832,26 +1019,30 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
   const lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
 
   if (mode === "dry-run") {
-    // Read-only: never registers an intent, never fails ERR_CONFLICT.
+    // Read-only: never registers an intent, never fails ERR_CONFLICT, and never runs crash
+    // recovery (A1-13) — it reports the interrupted journals instead.
     try {
+      const interrupted = await interruptedDigests(sharedRoot);
+      let result: ApplyResult;
       if ((await lstatOrNull(axiomDir(sharedRoot))) === null) {
         // No AXIOM state to protect or recover: no lock, staging outside the repo (S-rc3 P2:
         // a preview must not create `.axiom/{queue,staging,tmp}` in a repo that had none).
         const tmp = await fs.mkdtemp(path.join(tmpdir(), "axiom-dry-"));
         try {
-          return finalize(await runEngine(sharedRoot, sharedRoot, path.join(tmp, "staging")));
+          result = await runEngine(sharedRoot, sharedRoot, path.join(tmp, "staging"), false);
         } finally {
           await rmrf(tmp);
         }
-      }
-      return finalize(
-        await withLock(
+      } else {
+        result = await withLock(
           sharedRoot,
           bundle.manifestDigest,
-          () => runEngine(sharedRoot, sharedRoot),
+          () => runEngine(sharedRoot, sharedRoot, undefined, false),
           lockTimeoutMs,
-        ),
-      );
+        );
+      }
+      if (interrupted.length > 0) result = { ...result, interrupted };
+      return finalize(result);
     } catch (err) {
       return fail(sharedRoot, err);
     }
@@ -906,6 +1097,11 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
             createdBranch = await branchExists(sharedRoot, branch).catch(() => false);
             throw err;
           }
+          // QA-3: a fresh checkout can differ from the shared tree byte for byte (core.autocrlf or
+          // `.gitattributes` rewrite line endings), while the manifest's pre-images were taken from
+          // the SHARED tree. Put the shared bytes in place for exactly the paths this bundle
+          // touches; the engine then overwrites or deletes every one of them.
+          await materializeWorktreePaths(sharedRoot, wtReal, touched);
           // Idempotency in PR mode is content-based: HEAD already holds the manifest's result.
           if ((await driftedArtifacts(wtReal, bundle.manifest.artifacts)).length === 0) {
             return {

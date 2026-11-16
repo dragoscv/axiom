@@ -1,6 +1,14 @@
 //! Fail-closed deny documents per harness (`--format`), mirroring the gate's deny contract in
-//! packages/mcp/src/gate.ts. Used only when neither the daemon nor the axiom CLI can decide.
+//! packages/mcp/src/gate-format.ts. Used only when neither the daemon nor the axiom CLI can
+//! decide.
+//!
+//! The per-harness table is NOT written here: it is generated into `deny_table.rs` from
+//! `GATE_FORMAT_TABLE` by `scripts/gen-deny-table.mjs`, so the native client cannot drift from
+//! the gate again (3.0 shipped a Rust copy without `kiro`, which reads exit 0 as an allow, and a
+//! Claude document with top-level keys Claude rejects — A3-5/A2-19). A parity test runs both
+//! renderers over `PARITY_GOLDEN`.
 
+use crate::deny_table::{FORMAT_ROWS, AUTO_ROW};
 use crate::json::quote;
 
 pub const CODE: &str = "ERR_INTERNAL";
@@ -62,28 +70,48 @@ pub fn render(flags: &GateFlags, reason: &str) -> DenyOutput {
     render_code(flags, CODE, reason)
 }
 
+/// The generated row for `flags.format`; an unknown name falls back to `auto` (combined).
+fn row(flags: &GateFlags) -> crate::deny_table::FormatRow {
+    FORMAT_ROWS
+        .iter()
+        .find(|r| r.format == flags.format)
+        .copied()
+        .unwrap_or(AUTO_ROW)
+}
+
 pub fn render_code(flags: &GateFlags, code: &str, reason: &str) -> DenyOutput {
     let r = quote(reason);
     let hook = format!(
         "{{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":{r}}}"
     );
-    let (stdout, exit) = match flags.format.as_str() {
-        "codex" => (Some(format!("{{\"hookSpecificOutput\":{hook}}}")), 0),
+    let row = row(flags);
+    let (stdout, exit) = match row.document {
+        // Windsurf/Cascade and Kiro: the exit code IS the verdict, stdout is not read.
+        "none" => (None, row.exit),
         "cursor" => (
             Some(format!(
                 "{{\"permission\":\"deny\",\"user_message\":{r},\"agent_message\":{r}}}"
             )),
-            0,
+            row.exit,
         ),
-        "windsurf" => (None, 2),
-        "gemini" | "junie" => (Some(format!("{{\"decision\":\"deny\",\"reason\":{r}}}")), 0),
-        "cline" => (Some(format!("{{\"cancel\":true,\"errorMessage\":{r}}}")), 0),
-        // auto, claude, copilot, vscode and anything unknown: the combined document.
+        "decision" => (
+            Some(format!("{{\"decision\":\"deny\",\"reason\":{r}}}")),
+            row.exit,
+        ),
+        "cline" => (
+            Some(format!("{{\"cancel\":true,\"errorMessage\":{r}}}")),
+            row.exit,
+        ),
+        // Claude validates the hook document: ONLY `hookSpecificOutput`. Codex reads it too.
+        "hook" => (Some(format!("{{\"hookSpecificOutput\":{hook}}}")), row.exit),
+        // auto, copilot, vscode: the combined document, `axiom` block included (the gate's
+        // `denyDocument`, so the two renderers stay byte-compatible apart from key order).
         _ => (
             Some(format!(
-                "{{\"hookSpecificOutput\":{hook},\"permissionDecision\":\"deny\",\"permissionDecisionReason\":{r}}}"
+                "{{\"hookSpecificOutput\":{hook},\"permissionDecision\":\"deny\",\"permissionDecisionReason\":{r},\"axiom\":{{\"verdict\":\"deny\",\"code\":{},\"standard\":\"owasp-acs/0.1\"}}}}",
+                quote(code)
             )),
-            0,
+            row.exit,
         ),
     };
     DenyOutput {
@@ -124,9 +152,60 @@ mod tests {
         json::parse(out.stdout.as_deref().expect("stdout")).expect("valid JSON")
     }
 
+    /// The deny the TS renderer (`gate-format.ts`) produces for the same code/reason, embedded in
+    /// the generated table. A3-5: the two renderers may not drift, for ANY `GATE_FORMATS` entry.
     #[test]
-    fn combined_document_for_claude_family() {
-        for fmt in ["auto", "claude", "copilot", "vscode", "unknown"] {
+    fn every_format_matches_the_generated_parity_golden() {
+        use crate::deny_table::{PARITY_CODE, PARITY_GOLDEN, PARITY_REASON};
+        assert_eq!(PARITY_GOLDEN.len(), FORMAT_ROWS.len());
+        for (format, want_stdout, want_exit) in PARITY_GOLDEN {
+            let out = render_code(&flags(&["--format", format]), PARITY_CODE, PARITY_REASON);
+            assert_eq!(out.exit, *want_exit, "{format}: exit code");
+            match (out.stdout.as_deref(), want_stdout) {
+                (None, None) => {}
+                (Some(got), Some(want)) => {
+                    assert_eq!(
+                        json::parse(got),
+                        json::parse(want),
+                        "{format}: stdout document (key order ignored)"
+                    );
+                }
+                (got, want) => panic!("{format}: stdout {got:?} != {want:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_table_covers_every_format_once() {
+        for (i, r) in FORMAT_ROWS.iter().enumerate() {
+            assert!(
+                !FORMAT_ROWS[..i].iter().any(|p| p.format == r.format),
+                "duplicate row for {}",
+                r.format
+            );
+        }
+        assert_eq!(AUTO_ROW.format, "auto");
+        assert_eq!(AUTO_ROW.document, "combined");
+        // Kiro blocks on a non-zero exit only: exit 0 there is an ALLOW (A2-19).
+        let kiro = FORMAT_ROWS.iter().find(|r| r.format == "kiro").expect("kiro");
+        assert_eq!((kiro.document, kiro.exit), ("none", 2));
+    }
+
+    #[test]
+    fn claude_gets_the_hook_document_alone_and_the_combined_family_the_rest() {
+        // Claude validates the hook document against its schema: an extra top-level key turns the
+        // deny into a non-blocking hook error (3.0 shipped the combined one here).
+        let claude = render(&flags(&["--format", "claude"]), REASON);
+        assert_eq!(claude.exit, 0);
+        let d = doc(&claude);
+        assert!(d.get("permissionDecision").is_none(), "no flat keys");
+        assert!(d.get("axiom").is_none(), "no axiom block");
+        let h = d.get("hookSpecificOutput").expect("hookSpecificOutput");
+        assert_eq!(h.get("hookEventName"), Some(&Json::Str("PreToolUse".into())));
+        assert_eq!(h.get("permissionDecision"), Some(&Json::Str("deny".into())));
+        assert_eq!(h.get("permissionDecisionReason"), Some(&Json::Str(REASON.into())));
+
+        for fmt in ["auto", "copilot", "vscode", "unknown"] {
             let out = render(&flags(&["--format", fmt]), REASON);
             assert_eq!(out.exit, 0);
             let d = doc(&out);
@@ -141,6 +220,9 @@ mod tests {
                 Some(&Json::Str("PreToolUse".into()))
             );
             assert_eq!(h.get("permissionDecision"), Some(&Json::Str("deny".into())));
+            let axiom = d.get("axiom").expect("axiom block");
+            assert_eq!(axiom.get("verdict"), Some(&Json::Str("deny".into())));
+            assert_eq!(axiom.get("code"), Some(&Json::Str(CODE.into())));
         }
     }
 
@@ -166,6 +248,13 @@ mod tests {
 
         let ws = render(&flags(&["--format", "windsurf"]), REASON);
         assert_eq!((ws.stdout, ws.exit), (None, 2));
+
+        // Kiro blocks on any non-zero exit and does not read stdout: JSON + exit 0 was an allow.
+        let kiro = render(&flags(&["--format", "kiro"]), REASON);
+        assert_eq!((kiro.stdout, kiro.exit), (None, 2));
+        // `--deny-exit 2` is the same exit, still with no document.
+        let kiro2 = render(&flags(&["--format", "kiro", "--deny-exit", "2"]), REASON);
+        assert_eq!((kiro2.stdout, kiro2.exit), (None, 2));
     }
 
     #[test]

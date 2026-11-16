@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import * as path from "node:path";
 import { AxiomError } from "@codai/axiom-schema";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   checkReservedDir,
   checkTargetType,
   isReservedAxiomPath,
+  isReservedDirPath,
   probeCaseInsensitive,
   resolveContained,
   validateArtifactPaths,
 } from "./contain.js";
+import { isContained } from "./fsx.js";
 import { mkRoot, writeTree } from "./test-helpers.js";
 
 async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
@@ -154,13 +157,20 @@ describe("checkTargetType", () => {
 });
 
 describe("probeCaseInsensitive", () => {
-  it("returns a boolean and leaves no probe file", async () => {
+  it("returns a boolean and leaves neither the probe file nor the scratch directory (A1-28)", async () => {
     const root = await mkRoot();
     const r = await probeCaseInsensitive(root);
     expect(typeof r).toBe("boolean");
     if (process.platform === "win32") expect(r).toBe(true);
-    const left = await fs.readdir(path.join(root, ".axiom", "tmp"));
-    expect(left).toEqual([]);
+    expect(await fs.lstat(path.join(root, ".axiom", "tmp")).catch(() => null)).toBeNull();
+    expect(await fs.readdir(path.join(root, ".axiom"))).toEqual([]);
+  });
+
+  it("never deletes a .axiom/tmp someone else already uses", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { ".axiom/tmp/other.bin": "x" });
+    await probeCaseInsensitive(root);
+    expect(await fs.readdir(path.join(root, ".axiom", "tmp"))).toEqual(["other.bin"]);
   });
 
   it("create:false on a root without .axiom/ writes nothing and returns the platform default", async () => {
@@ -191,5 +201,142 @@ describe("reserved .axiom/", () => {
     expect(
       codeOfSync(() => checkReservedDir("src/x", path.join(path.sep, "r", "src"), ax)),
     ).toBeUndefined();
+  });
+});
+
+describe("reserved .git/ (A1-14)", () => {
+  it.each([".git", ".git/config", ".GIT/config", ".Git/hooks/pre-commit", ".gIt"])(
+    "%s is refused by name, on every platform",
+    (p) => {
+      expect(isReservedDirPath(p)).toBe(true);
+      expect(codeOfSync(() => checkReservedDir(p))).toBe("ERR_PATH_RESERVED_DIR");
+    },
+  );
+
+  it.each([".github/workflows/ci.yml", "git/config", "src/.git/config", ".gitignore"])(
+    "%s is not the reserved directory (first segment only)",
+    (p) => {
+      expect(isReservedDirPath(p)).toBe(false);
+      expect(codeOfSync(() => checkReservedDir(p))).toBeUndefined();
+    },
+  );
+
+  it("checkReservedDir refuses a parent realpath under the .git realpath (alias / case alias)", () => {
+    const git = path.join(path.sep, "r", ".git");
+    expect(codeOfSync(() => checkReservedDir("GIT~1/config", git, undefined, git))).toBe(
+      "ERR_PATH_RESERVED_DIR",
+    );
+  });
+});
+
+describe("containment property (apply.instructions.md: the spec)", () => {
+  /** A junction out of the root, or `undefined` when this machine may not create one. */
+  async function mkJunction(root: string): Promise<string | undefined> {
+    const outside = await mkRoot();
+    try {
+      await fs.symlink(outside, path.join(root, "link"), "junction");
+      return outside;
+    } catch (err) {
+      const c = (err as { code?: string }).code;
+      // skip reason: no symlink/junction privilege on this machine (Windows without developer mode)
+      if (c === "EPERM" || c === "EACCES") return undefined;
+      throw err;
+    }
+  }
+
+  async function resolveOrRefuse(
+    root: string,
+    p: string,
+  ): Promise<{ ok: true; abs: string; parentReal: string } | { ok: false; err: unknown }> {
+    try {
+      const v = await resolveContained(root, p);
+      return { ok: true, abs: v.abs, parentReal: v.parentReal };
+    } catch (err) {
+      return { ok: false, err };
+    }
+  }
+
+  const segment = fc.constantFrom(
+    "a",
+    "B",
+    "src",
+    "dir",
+    "sub",
+    "x.y",
+    ".gitx",
+    ".axiomx",
+    "caf\u00e9",
+    "cafe\u0301",
+    "..",
+    ".",
+    "NUL",
+    " ",
+    "link",
+    "deep",
+    "x".repeat(70),
+  );
+  const candidate = fc
+    .array(segment, { minLength: 1, maxLength: 7 })
+    .map((segs) => segs.join("/"))
+    .filter((p) => p.length > 0 && p.length < 250);
+
+  it("a generated path either stays inside the root or is refused with a coded error", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "src/keep.txt": "k" });
+    const junction = await mkJunction(root);
+    await fc.assert(
+      fc.asyncProperty(candidate, async (p) => {
+        const r = await resolveOrRefuse(root, p);
+        if (!r.ok) {
+          expect(r.err).toBeInstanceOf(AxiomError);
+          return;
+        }
+        expect(isContained(root, r.abs), `${p} resolved to ${r.abs}`).toBe(true);
+        expect(isContained(root, r.parentReal), `${p} parent ${r.parentReal}`).toBe(true);
+        if (junction !== undefined) {
+          expect(isContained(junction, r.parentReal), `${p} went through the junction`).toBe(false);
+        }
+      }),
+      { numRuns: 250 },
+    );
+  });
+
+  it("case, NFD and long-path variants never escape either", async () => {
+    const root = await mkRoot();
+    await writeTree(root, { "src/keep.txt": "k" });
+    const corpus = [
+      "src/keep.txt",
+      "Src/KEEP.TXT",
+      "caf\u00e9.txt",
+      "cafe\u0301.txt",
+      "a/../src/keep.txt",
+      "deep/../..",
+      `long/${"x".repeat(80)}/${"y".repeat(80)}/${"z".repeat(60)}.txt`,
+    ];
+    for (const p of corpus) {
+      for (const variant of [p, p.toUpperCase(), p.normalize("NFD"), p.normalize("NFC")]) {
+        const r = await resolveOrRefuse(root, variant);
+        if (!r.ok) {
+          expect(r.err).toBeInstanceOf(AxiomError);
+          continue;
+        }
+        expect(isContained(root, r.abs), `${variant} resolved to ${r.abs}`).toBe(true);
+        expect(isContained(root, r.parentReal), `${variant} parent ${r.parentReal}`).toBe(true);
+      }
+    }
+  });
+
+  it("refuses a path under a junction whatever its shape", async () => {
+    const root = await mkRoot();
+    const outside = await mkJunction(root);
+    if (outside === undefined) return;
+    for (const p of ["link/x.txt", "link/dir/x.txt", "link"]) {
+      const r = await resolveOrRefuse(root, p);
+      if (!r.ok) continue; // refused: fine
+      // A single-segment `link` resolves to the link itself (its POINTEE is judged by
+      // checkTargetType, which refuses a symlink); it must never resolve INTO the target.
+      expect(isContained(outside, r.parentReal)).toBe(false);
+      expect(isContained(outside, r.abs)).toBe(false);
+    }
   });
 });

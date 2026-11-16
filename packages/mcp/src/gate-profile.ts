@@ -135,6 +135,53 @@ export function unknownGateProfileKeys(raw: unknown): string[] {
   return Object.keys(raw).filter((k) => !GATE_PROFILE_KEYS.has(k) && k !== "$schema");
 }
 
+/**
+ * Read ONE flat gate-profile document (the 2.x/3.x shape: `.axiom/gate-profile.json`,
+ * `~/.axiom/gate-profile.json`, or a `--profile <file>`). A BOM at the start is ignored.
+ *
+ * Errors are `GateProfileError`, never a silent default: a missing file when `optional` is not
+ * set, invalid JSON, a non-object document, or a `version` newer than this binary
+ * (`ERR_PROFILE_VERSION`, which `--fail-open` must not cover).
+ */
+export async function readGateProfileDoc(
+  file: string,
+  opts: { optional?: boolean } = {},
+): Promise<Record<string, unknown> | undefined> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (err) {
+    if (errno(err) === "ENOENT" || errno(err) === "ENOTDIR") {
+      if (opts.optional === true) return undefined;
+      throw new GateProfileError("ERR_INVALID_PROFILE", `gate profile not found: ${file}`);
+    }
+    throw err;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch (err) {
+    throw new GateProfileError(
+      "ERR_INVALID_PROFILE",
+      `${file}: not valid JSON (${err instanceof Error ? err.message : String(err)}) — fix it or run 'axiom init --force'`,
+    );
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new GateProfileError(
+      "ERR_INVALID_PROFILE",
+      `invalid gate profile ${file}: not an object`,
+    );
+  }
+  const declared = (raw as { version?: unknown }).version;
+  if (typeof declared === "number" && declared > GATE_PROFILE_VERSION) {
+    throw new GateProfileError(
+      "ERR_PROFILE_VERSION",
+      `${file}: profile version ${declared} is newer than this axiom (understands ≤ ${GATE_PROFILE_VERSION}); upgrade the axiom bin`,
+    );
+  }
+  return raw as Record<string, unknown>;
+}
+
 export type GateProfile = z.infer<typeof GateProfileSchema>;
 export type GateProfileInput = z.input<typeof GateProfileSchema>;
 
@@ -142,6 +189,11 @@ export const DEFAULT_GATE_PROFILE: GateProfile = {
   deny: [
     ".git/**",
     ".axiom/**",
+    // A2-11: the root-anchored globs above miss a NESTED repository (`sub/.git`, `sub/.axiom`),
+    // where a weak profile of the inner directory used to decide for the payload. The recursive
+    // globs keep the gate's own state and the git dir denied at any depth.
+    "**/.git/**",
+    "**/.axiom/**",
     "**/*.lock",
     "pnpm-lock.yaml",
     ".env",
@@ -174,35 +226,10 @@ export async function loadGateProfile(opts: {
   candidates.push(path.join(opts.root, ".axiom", "gate-profile.json"));
   candidates.push(path.join(opts.home ?? homedir(), ".axiom", "gate-profile.json"));
   for (const file of candidates) {
-    let text: string;
-    try {
-      text = await readFile(file, "utf8");
-    } catch (err) {
-      if (errno(err) === "ENOENT" || errno(err) === "ENOTDIR") {
-        // An explicit --profile that does not exist is a configuration error, not a fallback.
-        if (file === candidates[0] && opts.profilePath !== undefined)
-          throw new GateProfileError("ERR_INVALID_PROFILE", `gate profile not found: ${file}`);
-        continue;
-      }
-      throw err;
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch (err) {
-      throw new GateProfileError(
-        "ERR_INVALID_PROFILE",
-        `${file}: not valid JSON (${err instanceof Error ? err.message : String(err)}) — fix it or run 'axiom init --force'`,
-      );
-    }
-    const declared =
-      raw !== null && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;
-    if (typeof declared === "number" && declared > GATE_PROFILE_VERSION) {
-      throw new GateProfileError(
-        "ERR_PROFILE_VERSION",
-        `${file}: profile version ${declared} is newer than this axiom (understands ≤ ${GATE_PROFILE_VERSION}); upgrade the axiom bin`,
-      );
-    }
+    // An explicit --profile that does not exist is a configuration error, not a fallback.
+    const required = file === candidates[0] && opts.profilePath !== undefined;
+    const raw = await readGateProfileDoc(file, { optional: !required });
+    if (raw === undefined) continue;
     const parsed = GateProfileSchema.safeParse(raw);
     if (!parsed.success) {
       throw new GateProfileError(

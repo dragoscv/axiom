@@ -490,6 +490,10 @@ export interface MigrateProfileOptions {
   /**
    * Which `.axiom/profiles/<name>.json` becomes `checks`. Default: the name `axiom init` gives
    * this root (`profileNameFor`), else the only file in `.axiom/profiles/`.
+   *
+   * A blank value (a bare `--profile`, or the CLI's boolean artefact `"true"`) means "no
+   * explicit name" and is tolerated (4.0, A2-26 / DX-2): the default applies instead of looking
+   * for `.axiom/profiles/.json`.
    */
   profileName?: string;
 }
@@ -509,7 +513,9 @@ export interface MigrateProfileResult {
 }
 
 async function pickLegacyProfileName(rootReal: string, wanted: string | undefined) {
-  if (wanted !== undefined) return wanted;
+  // `axiom setup migrate --profile` (no value) must not become a profile named "" or "true".
+  const wantedName = wanted?.trim();
+  if (wantedName !== undefined && wantedName.length > 0 && wantedName !== "true") return wantedName;
   const own = profileNameFor(rootReal);
   let names: string[];
   try {
@@ -528,6 +534,10 @@ async function pickLegacyProfileName(rootReal: string, wanted: string | undefine
  * `.axiom/gate-profile.json`, `checks` from `.axiom/profiles/<name>.json` (minus
  * `apiVersion`/`kind`). Never deletes or edits the old files. `ERR_EXISTS` when axiom.json is
  * already there; `ERR_NOT_FOUND` when there is nothing to migrate.
+ *
+ * With no `gate` policy to fold in, the new file carries NO `gate` section (4.0, A2-1): an empty
+ * `gate: {}` used to switch the gate off (no deny list at all). Missing the key, the resolver
+ * falls through to `.axiom/gate-profile.json` and then to the built-in default.
  */
 export async function migrateProfile(
   root: string,
@@ -560,15 +570,24 @@ export async function migrateProfile(
   const config: Record<string, unknown> = {
     $schema: `https://dragoscv.github.io/axiom/schemas/v3/AxiomConfig.schema.json`,
     version: AXIOM_CONFIG_VERSION,
-    gate,
     checks: legacy.checks,
   };
-  const json = `${JSON.stringify(config, null, 2)}\n`;
   const oldFiles = legacy.sources.map((s) => path.relative(rootReal, s).split(path.sep).join("/"));
   const notes = [
     `${oldFiles.join(", ")} folded into ${AXIOM_CONFIG_PATH} (apiVersion ${API_VERSION}); ` +
-      `the old files were left in place — ${AXIOM_CONFIG_PATH} wins while it exists, so they can be removed`,
+      `the old files were left in place - keep ${LEGACY_PROFILES_DIR}/*.json (a 4.x check loader may still name one), ` +
+      `only ${LEGACY_GATE_PROFILE} may go once ${AXIOM_CONFIG_PATH} carries the gate policy`,
   ];
+  if (Object.keys(gate).length === 0) {
+    // A2-1: never emit `gate: {}`. Without the key the resolver falls through to
+    // .axiom/gate-profile.json and then to the built-in default (deny is never empty).
+    notes.push(
+      `no gate policy was found, so ${AXIOM_CONFIG_PATH} carries no "gate" section; the gate falls back to ${LEGACY_GATE_PROFILE} and then to the built-in default`,
+    );
+  } else {
+    config.gate = gate;
+  }
+  const json = `${JSON.stringify(config, null, 2)}\n`;
   if (opts.dryRun !== true) {
     await mkdir(path.dirname(file), { recursive: true });
     // `wx`: never clobber an axiom.json created between the check above and this write.

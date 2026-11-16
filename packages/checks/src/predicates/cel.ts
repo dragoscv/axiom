@@ -80,6 +80,14 @@ const VARIABLES = ["manifest", "artifacts", "content", "repo"] as const;
 /** Lookaround, backreferences and named backreferences are not RE2 — reject the literal. */
 const UNSAFE_REGEX = /\(\?<?[=!]|\\[1-9]|\\k</;
 
+/**
+ * A1-4: a nested quantifier — a quantified group whose body is itself quantified or an
+ * alternation — is the classic exponential regex (`(a+)+$` against `"aaa…!"` took 4.5 s at
+ * 26 characters and never returned at 30). The static wall-clock budget cannot help: it is
+ * checked after evaluation returns, and the evaluation never returns. Reject the literal.
+ */
+const NESTED_QUANTIFIER = /\((?:\\.|[^()\\])*[*+?{|](?:\\.|[^()\\])*\)\s*(?:[*+?]|\{\d)/;
+
 // ---------------------------------------------------------------------------
 // cel-js bridge (lazy)
 
@@ -177,7 +185,7 @@ export function analyzeAst(root: CelAst): AstAnalysis {
         const pat = Array.isArray(params) ? params[0] : undefined;
         if (!isNode(pat) || pat.op !== "value" || typeof pat.args !== "string") {
           out.unsafeRegex.push("<non-literal pattern>");
-        } else if (UNSAFE_REGEX.test(pat.args)) {
+        } else if (UNSAFE_REGEX.test(pat.args) || NESTED_QUANTIFIER.test(pat.args)) {
           out.unsafeRegex.push(pat.args);
         }
       }
@@ -308,7 +316,7 @@ export async function evaluateCel(
     return {
       kind: "error",
       code: "ERR_PREDICATE_PARAMS",
-      message: `matches() pattern must be a literal RE2-safe regex: ${analysis.unsafeRegex.join(", ")}`,
+      message: `matches() pattern must be a literal RE2-safe regex (no lookaround, backrefs or nested quantifiers): ${analysis.unsafeRegex.join(", ")}`,
     };
   }
   if (analysis.variables.has("repo") && activation.repo === undefined) {

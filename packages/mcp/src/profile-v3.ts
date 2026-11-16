@@ -61,6 +61,8 @@ const KNOWN_KEYS: ReadonlySet<string> = new Set([
 export const BUILTIN_GATE_DENY: readonly string[] = [
   ".git/**",
   ".axiom/**",
+  "**/.git/**",
+  "**/.axiom/**",
   "**/*.lock",
   "pnpm-lock.yaml",
   ".env",
@@ -104,9 +106,15 @@ const CORE_GATE: Readonly<Record<string, unknown>> = {
 export const BUILTIN_PACKS: Readonly<
   Record<string, { checks: Record<string, unknown>; gate: Record<string, unknown> }>
 > = {
+  /**
+   * The name `@codai/axiom-checks` gives the builtin check profile (D-42). Its GATE half is the
+   * same portable preset `setup init` writes (D-48): a policy that extends `axiom:default` must
+   * never be weaker than a fresh index (4.0, A2-27 — 3.x left it at deny+steer, so force push
+   * was allowed in a repo whose only policy was `extends: ["axiom:default"]`).
+   */
   default: {
     checks: { name: "default", extends: "default" },
-    gate: { deny: [...BUILTIN_GATE_DENY], steer: "hint" },
+    gate: structuredClone(CORE_GATE) as Record<string, unknown>,
   },
   /** Portable preset: every repository wants these (force push, reset --hard, root deletes ...). */
   core: {
@@ -253,7 +261,12 @@ interface Layer {
   checks: unknown;
 }
 
-async function readJsonFile(file: string): Promise<unknown> {
+/**
+ * Read one policy JSON document: a BOM at the start is ignored, a missing or unparsable file is
+ * `ERR_INVALID_PROFILE` (never a silent default). Exported so the 4.0 resolver (`policy.ts`) can
+ * read the user/org/`--profile` layers without a second JSON reader of its own.
+ */
+export async function readPolicyJson(file: string): Promise<unknown> {
   let text: string;
   try {
     text = await readFile(file, "utf8");
@@ -340,7 +353,7 @@ async function resolveNpmPack(name: string, ctx: Ctx): Promise<{ file: string; l
   if (file === undefined) {
     const dir = await packageDir(name, req);
     if (dir !== undefined) {
-      const pkg = await readJsonFile(path.join(dir, "package.json"));
+      const pkg = await readPolicyJson(path.join(dir, "package.json"));
       const rel = isObject(pkg) && typeof pkg.axiomPack === "string" ? pkg.axiomPack : undefined;
       if (rel !== undefined) {
         const cand = path.resolve(dir, rel);
@@ -447,7 +460,7 @@ async function loadLayer(
       if (stack.includes(id)) {
         throw invalid(`extends cycle at ${ref}`, { chain: [...stack, id] });
       }
-      const doc = pin === undefined ? await readJsonFile(id) : await readPinned(id, pin, ref);
+      const doc = pin === undefined ? await readPolicyJson(id) : await readPinned(id, pin, ref);
       child = await loadLayer(doc, childLabel ?? id, path.dirname(id), ctx, [...stack, id]);
     }
     acc = {
@@ -492,7 +505,7 @@ export async function loadAxiomConfigFile(
     opts.root === undefined
       ? path.dirname(fileReal)
       : ((await realpathOrUndefined(opts.root)) ?? path.resolve(opts.root));
-  const raw = await readJsonFile(fileReal);
+  const raw = await readPolicyJson(fileReal);
   const containReal: string[] = [rootReal];
   for (const dir of [path.join(opts.home ?? homedir(), ".axiom"), ...(opts.containRoots ?? [])]) {
     const real = await realpathOrUndefined(dir);
@@ -525,7 +538,7 @@ async function readIfPresent(file: string): Promise<unknown> {
   } catch {
     return undefined;
   }
-  return readJsonFile(file);
+  return readPolicyJson(file);
 }
 
 /**

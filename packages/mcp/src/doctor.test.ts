@@ -15,6 +15,7 @@ import {
   stripJsonc,
 } from "./doctor.js";
 import {
+  axiomMcpSpec,
   CLAUDE_HOOK_ENTRY,
   CLAUDE_POST_HOOK_ENTRY,
   codexHookEntry,
@@ -162,7 +163,7 @@ describe("axiom doctor (S-702)", () => {
         "    // local db, see infra/docker-compose.yml",
         '    "pg": { "command": "npx", "args": ["postgresql://u:p@h:1/db"] },',
         "    /* the gate */",
-        '    "axiom": { "command": "npx", "args": ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "/w"] },',
+        `    "axiom": { "command": "npx", "args": ["-y", "${axiomMcpSpec()}", "mcp", "--root", "/w"] },`,
         "  },",
         "}",
       ].join("\n"),

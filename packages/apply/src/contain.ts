@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   type ArtifactOp,
   AxiomError,
@@ -54,33 +55,75 @@ export interface ResolvedTarget {
 /** AXIOM's own state directory; artifacts may never write into it, under any alias. */
 export const RESERVED_DIR = ".axiom";
 
+/**
+ * Git's own state directory. Reserved exactly like `.axiom`: a transactional write must never
+ * plant a hook, rewrite `config` or replace an object file (A1-14 / A1-29). The gate denies
+ * `.git/**` through checks; apply refuses it independently, on every platform.
+ */
+export const RESERVED_DIR_GIT = ".git";
+
+const RESERVED_DIRS: readonly string[] = [RESERVED_DIR, RESERVED_DIR_GIT];
+
 /** First path segment equals `.axiom` after NFC + lowercase (`.AXIOM/x`, `.Axiom/x`, …). */
 export function isReservedAxiomPath(relPath: string): boolean {
   const first = relPath.split("/")[0] ?? "";
   return first.normalize("NFC").toLowerCase() === RESERVED_DIR;
 }
 
+/** First path segment equals `.axiom` or `.git` after NFC + lowercase (`.GIT/config`, …). */
+export function isReservedDirPath(relPath: string): boolean {
+  const first = (relPath.split("/")[0] ?? "").normalize("NFC").toLowerCase();
+  return RESERVED_DIRS.some((d) => d === first);
+}
+
+/** The reserved directory the first segment names, or `undefined`. */
+function reservedDirNamedBy(relPath: string): string | undefined {
+  const first = (relPath.split("/")[0] ?? "").normalize("NFC").toLowerCase();
+  return RESERVED_DIRS.find((d) => d === first);
+}
+
 /**
  * Refuse a target inside AXIOM's state directory: by name (case/normalisation-insensitive) and,
  * when `axiomReal` (realpath of `<root>/.axiom`) is known, by the resolved parent — which catches
  * aliases the name check cannot see (Windows 8.3 short names such as `AXIOM~1`).
+ * `.git` is refused the same way, with `gitReal` (realpath of `<root>/.git`) as its alias probe.
  */
-export function checkReservedDir(relPath: string, parentReal?: string, axiomReal?: string): void {
-  const byName = isReservedAxiomPath(relPath);
-  const byRealpath =
+export function checkReservedDir(
+  relPath: string,
+  parentReal?: string,
+  axiomReal?: string,
+  gitReal?: string,
+): void {
+  const named = reservedDirNamedBy(relPath);
+  const byName = named !== undefined;
+  const underAxiom =
     parentReal !== undefined && axiomReal !== undefined && isContained(axiomReal, parentReal);
-  if (byName || byRealpath) {
-    throw new AxiomError("ERR_PATH_RESERVED_DIR", "artifacts may not target .axiom/", {
+  const underGit =
+    parentReal !== undefined && gitReal !== undefined && isContained(gitReal, parentReal);
+  if (byName || underAxiom || underGit) {
+    throw new AxiomError("ERR_PATH_RESERVED_DIR", "artifacts may not target a reserved directory", {
       path: relPath,
-      details: { via: byName ? "name" : "realpath" },
+      details: {
+        via: byName ? "name" : "realpath",
+        dir: named ?? (underAxiom ? RESERVED_DIR : RESERVED_DIR_GIT),
+      },
     });
   }
 }
 
 /** realpath.native of `<rootReal>/.axiom`, or undefined when it does not exist. */
 export async function reservedDirReal(rootReal: string): Promise<string | undefined> {
+  return dirReal(rootReal, RESERVED_DIR);
+}
+
+/** realpath.native of `<rootReal>/.git`, or undefined when it does not exist. */
+export async function gitDirReal(rootReal: string): Promise<string | undefined> {
+  return dirReal(rootReal, RESERVED_DIR_GIT);
+}
+
+async function dirReal(rootReal: string, name: string): Promise<string | undefined> {
   try {
-    let real = await realpathNative(nsPath(path.join(rootReal, RESERVED_DIR)));
+    let real = await realpathNative(nsPath(path.join(rootReal, name)));
     if (IS_WIN32 && real.startsWith("\\\\?\\")) real = real.slice(4);
     return real;
   } catch (err) {
@@ -98,6 +141,14 @@ export async function reservedDirReal(rootReal: string): Promise<string | undefi
 export async function resolveContained(rootReal: string, relPath: string): Promise<ResolvedTarget> {
   const segments = relPath.split("/");
   const abs = path.join(rootReal, ...segments);
+  // `path.join` normalises, so a `..` segment (or anything else that climbs out) shows up here
+  // even when every ancestor that exists is a plain directory (A1-28: the containment property).
+  if (!isContained(rootReal, abs)) {
+    throw new AxiomError("ERR_CONTAINMENT", "artifact path escapes root", {
+      path: relPath,
+      details: { abs },
+    });
+  }
   let cur = rootReal;
   let deepestExisting = rootReal;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -186,6 +237,27 @@ export async function probeCaseInsensitive(
     }
   } finally {
     await fs.rm(probe, { force: true });
+    // A1-28: leave no probe scratch directory behind in a root that had none. Non-recursive on
+    // purpose: a directory someone else fills (or that already existed) is left alone.
+    await rmdirQuiet(dir);
+  }
+}
+
+/**
+ * Remove an empty directory we created, tolerating the Windows window where a just-unlinked file
+ * still pins its parent. `ENOTEMPTY` (someone else is using the directory) is never retried and
+ * never an error.
+ */
+async function rmdirQuiet(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 11; attempt++) {
+    try {
+      await fs.rmdir(dir);
+      return;
+    } catch (err) {
+      const c = errnoCode(err);
+      if (c !== "EPERM" && c !== "EACCES" && c !== "EBUSY") return;
+      await sleep(5);
+    }
   }
 }
 
@@ -223,5 +295,47 @@ export async function checkOnDiskCaseCollision(
         },
       );
     }
+  }
+}
+
+/**
+ * A1-14: the whole path, not only its last segment. On a case-insensitive volume `SRC/main.ts`
+ * resolves into an existing `src/` and would write through it (and `.GIT/config` into `.git/`).
+ * Walk every existing segment and compare NFC + lowercase against the on-disk names; stop at the
+ * first segment that does not exist (nothing below it can collide). `kind: "case"` is skipped on a
+ * case-sensitive FS; a normalisation twin is refused everywhere.
+ */
+export async function checkOnDiskPathCollision(
+  rootReal: string,
+  relPath: string,
+  caseInsensitive: boolean,
+): Promise<void> {
+  let cur = rootReal;
+  for (const seg of relPath.split("/")) {
+    let names: string[];
+    try {
+      names = await fs.readdir(nsPath(cur));
+    } catch {
+      // The directory does not exist (or this segment is a file): nothing below can collide.
+      return;
+    }
+    const target = seg.normalize("NFC").toLowerCase();
+    let exact = false;
+    for (const n of names) {
+      if (n === seg) {
+        exact = true;
+        continue;
+      }
+      if (n.normalize("NFC").toLowerCase() !== target) continue;
+      const kind = n.normalize("NFC") === seg.normalize("NFC") ? "normalization" : "case";
+      if (kind === "case" && !caseInsensitive) continue;
+      throw new AxiomError(
+        "ERR_PATH_CASE_COLLISION",
+        "artifact path aliases an existing on-disk name",
+        { path: relPath, details: { existing: n, kind, segment: seg } },
+      );
+    }
+    if (!exact) return;
+    cur = path.join(cur, seg);
   }
 }

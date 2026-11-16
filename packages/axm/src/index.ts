@@ -22,6 +22,22 @@ export interface ParseResult {
   diagnostics: Diagnostic[];
 }
 
+/**
+ * Largest `.axm` document `parseAxm` will attempt: 4 MiB of characters (the same budget the
+ * inline blob bundle gets). Nothing legitimate comes close — content that big belongs in a
+ * `cas`/`ref` source — and a bound keeps a hostile file from costing unbounded work (A3-15).
+ */
+export const AXM_SOURCE_MAX: number = 4 * 1024 * 1024;
+
+function atStart(message: string): Diagnostic {
+  return {
+    severity: "error",
+    code: "ERR_INVALID_PLAN",
+    message,
+    range: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+  };
+}
+
 function fromLexError(e: ILexingError): Diagnostic {
   return {
     severity: "error",
@@ -59,18 +75,34 @@ export function parseAxm(source: string): ParseResult {
   // Position tracking counts LF; normalising CRLF up front keeps columns exact and makes
   // heredoc contents LF regardless of how the file was checked out.
   const text = source.replace(/\r\n/g, "\n");
-  const lexed = axmLexer.tokenize(text);
-  for (const e of lexed.errors) diagnostics.push(fromLexError(e));
+  if (text.length > AXM_SOURCE_MAX) {
+    return {
+      diagnostics: [
+        atStart(`source is ${text.length} characters, over the ${AXM_SOURCE_MAX} limit`),
+      ],
+    };
+  }
+  try {
+    const lexed = axmLexer.tokenize(text);
+    for (const e of lexed.errors) diagnostics.push(fromLexError(e));
 
-  axmParser.input = lexed.tokens;
-  const cst = axmParser.file();
-  const last = lexed.tokens[lexed.tokens.length - 1];
-  for (const e of axmParser.errors) diagnostics.push(fromParseError(e, last));
+    axmParser.input = lexed.tokens;
+    const cst = axmParser.file();
+    const last = lexed.tokens[lexed.tokens.length - 1];
+    for (const e of axmParser.errors) diagnostics.push(fromParseError(e, last));
 
-  const compiled = compileCst(diagnostics.length === 0 ? cst : undefined);
-  diagnostics.push(...compiled.diagnostics);
-  const hasError = diagnostics.some((d) => d.severity === "error");
-  return hasError || compiled.plan === undefined
-    ? { diagnostics }
-    : { plan: compiled.plan, diagnostics };
+    const compiled = compileCst(diagnostics.length === 0 ? cst : undefined);
+    diagnostics.push(...compiled.diagnostics);
+    const hasError = diagnostics.some((d) => d.severity === "error");
+    return hasError || compiled.plan === undefined
+      ? { diagnostics }
+      : { plan: compiled.plan, diagnostics };
+  } catch (err) {
+    // Lexer and parser report their own errors as data; what reaches here is a crash on
+    // pathological input (a deeply nested document overflowing the parser's call stack, which
+    // used to escape as a RangeError and surface as ERR_INTERNAL). "Never throws" is the
+    // contract, so the crash becomes one more diagnostic.
+    const reason = err instanceof Error ? err.message : String(err);
+    return { diagnostics: [...diagnostics, atStart(`cannot parse: ${reason}`)] };
+  }
 }

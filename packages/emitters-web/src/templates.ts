@@ -68,7 +68,7 @@ const routeHandler = defineTemplate(
         schema === undefined
           ? ["  const data = (await request.json()) as unknown;"]
           : [
-              "  const parsed = " + schema + ".safeParse(await request.json());",
+              `  const parsed = ${schema}.safeParse(await request.json());`,
               "  if (!parsed.success) {",
               "    return Response.json({ error: parsed.error.issues }, { status: 400 });",
               "  }",

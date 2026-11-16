@@ -5,6 +5,7 @@
  */
 import childProcess from "node:child_process";
 import fs from "node:fs/promises";
+import * as path from "node:path";
 import { AxiomError, type DigestRef } from "@codai/axiom-schema";
 import { IS_WIN32 } from "./fsx.js";
 import { realpathNative } from "./realpath.js";
@@ -341,17 +342,6 @@ export async function compareUrlFor(rootReal: string, branch: string): Promise<s
   return buildCompareUrl(remote, def, branch);
 }
 
-export async function currentBranch(rootReal: string): Promise<string | undefined> {
-  try {
-    const b = (
-      await runGit(rootReal, ["symbolic-ref", "--quiet", "--short", "HEAD"])
-    ).stdout.trim();
-    return b === "" ? undefined : b;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function headCommit(rootReal: string): Promise<string> {
   const sha = (await runGit(rootReal, ["rev-parse", "HEAD"])).stdout.trim();
   if (!/^[a-f0-9]{40}$/.test(sha)) {
@@ -372,10 +362,53 @@ export async function addWorktree(
   wtPath: string,
   branch: string,
 ): Promise<string> {
-  await runGit(rootReal, ["worktree", "add", "--quiet", "-b", branch, wtPath, "HEAD"]);
+  // QA-3: `core.autocrlf=true` (the system default on Windows) turns every LF into CRLF in a
+  // fresh checkout, so a manifest whose pre-images were compiled from an LF working tree failed
+  // with ERR_PREIMAGE_CHANGED on `plan apply --pr`. Pin the checkout to the bytes HEAD holds.
+  await runGit(rootReal, [
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.eol=lf",
+    "worktree",
+    "add",
+    "--quiet",
+    "-b",
+    branch,
+    wtPath,
+    "HEAD",
+  ]);
   let real = await realpathNative(wtPath);
   if (IS_WIN32 && real.startsWith("\\\\?\\")) real = real.slice(4);
   return real;
+}
+
+/**
+ * QA-3 (the other direction): pinning the checkout is not always enough — a `.gitattributes`
+ * rule, or a shared tree that legitimately holds CRLF while the blob holds LF, still leaves the
+ * worktree differing from the tree the manifest was compiled against. Copy the touched paths from
+ * the shared tree, which `assertPathsClean` has already proven clean, so the pre-image comparison
+ * sees exactly what `plan compile` saw. Every copied path is an artifact of this bundle and is
+ * overwritten or deleted by the engine immediately afterwards.
+ */
+export async function materializeWorktreePaths(
+  sharedRoot: string,
+  wtRoot: string,
+  paths: readonly string[],
+): Promise<void> {
+  for (const rel of paths) {
+    const from = path.join(sharedRoot, ...rel.split("/"));
+    const to = path.join(wtRoot, ...rel.split("/"));
+    let st: import("node:fs").Stats;
+    try {
+      st = await fs.lstat(from);
+    } catch {
+      continue; // absent in the shared tree: nothing to align
+    }
+    if (!st.isFile()) continue;
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    await fs.copyFile(from, to);
+  }
 }
 
 /**

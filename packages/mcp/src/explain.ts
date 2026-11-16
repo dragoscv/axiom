@@ -117,13 +117,30 @@ export function renderExplained(e: Explained, total: number): string[] {
 
 export const EXPLAIN_USAGE = "usage: axiom explain <decision-id|last|-N|N> [--root <dir>] [--json]";
 
+/** A selector counting back from the newest decision (`-1` = the last one). */
+const NEGATIVE_SELECTOR: RegExp = /^-\d+$/;
+
+/**
+ * DX-13: the documented `axiom explain -3 --json` failed with `Unknown option '-3'`, because
+ * `parseArgs` cannot tell a negative-number selector from a flag (and `allowNegative: true` does
+ * not help in Node 22/26). The numeric selectors move behind a `--` separator, every flag stays
+ * where it was, and an argv that already carries `--` is left untouched (the user said it).
+ */
+export function withNegativeSelectors(argv: readonly string[]): string[] {
+  if (argv.includes("--")) return [...argv];
+  const selectors = argv.filter((a) => NEGATIVE_SELECTOR.test(a));
+  if (selectors.length === 0) return [...argv];
+  const flags = argv.filter((a) => !NEGATIVE_SELECTOR.test(a));
+  return [...flags, "--", ...selectors];
+}
+
 /** `axiom explain`. Exit 0 found, 1 not found / empty journal, 2 usage error. */
 export async function explainMain(argv: string[], io: CliIo): Promise<number> {
   let values: { root?: string; json?: boolean };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
-      args: argv,
+      args: withNegativeSelectors(argv),
       options: { root: { type: "string" }, json: { type: "boolean" } },
       strict: true,
       allowPositionals: true,

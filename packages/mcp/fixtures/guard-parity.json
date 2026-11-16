@@ -131,8 +131,8 @@
   },
   {
     "command": "git restore --staged a.ts",
-    "guard": "deny",
-    "note": "house.restore"
+    "guard": "allow",
+    "note": "4.0 (S-1411) DIVERGES from the guard: `--staged` alone only unstages, so house.restore no longer fires (OPS-8: 12 of 12 field denies were this shape)"
   },
   {
     "command": "git log -- restore.ts",
@@ -153,6 +153,31 @@
     "command": "git stash push -m wip -- a.ts",
     "guard": "allow",
     "note": "near-miss stashFlagsAfterDashDash"
+  },
+  {
+    "command": "git stash push -m 'x' -- docs/a.md; git checkout -q -b lane/x origin/dev",
+    "guard": "allow",
+    "note": "4.0 (S-1411) DIVERGES from the guard: `-q` belongs to the next statement, so the rule no longer crosses a `;` (OPS-8: 28 of 28 field denies were this shape)"
+  },
+  {
+    "command": "git add -A -- src/a.ts",
+    "guard": "allow",
+    "note": "4.0 (S-1411) DIVERGES from the guard: `-A` with an explicit pathspec stages only what the pathspec names (OPS-8: 10 of 21 field denies)"
+  },
+  {
+    "command": "git checkout --theirs -- apps/web/a.spec.ts",
+    "guard": "allow",
+    "note": "4.0 (S-1411) DIVERGES from the guard: resolving a conflict is not discarding uncommitted work (OPS-8: 26 of 39 field denies)"
+  },
+  {
+    "command": "pnpm build # run-build.ps1",
+    "guard": "deny",
+    "note": "4.0 (S-1411) DIVERGES from the guard: the wrapper has to be the program of the unit, so naming it in a comment no longer exempts anything (EN-6)"
+  },
+  {
+    "command": "pwsh -NoProfile -File run-build.ps1 -Command 'pnpm build'",
+    "guard": "allow",
+    "note": "4.0 (S-1411): the wrapper IS the program of the unit that runs, so the exemption still holds"
   },
   {
     "command": "git stash pop",
@@ -306,8 +331,8 @@
   },
   {
     "command": "pwsh -NoProfile -File C:\\tools\\agentq.ps1 lease -Purpose x; git worktree add ../x",
-    "guard": "allow",
-    "note": "near-miss worktreeRawAdd (via tool)"
+    "guard": "deny",
+    "note": "4.0 (S-1411) DIVERGES from the guard: the wrapper exemption is now tested on the unit that runs, so naming agentq.ps1 in another statement no longer exempts a raw `git worktree add` (EN-6)"
   },
   {
     "command": "git worktree remove --force ../x",
@@ -387,12 +412,12 @@
   {
     "command": "pnpm --filter @codai/axiom-mcp typecheck",
     "guard": "deny",
-    "note": "house.buildUnqueued"
+    "note": "house.typecheckUnqueued (4.0 D-53: a typecheck is advisory; the guard denies the same command)"
   },
   {
     "command": "npx tsc --noEmit",
     "guard": "deny",
-    "note": "house.buildUnqueued"
+    "note": "house.typecheckUnqueued (4.0 D-53)"
   },
   {
     "command": "turbo run build",
@@ -407,7 +432,7 @@
   {
     "command": "node --max-old-space-size=8192 node_modules/typescript/lib/tsc.js --noEmit",
     "guard": "deny",
-    "note": "house.buildUnqueued"
+    "note": "house.typecheckUnqueued (4.0 D-53)"
   },
   {
     "command": "cd x; pnpm run build > out.log",

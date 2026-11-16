@@ -1,6 +1,8 @@
 import { sha256Hex } from "@codai/axiom-canon";
+import { INLINE_CONTENT_MAX } from "@codai/axiom-schema";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { loadProfile } from "./profile.js";
 import { builtinRegistry, PredicateRegistry } from "./registry.js";
 import { runChecks } from "./run.js";
 import { makeBundle, profileWith } from "./test-helpers.test-helpers.js";
@@ -92,7 +94,7 @@ describe("runChecks verdict matrix", () => {
     // createRepoFacts tolerates a missing root (empty index); no provider failure expected.
     expect(["pass", "error"]).toContain(r.verdict);
   });
-  it("plan-level checks merge after the profile and override by id", async () => {
+  it("A1-6: a plan check that redefines a profile check is refused (ERR_POLICY_FLOOR)", async () => {
     const r = await runChecks({
       bundle: b,
       profile: profileWith([
@@ -102,7 +104,98 @@ describe("runChecks verdict matrix", () => {
         { id: "x", predicate: "path.deny", params: { globs: ["none/**"] }, severity: "error" },
       ],
     });
+    expect(r.verdict).toBe("error");
+    expect(r.findings.map((f) => f.facts.code)).toContain("ERR_POLICY_FLOOR");
+    // the profile's check is still in force: the plan did not disable it
+    expect(r.findings.some((f) => f.id === "path.deny" && f.path === "src/a.ts")).toBe(true);
+  });
+  it("A1-6: an identical plan check is accepted and a new plan check is added", async () => {
+    const same = {
+      id: "x",
+      predicate: "path.allow",
+      params: { globs: ["src/**"] },
+      severity: "error" as const,
+    };
+    const identical = await runChecks({ bundle: b, profile: profileWith([same]), checks: [same] });
+    expect(identical.verdict).toBe("pass");
+    const added = await runChecks({
+      bundle: b,
+      profile: profileWith([same]),
+      checks: [
+        { id: "y", predicate: "path.deny", params: { globs: ["src/b.ts"] }, severity: "error" },
+      ],
+    });
+    expect(added.verdict).toBe("fail");
+    expect(added.findings.map((f) => f.id)).toEqual(["path.deny"]);
+  });
+  it("A1-6: a plan may not add guard.external unless the profile allows it", async () => {
+    const plan = [
+      {
+        id: "g",
+        predicate: "guard.external",
+        params: { command: "x.mjs" },
+        severity: "error" as const,
+      },
+    ];
+    const denied = await runChecks({ bundle: b, profile: profileWith([]), checks: plan });
+    expect(denied.verdict).toBe("error");
+    expect(denied.findings.map((f) => f.facts.code)).toContain("ERR_POLICY_FLOOR");
+    const allowed = await runChecks({
+      bundle: b,
+      profile: profileWith([], { allowPlanGuards: true }),
+      checks: plan,
+    });
+    expect(allowed.findings.map((f) => f.facts.code)).not.toContain("ERR_POLICY_FLOOR");
+  });
+  it("A1-23: a predicate's own severity is kept; the CheckRef may not soften a stricter one", async () => {
+    const r = await runChecks({
+      bundle: b,
+      profile: profileWith([
+        {
+          id: "cel",
+          predicate: "expr.cel",
+          params: { expression: "false", severity: "warn" },
+          severity: "error",
+        },
+      ]),
+    });
+    expect(r.findings[0]?.severity).toBe("warn");
     expect(r.verdict).toBe("pass");
+  });
+  it("A1-30: a repo predicate with no root is an error; only facts.allowRepo:false skips it", async () => {
+    const checks = [
+      {
+        id: "x",
+        predicate: "repo.noOverwriteOf",
+        params: { globs: ["**"] },
+        severity: "error" as const,
+      },
+    ];
+    const r = await runChecks({ bundle: b, profile: profileWith(checks) });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_FACT_DISABLED");
+    expect(r.providers.find((p) => p.name === "repo")?.status).toBe("error");
+    const off = await runChecks({ bundle: b, profile: profileWith(checks, { allowRepo: false }) });
+    expect(off.verdict).toBe("pass");
+    expect(off.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
+  });
+  it("A1-4: a predicate that never answers fails the run within the budget", async () => {
+    const reg = builtinRegistry().register(
+      definePredicate({
+        id: "test.hang",
+        params: z.object({}).strict(),
+        requires: ["manifest"],
+        run: () => new Promise<never>(() => undefined),
+      }),
+    );
+    const r = await runChecks({
+      bundle: b,
+      registry: reg,
+      predicateTimeoutMs: 50,
+      profile: profileWith([{ id: "h", predicate: "test.hang", params: {}, severity: "error" }]),
+    });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_PROVIDER_FAILED");
   });
   it("skips repo predicates when profile.facts.allowRepo is false", async () => {
     const r = await runChecks({
@@ -191,6 +284,71 @@ describe("pre-image binding (S-402)", () => {
       actual: sha256Hex("someone wrote this"),
     });
     expect(f[1]?.facts).toMatchObject({ code: "ERR_PREIMAGE_CHANGED", actual: "absent" });
+  });
+});
+
+describe("bundle integrity (A1-8) and pre-image coverage (A1-20)", () => {
+  const empty = profileWith([]);
+  it("A1-8: a non-delete artifact must declare `bytes`", async () => {
+    const hand = makeBundle([{ path: "a.txt", content: "abc" }]);
+    const art = { ...hand.manifest.artifacts[0]! };
+    delete art.bytes;
+    const bundle = { ...hand, manifest: { ...hand.manifest, artifacts: [art] } };
+    const r = await runChecks({ bundle, profile: empty });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_INVALID_MANIFEST");
+  });
+  it("A1-8: `bytes` is verified against the content", async () => {
+    const hand = makeBundle([{ path: "a.txt", content: "abcd" }]);
+    const art = { ...hand.manifest.artifacts[0]!, bytes: 3 };
+    const bundle = { ...hand, manifest: { ...hand.manifest, artifacts: [art] } };
+    const r = await runChecks({ bundle, profile: empty });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_SIZE_MISMATCH");
+  });
+  it("A1-8: profile.limits bind in the runner", async () => {
+    const r = await runChecks({
+      bundle: b,
+      profile: { ...empty, limits: { maxArtifacts: 1 } },
+    });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_BUNDLE_TOO_LARGE");
+  });
+  it("A1-8: an inline blob over the per-blob cap is refused", async () => {
+    const bundle = makeBundle([{ path: "big.txt", content: "x".repeat(INLINE_CONTENT_MAX + 1) }]);
+    const r = await runChecks({ bundle, profile: empty });
+    expect(r.findings.map((f) => f.facts.code)).toContain("ERR_BLOB_TOO_LARGE");
+  });
+  it("A1-20: `preImage: []` does not read as verified, and a complete list is accepted", async () => {
+    const hand = makeBundle([{ path: "a.txt", content: "x" }]);
+    const emptyPre = { ...hand, manifest: { ...hand.manifest, preImage: [] } };
+    const r = await runChecks({ bundle: emptyPre, profile: empty });
+    expect(r.preImage).not.toBe("verified");
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_INVALID_MANIFEST");
+    const covered = {
+      ...hand,
+      manifest: { ...hand.manifest, preImage: [{ path: "a.txt", sha256: "absent" }] },
+    };
+    const ok = await runChecks({ bundle: covered, profile: empty });
+    expect(ok.findings).toEqual([]);
+    expect(ok.preImage).toBe("unverified");
+  });
+  it("A1-29: the built-in default refuses a git hook and the harness config", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "axiom-default-"));
+    const bundle = makeBundle([
+      { path: ".git/hooks/pre-commit", content: "#!/bin/sh\n" },
+      { path: ".github/hooks/axiom-gate.json", content: "{}\n" },
+    ]);
+    const r = await runChecks({ bundle, profile: await loadProfile("default"), root });
+    expect(r.verdict).toBe("fail");
+    expect(r.findings.map((f) => f.path)).toEqual([
+      ".git/hooks/pre-commit",
+      ".github/hooks/axiom-gate.json",
+    ]);
   });
 });
 

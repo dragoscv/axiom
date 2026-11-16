@@ -59,6 +59,10 @@
     {
       "includes": ["packages/axm/src/lsp/vocabulary.ts"],
       "linter": { "rules": { "suspicious": { "noTemplateCurlyInString": "off" } } }
+    },
+    {
+      "includes": ["scripts/mutation-smoke.mjs"],
+      "linter": { "rules": { "suspicious": { "noTemplateCurlyInString": "off" } } }
     }
   ]
 }

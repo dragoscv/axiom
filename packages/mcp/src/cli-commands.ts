@@ -23,6 +23,7 @@ import {
   cmdGc,
   cmdImportGuard,
   cmdInit,
+  cmdJournalSessions,
   cmdKeygen,
   cmdLog,
   cmdMcp,
@@ -846,6 +847,14 @@ export const COMMANDS: readonly CommandDef[] = [
     run: (a) => cmdReplay(a),
   },
   {
+    path: ["journal", "sessions"],
+    summary: "undo sessions of a root: one row per (agent, session), oldest first",
+    usage: "axiom journal sessions [--root <dir>] [--json]",
+    options: [rootCwd, jsonOpt],
+    examples: ["axiom journal sessions", "axiom journal sessions --json"],
+    run: (a) => cmdJournalSessions(a),
+  },
+  {
     path: ["report"],
     summary: "self-contained HTML report of gate decisions (no external assets)",
     usage: "axiom report [--root <dir>] [--days 7] --out <file.html> [--json]",
@@ -1164,9 +1173,18 @@ export function checkOptions(cmd: CommandDef, argv: readonly string[]): string |
       continue;
     }
     if (opt.type !== "boolean" && !inline) {
-      if (i + 1 >= argv.length)
-        return `option '--${opt.name}' needs a value ${opt.arg ?? ""}`.trim();
-      i++;
+      // `--profile [<name>]`: a bracketed `arg` means the VALUE IS OPTIONAL (DX-2). A bare
+      // `--profile` is legal, and `--profile --json` must leave `--json` to be validated as a
+      // flag of its own instead of being swallowed as the value.
+      const optionalValue = opt.arg?.startsWith("[") === true;
+      const next = argv[i + 1];
+      if (next === undefined) {
+        if (!optionalValue) return `option '--${opt.name}' needs a value ${opt.arg ?? ""}`.trim();
+      } else if (optionalValue && next.startsWith("-")) {
+        // keep `next` for the loop: it may be a flag, a `--`, or a negative-number positional
+      } else {
+        i++;
+      }
     }
   }
   return undefined;

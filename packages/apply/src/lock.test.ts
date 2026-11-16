@@ -4,11 +4,14 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CheckReport, ManifestBundle } from "@codai/axiom-schema";
 import { AxiomError } from "@codai/axiom-schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { apply } from "./apply.js";
 import {
   acquireLock,
   intentsDir,
+  LOCK_HEARTBEAT_MS,
+  LOCK_STALE_MS,
+  lockPath,
   lockStatus,
   overlappingPaths,
   queueDir,
@@ -17,6 +20,12 @@ import {
 import { exists, makeBundle, mkRoot, readText } from "./test-helpers.js";
 
 const DEAD_PID = 999_999;
+
+/** Send a lock / ticket / intent quiet: `LOCK_STALE_MS` past its last heartbeat. */
+async function backdate(p: string, ms = LOCK_STALE_MS + 5_000): Promise<void> {
+  const t = new Date(Date.now() - ms);
+  await fs.utimes(p, t, t);
+}
 
 /** Wall-clock upper bound, ×5 on CI or a loaded box (AXIOM_LOADED_BOX). Lower bounds stay exact. */
 const perfBound = (ms: number): number =>
@@ -163,7 +172,7 @@ describe("S-703 conflict detection (intents)", () => {
     expect(await listNames(intentsDir(root))).toEqual([]);
   });
 
-  it("a stale intent from a dead pid is ignored and removed", async () => {
+  it("an intent whose heartbeat went quiet is ignored and removed (A1-3: never pid alone)", async () => {
     const root = await mkRoot();
     await fs.mkdir(intentsDir(root), { recursive: true });
     const staleFile = path.join(intentsDir(root), "dead-0.json");
@@ -178,6 +187,7 @@ describe("S-703 conflict detection (intents)", () => {
         seq: "0",
       }),
     );
+    await backdate(staleFile);
     const oldFile = path.join(intentsDir(root), "old-0.json");
     await fs.writeFile(
       oldFile,
@@ -190,10 +200,34 @@ describe("S-703 conflict detection (intents)", () => {
         seq: "0",
       }),
     );
+    await backdate(oldFile);
     const r = await fsApply(makeBundle([{ path: "a.txt", content: "a" }]), root);
     expect(r.status).toBe("applied");
     expect(await exists(root, ".axiom/intents/dead-0.json")).toBe(false);
     expect(await exists(root, ".axiom/intents/old-0.json")).toBe(false);
+  });
+
+  it("a LIVE intent is honoured whatever its pid or declared age says (A1-3)", async () => {
+    const root = await mkRoot();
+    await fs.mkdir(intentsDir(root), { recursive: true });
+    const p = path.join(intentsDir(root), "foreign-0.json");
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        manifestDigest: "sha256:foreign",
+        paths: ["a.txt"],
+        // A pid that is not ours and a `since` two hours old: with the old rule (dead pid on this
+        // host, or older than an hour) this intent was ignored. It is live: its heartbeat is now.
+        pid: DEAD_PID,
+        host: hostname(),
+        since: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+        seq: "0",
+      }),
+    );
+    const r = await fsApply(makeBundle([{ path: "a.txt", content: "a" }]), root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_CONFLICT");
+    expect(await exists(root, ".axiom/intents/foreign-0.json")).toBe(true);
   });
 
   it("dry-run never registers an intent and never fails ERR_CONFLICT", async () => {
@@ -240,12 +274,13 @@ describe("S-703 fair lock queue", () => {
     expect(await listNames(queueDir(root))).toEqual([]);
   });
 
-  it("a stale ticket at the head of the queue (dead pid) is skipped and removed", async () => {
+  it("a ticket whose heartbeat went quiet at the head of the queue is skipped and removed", async () => {
     const root = await mkRoot();
     await fs.mkdir(queueDir(root), { recursive: true });
     const name = `${"0".repeat(27)}-${DEAD_PID}.ticket`;
+    const ticket = path.join(queueDir(root), name);
     await fs.writeFile(
-      path.join(queueDir(root), name),
+      ticket,
       JSON.stringify({
         pid: DEAD_PID,
         hostname: hostname(),
@@ -253,6 +288,7 @@ describe("S-703 fair lock queue", () => {
         manifestDigest: "sha256:dead",
       }),
     );
+    await backdate(ticket);
     const t0 = Date.now();
     const lock = await acquireLock(root, "sha256:me", perfBound(2000));
     expect(Date.now() - t0).toBeLessThan(perfBound(2000));
@@ -335,7 +371,28 @@ describe("lockStatus", () => {
     expect(await lockStatus(root)).toEqual({ held: false, queue: [], intents: [] });
   });
 
-  it("flags a dead holder as stale without mutating anything", async () => {
+  it("flags a quiet holder as stale without mutating anything", async () => {
+    const root = await mkRoot();
+    await fs.mkdir(path.join(root, ".axiom"), { recursive: true });
+    const p = path.join(root, ".axiom", "lock");
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        pid: DEAD_PID,
+        hostname: hostname(),
+        startedAt: new Date().toISOString(),
+        manifestDigest: "sha256:dead",
+        token: "quiet",
+      }),
+    );
+    await backdate(p);
+    const s = await lockStatus(root);
+    expect(s.held).toBe(true);
+    expect(s.holder?.stale).toBe(true);
+    expect(await exists(root, ".axiom/lock")).toBe(true);
+  });
+
+  it("does NOT flag a holder with a fresh heartbeat, whatever pid it names (A1-3)", async () => {
     const root = await mkRoot();
     await fs.mkdir(path.join(root, ".axiom"), { recursive: true });
     await fs.writeFile(
@@ -343,13 +400,62 @@ describe("lockStatus", () => {
       JSON.stringify({
         pid: DEAD_PID,
         hostname: hostname(),
-        startedAt: new Date().toISOString(),
-        manifestDigest: "sha256:dead",
+        // Ancient `startedAt`, a pid that is dead (or belongs to another namespace: WSL): the
+        // heartbeat is the only evidence, and it is fresh, so this lock is LIVE.
+        startedAt: new Date(0).toISOString(),
+        manifestDigest: "sha256:live",
+        token: "live",
       }),
     );
     const s = await lockStatus(root);
-    expect(s.held).toBe(true);
-    expect(s.holder?.stale).toBe(true);
+    expect(s.holder?.stale).toBe(false);
+    // And a second writer is refused instead of reclaiming it.
+    const r = await fsApply(makeBundle([{ path: "a.txt", content: "a" }]), root, {
+      lockTimeoutMs: 200,
+    });
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_LOCKED");
+    expect(await exists(root, "a.txt")).toBe(false);
     expect(await exists(root, ".axiom/lock")).toBe(true);
+  });
+
+  it("the holder refreshes the lock heartbeat while it is held (A1-3)", async () => {
+    const root = await mkRoot();
+    // Only the heartbeat interval is faked, so `waitFor`'s real sleep still works.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const lock = await acquireLock(root, "sha256:hb", 1000);
+      const p = lockPath(root);
+      await backdate(p);
+      const quiet = (await fs.stat(p)).mtimeMs;
+      expect((await lockStatus(root)).holder?.stale).toBe(true);
+      vi.advanceTimersByTime(LOCK_HEARTBEAT_MS);
+      await waitFor(async () => (await fs.stat(p)).mtimeMs > quiet);
+      expect((await lockStatus(root)).holder?.stale).toBe(false);
+      await lock.release();
+      expect(await exists(root, ".axiom/lock")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("release never deletes a lock another writer took (token comparison, A1-3)", async () => {
+    const root = await mkRoot();
+    const lock = await acquireLock(root, "sha256:mine", 1000);
+    const p = lockPath(root);
+    // Someone reclaimed it (we went quiet) and wrote their own token.
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        pid: 4242,
+        hostname: hostname(),
+        startedAt: new Date().toISOString(),
+        manifestDigest: "sha256:theirs",
+        token: "someone-else",
+      }),
+    );
+    await lock.release();
+    expect(await exists(root, ".axiom/lock")).toBe(true);
+    expect((await lockStatus(root)).holder?.digest).toBe("sha256:theirs");
   });
 });

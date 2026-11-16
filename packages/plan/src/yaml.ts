@@ -1,4 +1,5 @@
 import { AxiomError } from "@codai/axiom-schema";
+import { stripPlanEditorKeys } from "./plan-input.js";
 
 /**
  * YAML front-end for Plans (S-707). The result is a plain object meant for
@@ -77,8 +78,7 @@ export async function parsePlanYaml(text: string): Promise<unknown> {
   } catch (err) {
     throw invalid(`YAML plan rejected: ${(err as Error).message}`, undefined, err);
   }
-  const { $schema: _editorHint, ...plan } = value as Record<string, unknown>;
-  return plan;
+  return stripPlanEditorKeys(value);
 }
 
 function linePosAt(text: string, offset: number): LinePos {

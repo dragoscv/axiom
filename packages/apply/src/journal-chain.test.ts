@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import * as path from "node:path";
 import { AxiomError, type DigestRef, type Journal } from "@codai/axiom-schema";
 import fc from "fast-check";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { recoverIfNeeded } from "./apply.js";
 import {
   appendChainEntry,
   assertChain,
@@ -11,6 +12,7 @@ import {
   chainPath,
   journalStatus,
   newJournal,
+  pendingDir,
   readHistory,
   recordTerminal,
   serializeChainEntry,
@@ -18,6 +20,7 @@ import {
   verifyChain,
   writeJournal,
 } from "./journal.js";
+import { acquireLock, LOCK_STALE_MS, lockPath } from "./lock.js";
 import { mkRoot } from "./test-helpers.js";
 
 const roots: string[] = [];
@@ -56,6 +59,14 @@ async function catchCode(p: Promise<unknown>): Promise<string | undefined> {
     return undefined;
   } catch (err) {
     return err instanceof AxiomError ? err.code : "not-axiom";
+  }
+}
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
   }
 }
 
@@ -306,5 +317,109 @@ describe("journalStatus", () => {
     const s = await journalStatus(await root());
     expect(s.interrupted).toEqual([]);
     expect(s.lastApplied).toBeUndefined();
+  });
+
+  it("QA-14: a journal owned by a LIVE lock holder is not reported as interrupted", async () => {
+    const r = await root();
+    await writeJournal(r, {
+      ...newJournal(dg(7), [{ path: "a.txt", op: "create", done: true }]),
+      phase: "committing",
+    });
+    expect((await journalStatus(r)).interrupted).toHaveLength(1);
+    const lock = await acquireLock(r, dg(7), 1000);
+    try {
+      // Same digest, holder heartbeat fresh: an apply in flight, not an interrupted one.
+      expect((await journalStatus(r)).interrupted).toEqual([]);
+    } finally {
+      await lock.release();
+    }
+    expect((await journalStatus(r)).interrupted).toHaveLength(1);
+  });
+
+  it("QA-14: a STALE holder does not hide its journal", async () => {
+    const r = await root();
+    await writeJournal(r, {
+      ...newJournal(dg(8), [{ path: "a.txt", op: "create", done: false }]),
+      phase: "committing",
+    });
+    const p = lockPath(r);
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        pid: process.pid,
+        hostname: "somewhere",
+        startedAt: new Date().toISOString(),
+        manifestDigest: dg(8),
+        token: "quiet",
+      }),
+    );
+    const quiet = new Date(Date.now() - LOCK_STALE_MS - 5_000);
+    await fs.utimes(p, quiet, quiet);
+    expect((await journalStatus(r)).interrupted).toHaveLength(1);
+  });
+});
+
+describe("pending index (A1-18)", () => {
+  it("recovery reads only the pending index, never the history", async () => {
+    const r = await root();
+    // A long-lived root: 400 terminal journals, finalized (no marker), as `apply` leaves them.
+    await fs.mkdir(path.join(r, ".axiom", "journal"), { recursive: true });
+    for (let i = 0; i < 400; i++) {
+      const d = dg(1000 + i);
+      await fs.writeFile(
+        path.join(r, ".axiom", "journal", `${d.slice(7)}.json`),
+        JSON.stringify({
+          ...newJournal(d, [{ path: "a.txt", op: "create", done: true }]),
+          phase: "committed",
+        }),
+      );
+    }
+    expect(await listDir(pendingDir(r))).toEqual([]);
+    // One journal that really is in flight, and a file it half-wrote.
+    const live = dg(7);
+    await writeJournal(r, {
+      ...newJournal(live, [{ path: "made.txt", op: "create", preImage: "absent", done: true }]),
+      phase: "committing",
+    });
+    await fs.writeFile(path.join(r, "made.txt"), "half-applied");
+
+    const real = fs.readFile.bind(fs);
+    let journalReads = 0;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(((p: unknown, o?: unknown) => {
+      const s = String(p);
+      if (s.endsWith(".json") && s.includes(`${path.sep}journal${path.sep}`)) journalReads++;
+      return real(s as never, o as never);
+    }) as unknown as typeof fs.readFile);
+    let recovered: DigestRef[];
+    try {
+      recovered = await recoverIfNeeded(r);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(recovered).toEqual([live]);
+    expect(journalReads).toBe(1);
+    expect(await fs.lstat(path.join(r, "made.txt")).catch(() => null)).toBeNull();
+    // The recovered digest leaves the index; the 400 terminal journals were never indexed.
+    expect(await listDir(pendingDir(r))).toEqual([]);
+  });
+
+  it("a marker whose journal is gone is dropped, a terminal one is cleared", async () => {
+    const r = await root();
+    await fs.mkdir(pendingDir(r), { recursive: true });
+    await fs.writeFile(path.join(pendingDir(r), dg(3).slice(7)), "");
+    expect(await recoverIfNeeded(r)).toEqual([]);
+    expect(await listDir(pendingDir(r))).toEqual([]);
+
+    await writeJournal(r, {
+      ...newJournal(dg(4), [{ path: "x", op: "create", done: true }]),
+      phase: "committed",
+    });
+    expect(await listDir(pendingDir(r))).toHaveLength(1);
+    await writeJournal(r, {
+      ...newJournal(dg(4), [{ path: "x", op: "create", done: true }]),
+      phase: "rolled-back",
+    });
+    expect(await listDir(pendingDir(r))).toEqual([]);
   });
 });

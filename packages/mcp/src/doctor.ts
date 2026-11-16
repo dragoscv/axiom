@@ -14,6 +14,9 @@ import { GateProfileSchema } from "./gate.js";
 import { findHookLogs, type HookLogStats, readHookLogStats } from "./hooklog.js";
 import {
   ASK_MIN_VERSION,
+  AXIOM_MCP_MAJOR,
+  AXIOM_PKG_RE,
+  axiomMcpSpecMajor,
   type BinLocator,
   binAtLeast,
   CLAUDE_HOOK_ENTRY,
@@ -110,27 +113,34 @@ function check(id: string, status: CheckStatus, message: string, hint?: string):
 
 export function spawnGateProbe(command: readonly string[]): GateProbe {
   const [file, ...args] = command;
-  return (root, payload) =>
+  const exe = file ?? "";
+  /** One probe run; `stderr` is drained (never kept whole) so a chatty gate cannot block. */
+  const run = (
+    root: string,
+    payload: string,
+    extra: readonly string[],
+  ): Promise<{ ms: number; exit: number; denied: boolean; stderr: string }> =>
     new Promise((resolve, reject) => {
-      if (file === undefined) {
-        reject(new Error("empty gate command"));
-        return;
-      }
       const t0 = performance.now();
-      const child = spawn(file, [...args, "gate", "--stdin"], {
+      const child = spawn(exe, [...args, "gate", "--stdin", ...extra], {
         cwd: root,
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
       let out = "";
+      let err = "";
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (c: string) => {
         if (out.length < 65_536) out += c;
       });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (c: string) => {
+        if (err.length < 4096) err += c;
+      });
       const timer = setTimeout(() => child.kill(), GATE_HOOK_TIMEOUT_MS * 2);
-      child.once("error", (err) => {
+      child.once("error", (error) => {
         clearTimeout(timer);
-        reject(err);
+        reject(error);
       });
       child.once("close", (code) => {
         clearTimeout(timer);
@@ -138,10 +148,21 @@ export function spawnGateProbe(command: readonly string[]): GateProbe {
           ms: performance.now() - t0,
           exit: code ?? -1,
           denied: /"permissionDecision"\s*:\s*"deny"/.test(out),
+          stderr: err,
         });
       });
       child.stdin.end(payload);
     });
+  return async (root, payload) => {
+    if (file === undefined) throw new Error("empty gate command");
+    // DX-18: the probe's own decisions must not reach the journal (contract §6: the caller passes
+    // `dryRun`). An INSTALLED gate older than 4.0 rejects the flag, so retry without it — the probe
+    // then journals exactly as it always did instead of reporting "probe did not run".
+    const first = await run(root, payload, ["--dry-run"]);
+    const rejected = first.exit !== 0 && /Unknown option '--dry-run'|ERR_USAGE/.test(first.stderr);
+    const r = rejected ? await run(root, payload, []) : first;
+    return { ms: r.ms, exit: r.exit, ...(r.denied ? { denied: true } : {}) };
+  };
 }
 
 function p95(samples: readonly number[]): number {
@@ -643,11 +664,40 @@ async function checkHooks(
     } else {
       const has =
         isRecord(mcp.doc) && isRecord(mcp.doc.servers) && mcp.doc.servers.axiom !== undefined;
-      out.push(
-        has
-          ? check("mcp.vscode", "ok", `${INIT_FILES.mcp} declares servers.axiom`)
-          : check("mcp.vscode", "warn", `${INIT_FILES.mcp} has no servers.axiom`, "axiom init"),
-      );
+      if (!has) {
+        out.push(
+          check("mcp.vscode", "warn", `${INIT_FILES.mcp} has no servers.axiom`, "axiom init"),
+        );
+      } else {
+        // A3-2/DX-3: `axiom init` used to pin `@codai/axiom-mcp@2`, i.e. the unsupported 2.x server
+        // that cannot read a 3.0+ plan or profile. Say which major the entry actually resolves.
+        const entry = (mcp.doc as { servers: { axiom: unknown } }).servers.axiom;
+        const spec =
+          isRecord(entry) && Array.isArray(entry.args)
+            ? entry.args.find((a): a is string => typeof a === "string" && AXIOM_PKG_RE.test(a))
+            : undefined;
+        const pinned = spec === undefined ? undefined : axiomMcpSpecMajor(spec);
+        if (pinned !== undefined && Number(pinned) < Number(AXIOM_MCP_MAJOR)) {
+          out.push(
+            check(
+              "mcp.vscode",
+              "fail",
+              `${INIT_FILES.mcp} runs ${spec} (major ${pinned}); this build is ${AXIOM_MCP_MAJOR}.x`,
+              "axiom init --upgrade",
+            ),
+          );
+        } else if (pinned !== undefined && pinned !== AXIOM_MCP_MAJOR) {
+          out.push(
+            check(
+              "mcp.vscode",
+              "warn",
+              `${INIT_FILES.mcp} runs ${spec} (major ${pinned}); this build is ${AXIOM_MCP_MAJOR}.x`,
+            ),
+          );
+        } else {
+          out.push(check("mcp.vscode", "ok", `${INIT_FILES.mcp} declares servers.axiom`));
+        }
+      }
     }
   }
   return out;

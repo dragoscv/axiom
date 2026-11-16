@@ -16,6 +16,8 @@
 export const UNDECODABLE = "__axiom_undecodable__";
 
 type Mode = "bash" | "pwsh" | "cmd";
+/** The shell a segment is read with: quoting, escaping and substitutions differ per shell. */
+export type ShellMode = Mode;
 const TOP_MODES: readonly Mode[] = ["bash", "pwsh"];
 const CMD_MODES: readonly Mode[] = ["cmd", "bash", "pwsh"];
 
@@ -48,6 +50,8 @@ const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 const PWSH = new Set(["pwsh", "powershell", "pwsh-preview"]);
 const SHELLS = new Set([...POSIX_SHELLS, ...PWSH, "cmd"]);
 const IEX = new Set(["iex", "invoke-expression"]);
+/** `eval` runs its literal argument as a command, like `iex`. */
+const EVAL = new Set(["eval"]);
 const ECHOES = new Set(["echo", "printf", "write-output", "write-host"]);
 
 // ------------------------------------------------------------------------------ scanning --
@@ -80,7 +84,9 @@ function lineEnd(s: string, from: number): number {
 }
 
 function isSpace(ch: string): boolean {
-  return ch === " " || ch === "\t" || ch === "\r" || ch === "\n";
+  return (
+    ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "\u00a0" || ch === "\u202f"
+  );
 }
 
 /** `<<[-]DELIM` / `<<'DELIM'` at `i`: the delimiter and the index after it. */
@@ -249,6 +255,12 @@ function scan(s: string, mode: Mode): Scan {
       continue;
     }
     if (c === "|") {
+      // `>|` (clobber) is one redirection operator: a `|` glued to a `>` is not a pipe.
+      if (cur.charAt(cur.length - 1) === ">") {
+        cur += c;
+        i++;
+        continue;
+      }
       if (next === "|") {
         push(false);
         i += 2;
@@ -422,6 +434,122 @@ export function shellWords(segment: string): string[] {
   return tidy(rawWords(segment, "bash"));
 }
 
+// ----------------------------------------------------------------------- redirections --
+
+/** A redirection operator at `i` (`>`, `>>`, `>|`, `&>`, `&>>`): the index after it. */
+function redirectOperator(s: string, i: number): number | undefined {
+  const c = s.charAt(i);
+  if (c === "&" && s.charAt(i + 1) === ">") {
+    let j = i + 2;
+    if (s.charAt(j) === ">") j++;
+    if (s.charAt(j) === "|") j++;
+    return j;
+  }
+  if (c !== ">") return undefined;
+  let j = i + 1;
+  if (s.charAt(j) === ">") j++;
+  if (s.charAt(j) === "|") j++; // `>|` is the clobber form
+  return j;
+}
+
+/** The token a redirection writes to, starting at `j`: its text (unquoted) and the next index. */
+function redirectTargetAt(
+  s: string,
+  j: number,
+  mode: Mode,
+): { text: string; next: number } | undefined {
+  let k = j;
+  while (k < s.length && isSpace(s.charAt(k))) k++;
+  if (k >= s.length) return undefined;
+  const q = s.charAt(k);
+  if (q === '"' || (q === "'" && mode !== "cmd")) {
+    let text = "";
+    let i = k + 1;
+    while (i < s.length) {
+      const c = s.charAt(i);
+      if (c === q) return { text, next: i + 1 };
+      if (c === escapeChar(mode) && i + 1 < s.length) {
+        text += s.charAt(i + 1);
+        i += 2;
+        continue;
+      }
+      text += c;
+      i++;
+    }
+    return undefined;
+  }
+  let i = k;
+  while (i < s.length) {
+    const c = s.charAt(i);
+    if (isSpace(c) || ";|&<>".includes(c)) break;
+    i++;
+  }
+  if (i === k) return undefined;
+  return { text: s.slice(k, i), next: i };
+}
+
+/**
+ * Paths one segment redirects into (`> out.txt`, `>> 'my file.txt'`, `>| .env`, `cmd /c "x> .env"`).
+ * Quoted text is data: a `>` inside quotes is not an operator. Read with every requested shell
+ * reading and returned deduplicated.
+ */
+export function redirectTargets(
+  segment: string,
+  modes: readonly ShellMode[] = TOP_MODES,
+): string[] {
+  const out: string[] = [];
+  for (const mode of modes) {
+    const esc = escapeChar(mode);
+    let quote: Quote;
+    let i = 0;
+    while (i < segment.length) {
+      const c = segment.charAt(i);
+      if (quote === "'" || quote === "$'") {
+        if (c === "'") quote = undefined;
+        else if (quote === "$'" && c === esc && i + 1 < segment.length) i++;
+        i++;
+        continue;
+      }
+      if (quote === '"') {
+        if (c === '"') quote = undefined;
+        else if (c === esc && i + 1 < segment.length) i++;
+        i++;
+        continue;
+      }
+      if (c === esc && i + 1 < segment.length) {
+        i += 2;
+        continue;
+      }
+      if (c === '"' || (c === "'" && mode !== "cmd")) {
+        quote = c;
+        i++;
+        continue;
+      }
+      if (mode === "bash" && c === "$" && segment.charAt(i + 1) === "'") {
+        quote = "$'";
+        i += 2;
+        continue;
+      }
+      const after =
+        c === ">" || (c === "&" && segment.charAt(i + 1) === ">")
+          ? redirectOperator(segment, i)
+          : undefined;
+      if (after !== undefined) {
+        const t = redirectTargetAt(segment, after, mode);
+        if (t === undefined) {
+          i = after;
+          continue;
+        }
+        if (t.text !== "" && !/^&\d/.test(t.text)) out.push(t.text);
+        i = t.next;
+        continue;
+      }
+      i++;
+    }
+  }
+  return dedupe(out);
+}
+
 function stripPrefix(words: readonly string[]): string[] {
   let i = 0;
   while (i < words.length) {
@@ -446,27 +574,49 @@ export function programName(words: readonly string[]): string {
   return programBase(stripPrefix(words)[0] ?? "").toLowerCase();
 }
 
-function variantsIn(segment: string, modes: readonly Mode[]): string[][] {
-  const out: string[][] = [];
+/** One reading of a segment: the shell its words were read with, and the words. */
+export interface WordReading {
+  mode: ShellMode;
+  words: string[];
+}
+
+function readingsIn(segment: string, modes: readonly Mode[]): WordReading[] {
+  const out: WordReading[] = [];
   const seen = new Set<string>();
-  const add = (w: string[]): void => {
+  const add = (mode: Mode, w: string[]): void => {
     const s = stripPrefix(w);
     if (s.length === 0 || out.length >= MAX_VARIANTS) return;
     const key = JSON.stringify(s);
     if (seen.has(key)) return;
     seen.add(key);
-    out.push(s);
+    out.push({ mode, words: s });
   };
   for (const mode of modes) {
     const words = tidy(rawWords(segment, mode));
-    add(words);
+    add(mode, words);
     for (let i = 1; i < words.length && out.length < MAX_VARIANTS; i++) {
       const w = words[i] ?? "";
-      if (w === "=") add(tidy(words.slice(i + 1)));
-      else if (OPEN_BRACKET.test(w)) add(tidy(words.slice(i)));
+      if (w === "=") add(mode, tidy(words.slice(i + 1)));
+      else if (OPEN_BRACKET.test(w)) add(mode, tidy(words.slice(i)));
     }
   }
   return out;
+}
+
+function variantsIn(segment: string, modes: readonly Mode[]): string[][] {
+  return readingsIn(segment, modes).map((r) => r.words);
+}
+
+/**
+ * The word lists a segment may run, per shell reading (`bash` and `pwsh` by default), with env
+ * assignments and prefix commands stripped from each. A caller that knows the host shell is
+ * PowerShell asks for `["pwsh"]`, where a backslash is a separator and never an escape.
+ */
+export function wordReadings(
+  segment: string,
+  modes: readonly ShellMode[] = TOP_MODES,
+): WordReading[] {
+  return readingsIn(segment, modes);
 }
 
 /**
@@ -605,6 +755,20 @@ function iexNested(args: readonly string[]): string[] {
   return text === "" || text.startsWith("$") || text.startsWith("(") ? [] : [text];
 }
 
+/**
+ * Commands run by a backtick substitution (`` echo `git push -f` ``). The bash reading of
+ * backticks runs what is between them; PowerShell uses a backtick as an escape, so only a
+ * multi-word body (which no escape sequence produces) is taken as a command.
+ */
+function backtickNested(segment: string): string[] {
+  const out: string[] = [];
+  for (const m of segment.matchAll(/`([^`]+)`/g)) {
+    const inner = (m[1] ?? "").trim();
+    if (inner !== "" && /\s/.test(inner) && !inner.startsWith("-")) out.push(inner);
+  }
+  return out;
+}
+
 const XARGS_VALUE = new Set(["-I", "-n", "-L", "-P", "-d", "-E", "-s", "-a"]);
 const WSL_VALUE = new Set(["-d", "--distribution", "-u", "--user", "--cd"]);
 const WSL_EXEC = new Set(["-e", "--exec", "--"]);
@@ -639,13 +803,14 @@ function nestedIn(segment: string, modes: readonly Mode[]): Nested[] {
       out.push({ text, modes: m });
     }
   };
+  add(backtickNested(segment), TOP_MODES);
   for (const v of variantsIn(segment, modes)) {
     const prog = programName(v);
     const args = v.slice(1);
     if (PWSH.has(prog)) add(pwshNested(prog === "powershell" ? prog : "pwsh", args), TOP_MODES);
     else if (POSIX_SHELLS.has(prog)) add(posixShellNested(args), TOP_MODES);
     else if (prog === "cmd") add(cmdNested(args), CMD_MODES);
-    else if (IEX.has(prog)) add(iexNested(args), TOP_MODES);
+    else if (IEX.has(prog) || EVAL.has(prog)) add(iexNested(args), TOP_MODES);
     else if (prog === "xargs") add(restAfterOptions(args, XARGS_VALUE, NO_EXEC), TOP_MODES);
     else if (prog === "wsl") add(restAfterOptions(args, WSL_VALUE, WSL_EXEC), TOP_MODES);
   }

@@ -10,7 +10,7 @@
  * (a later write to that absolute path by another agent of this root wins unless forced).
  */
 import { randomBytes } from "node:crypto";
-import { realpath as realpathCb } from "node:fs";
+import { type Dirent, realpath as realpathCb } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -23,7 +23,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
-import { promisify } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { acquireLock, resolveContained, writeAtomic } from "@codai/axiom-apply";
 import { sha256Hex } from "@codai/axiom-canon";
 import { casGet, casPut } from "@codai/axiom-plan";
@@ -68,6 +68,63 @@ interface UndoLine {
 
 export function undoDir(root: string): string {
   return path.join(root, ".axiom", "undo");
+}
+
+/**
+ * Session id for a payload that carries none (contract 6): `auto-<yyyymmdd>-<8 hex>`, the date in
+ * UTC so two machines and a replayed payload agree, the hash over `agentId + cwd` so the same
+ * agent in the same checkout keeps one id for the whole day.
+ */
+export function syntheticSessionId(agentId: string, cwd: string, now: Date = new Date()): string {
+  const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
+  return `auto-${stamp}-${sha256Hex(`${agentId}${cwd}`).slice(0, 8)}`;
+}
+
+/** One undo session, as `journal sessions` lists it. */
+export interface UndoSessionSummary {
+  /** The session id the gate captured with, or `syntheticSessionId(agentId, root)`. */
+  session: string;
+  agentId: string;
+  /** ISO timestamp of the oldest / newest captured pre-image of that session. */
+  first: string;
+  last: string;
+  /** How many pre-images the session holds. */
+  files: number;
+}
+
+/**
+ * Every undo session of `root` (contract 6), oldest first: one row per (agent, session). A line
+ * captured without a session id (a payload that named none) is grouped under
+ * `syntheticSessionId(l.agentId, root)`, the best identity the store still holds — the undo line
+ * keeps the tool and the pre-image, not the payload cwd.
+ */
+export async function listUndoSessions(root: string): Promise<UndoSessionSummary[]> {
+  const rows = new Map<
+    string,
+    { session: string; agentId: string; first: number; last: number; files: number }
+  >();
+  for (const l of await readAllLines(root)) {
+    if (typeof l.at !== "number" || typeof l.agentId !== "string") continue;
+    const session = l.sessionId ?? syntheticSessionId(l.agentId, root);
+    const key = `${l.agentId}\u0000${session}`;
+    const hit = rows.get(key);
+    if (hit === undefined) {
+      rows.set(key, { session, agentId: l.agentId, first: l.at, last: l.at, files: 1 });
+      continue;
+    }
+    hit.first = Math.min(hit.first, l.at);
+    hit.last = Math.max(hit.last, l.at);
+    hit.files += 1;
+  }
+  return [...rows.values()]
+    .sort((a, b) => a.first - b.first || a.session.localeCompare(b.session))
+    .map((r) => ({
+      session: r.session,
+      agentId: r.agentId,
+      first: new Date(r.first).toISOString(),
+      last: new Date(r.last).toISOString(),
+      files: r.files,
+    }));
 }
 
 function logFile(root: string, agentId: string): string {
@@ -165,6 +222,124 @@ export async function captureUndo(
   } catch {
     // advisory capture — never fail the gate
   }
+}
+
+/** Bounds of `captureTreeUndo`; over them the rest of the tree is recorded, not captured. */
+export const TREE_UNDO_FILES_MAX = 500;
+export const TREE_UNDO_BYTES_MAX = 16 * 1024 * 1024;
+
+export interface TreeUndoResult {
+  /** Pre-images captured. */
+  files: number;
+  /** Sum of the sizes the captured files had. */
+  bytes: number;
+  /** Entries left out because a bound was hit; each truncated directory gets a marker line. */
+  skipped: number;
+  reason?: "maxFiles" | "maxBytes";
+}
+
+/** Regular files under `rel` (root-relative), symlinks not followed, bounded by `limit`. */
+async function treeFiles(root: string, rel: string, limit: number, out: string[]): Promise<void> {
+  if (out.length >= limit) return;
+  let entries: Dirent[];
+  try {
+    entries = await readdir(path.join(root, rel), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    if (out.length >= limit) return;
+    if (ent.isSymbolicLink()) continue;
+    const child = `${rel}/${ent.name}`;
+    if (ent.isDirectory()) {
+      await treeFiles(root, child, limit, out);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    const safe = safeRel(child);
+    if (safe !== undefined) out.push(safe);
+  }
+}
+
+/**
+ * Snapshot a directory before an ALLOWED recursive delete (contract 6): every regular file under
+ * `relDirs` gets the same pre-image `captureUndo` stores, bounded by `maxFiles` / `maxBytes`. Over
+ * a bound the remaining entries are NOT captured and are RECORDED instead: one marker line per
+ * truncated directory with `pre: "toolarge"`, which `undoSession` reports as a skipped item rather
+ * than restoring it (the short-circuit happens before any path resolution). Never throws.
+ */
+export async function captureTreeUndo(
+  root: string,
+  e: {
+    sessionId?: string;
+    agentId: string;
+    tool: string;
+    /** Root-relative directories snapshotted before the recursive delete. */
+    relDirs: readonly string[];
+    maxFiles?: number;
+    maxBytes?: number;
+    now?: number;
+  },
+): Promise<TreeUndoResult> {
+  const maxFiles = e.maxFiles ?? TREE_UNDO_FILES_MAX;
+  const maxBytes = e.maxBytes ?? TREE_UNDO_BYTES_MAX;
+  const at = e.now ?? Date.now();
+  const captured: string[] = [];
+  const markers: string[] = [];
+  let bytes = 0;
+  let skipped = 0;
+  let reason: TreeUndoResult["reason"];
+  try {
+    for (const rawDir of e.relDirs) {
+      const dir = safeRel(rawDir);
+      if (dir === undefined) continue;
+      const found: string[] = [];
+      await treeFiles(root, dir, maxFiles + 1, found);
+      let truncated = false;
+      for (const rel of found) {
+        let size = 0;
+        try {
+          size = (await stat(path.join(root, rel))).size;
+        } catch {
+          size = 0;
+        }
+        if (captured.length >= maxFiles || bytes + size > maxBytes) {
+          reason ??= captured.length >= maxFiles ? "maxFiles" : "maxBytes";
+          truncated = true;
+          skipped++;
+          continue;
+        }
+        captured.push(rel);
+        bytes += size;
+      }
+      if (truncated) markers.push(dir);
+    }
+    await captureUndo(root, {
+      ...(e.sessionId === undefined ? {} : { sessionId: e.sessionId }),
+      agentId: e.agentId,
+      tool: e.tool,
+      targets: captured.map((relPath) => ({ relPath, op: "delete" as const })),
+      now: at,
+    });
+    if (markers.length > 0) {
+      const lines = markers.map((dir) =>
+        JSON.stringify({
+          v: 1,
+          at,
+          agentId: e.agentId,
+          ...(e.sessionId === undefined ? {} : { sessionId: e.sessionId }),
+          tool: e.tool,
+          path: dir,
+          pre: "toolarge",
+        } satisfies UndoLine),
+      );
+      await mkdir(undoDir(root), { recursive: true });
+      await appendFile(logFile(root, e.agentId), `${lines.join("\n")}\n`);
+    }
+  } catch {
+    // advisory capture — never fail the gate
+  }
+  return { files: captured.length, bytes, skipped, ...(reason === undefined ? {} : { reason }) };
 }
 
 /**
@@ -443,4 +618,49 @@ export async function pruneUndo(
     await rename(tmp, file);
   }
   return { removedLines, removedFiles };
+}
+
+export const JOURNAL_SESSIONS_USAGE = "axiom journal sessions [--root <dir>] [--json]";
+
+/**
+ * `axiom journal sessions` (contract 6 + 8): the undo sessions of a root, one row per
+ * (agent, session), oldest first. Human output is ASCII only; `--json` prints the rows verbatim.
+ * Exit 0 on success, 2 on usage / an unreadable store.
+ */
+export async function journalSessionsMain(
+  argv: string[],
+  io: { stdout(s: string): void; stderr(s: string): void; home?: string },
+): Promise<number> {
+  let values: { root?: string; json?: boolean };
+  try {
+    values = parseArgs({
+      args: argv,
+      options: { root: { type: "string" }, json: { type: "boolean" } },
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  } catch (err) {
+    io.stderr(`${JOURNAL_SESSIONS_USAGE}\n${err instanceof Error ? err.message : String(err)}`);
+    return 2;
+  }
+  const root = path.resolve(values.root ?? ".");
+  let rows: UndoSessionSummary[];
+  try {
+    rows = await listUndoSessions(root);
+  } catch (err) {
+    io.stderr(`ERR_INTERNAL ${err instanceof Error ? err.message : String(err)}`);
+    return 2;
+  }
+  if (values.json === true) {
+    io.stdout(JSON.stringify({ root, sessions: rows }, null, 2));
+    return 0;
+  }
+  if (rows.length === 0) {
+    io.stdout(`journal sessions: no undo session under ${root}`);
+    return 0;
+  }
+  for (const r of rows) {
+    io.stdout(`${r.session}  ${r.agentId}  ${r.first}..${r.last}  ${r.files} file(s)`);
+  }
+  return 0;
 }

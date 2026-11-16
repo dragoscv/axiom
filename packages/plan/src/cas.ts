@@ -19,14 +19,22 @@ export async function casHas(root: string, hex: string): Promise<boolean> {
 }
 
 /**
- * Store bytes under their sha256. Write is tmp → fsync → rename; an existing
- * entry is left untouched (content-addressed, so it is identical by definition).
+ * Store bytes under their sha256. Write is tmp → fsync → rename.
+ *
+ * An existing entry is re-hashed first: a content-addressed name promises the bytes that hash to
+ * it, so an entry that no longer does (a partial write, a planted file, bit rot) is CORRUPT and
+ * is replaced by the atomic rename. Leaving it alone would make that digest permanently unusable
+ * (`ERR_DIGEST_MISMATCH` on every read) even though the real bytes are at hand.
+ *
  * Returns the hex digest.
  */
 export async function casPut(root: string, bytes: Uint8Array): Promise<string> {
   const hex = sha256Hex(bytes);
   const target = casPath(root, hex);
-  if (await casHas(root, hex)) return hex;
+  if (await casHas(root, hex)) {
+    const existing = await casGetUnverified(root, hex);
+    if (existing !== undefined && sha256Hex(existing) === hex) return hex;
+  }
   await mkdir(dirname(target), { recursive: true });
   const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   const fh = await open(tmp, "wx");

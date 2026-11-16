@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import * as path from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
 import type { CheckReport, ManifestBundle } from "@codai/axiom-schema";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appliedPath, apply, rollback } from "./apply.js";
-import { acquireLock } from "./lock.js";
+import { readJournal } from "./journal.js";
+import { acquireLock, LOCK_STALE_MS } from "./lock.js";
 import {
   exists,
   makeBundle,
@@ -26,6 +28,20 @@ function fsApply(
   extra: Partial<Parameters<typeof apply>[0]> = {},
 ) {
   return apply({ bundle, root, mode: "fs", confirmDigest: bundle.manifestDigest, ...extra });
+}
+
+function passReport(bundle: ManifestBundle): CheckReport {
+  return {
+    apiVersion: "axiom.dev/v2",
+    kind: "CheckReport",
+    manifestDigest: bundle.manifestDigest,
+    profile: "default",
+    verdict: "pass",
+    findings: [],
+    factsDigest: `sha256:${sha256Hex("f")}`,
+    durationMs: 0,
+    providers: [],
+  };
 }
 
 describe("apply happy path", () => {
@@ -398,10 +414,12 @@ describe("TOCTOU and rollback", () => {
           const n = files.filter((f) => f.op !== "delete" || pre[f.path] !== undefined).length;
           const k = (kSeed % n) + 1;
 
-          // Commit-phase mutations of the user tree are: rename(staging→target) for
-          // create/overwrite and unlink(target) for delete. Inject at the k-th one.
+          // Commit-phase mutations of the user tree are: link(staging→target) for create,
+          // rename(staging→target) for overwrite and unlink(target) for delete. Inject at the
+          // k-th one.
           const realRename = fs.rename.bind(fs);
           const realUnlink = fs.unlink.bind(fs);
+          const realLink = fs.link.bind(fs);
           let calls = 0;
           const inject = (): void => {
             calls++;
@@ -412,6 +430,10 @@ describe("TOCTOU and rollback", () => {
             }
           };
           const inUserTree = (p: string): boolean => !p.includes(`${path.sep}.axiom${path.sep}`);
+          const spyLink = vi.spyOn(fs, "link").mockImplementation(async (from, to) => {
+            if (inUserTree(String(to))) inject();
+            return realLink(from, to);
+          });
           const spyRename = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
             if (inUserTree(String(to))) inject();
             return realRename(from, to);
@@ -425,6 +447,7 @@ describe("TOCTOU and rollback", () => {
             expect(r.status, JSON.stringify(r.error)).toBe("rolled-back");
             expect(r.error?.code).toBe("ERR_INTERNAL");
           } finally {
+            spyLink.mockRestore();
             spyRename.mockRestore();
             spyUnlink.mockRestore();
           }
@@ -463,23 +486,35 @@ describe("TOCTOU and rollback", () => {
       { path: "a.txt", content: "a1", op: "overwrite" },
       { path: "b.txt", content: "b" },
     ]);
-    // Simulate: crash right after journal goes `committing` with steps partially done.
-    let realRenameCount = 0;
+    // Simulate: crash right after journal goes `committing` with steps partially done. The
+    // commit-phase mutations of the user tree are now link (create), rename (overwrite) and
+    // unlink (delete), so count all three.
+    let mutations = 0;
     const realRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      const toStr = String(to);
-      if (!toStr.includes(`${path.sep}.axiom${path.sep}`)) {
-        realRenameCount++;
-        if (realRenameCount === 2) {
-          // do the rename, then "crash": throw a non-Axiom error that also breaks rollback's marker
-          await realRename(from, to);
-          throw Object.assign(new Error("crash"), { code: "CRASH" });
-        }
+    const realLink = fs.link.bind(fs);
+    const inUserTree = (p: string): boolean => !p.includes(`${path.sep}.axiom${path.sep}`);
+    const crashAfter = async (run: () => Promise<void>): Promise<void> => {
+      mutations++;
+      // mutate first, then "crash": a non-Axiom error, like the killed process would have left it
+      if (mutations === 2) {
+        await run();
+        throw Object.assign(new Error("crash"), { code: "CRASH" });
       }
-      return realRename(from, to);
-    });
+      await run();
+    };
+    const spyRename = vi
+      .spyOn(fs, "rename")
+      .mockImplementation((from, to) =>
+        inUserTree(String(to)) ? crashAfter(() => realRename(from, to)) : realRename(from, to),
+      );
+    const spyLink = vi
+      .spyOn(fs, "link")
+      .mockImplementation((from, to) =>
+        inUserTree(String(to)) ? crashAfter(() => realLink(from, to)) : realLink(from, to),
+      );
     const r = await fsApply(bundle, root);
-    spy.mockRestore();
+    spyRename.mockRestore();
+    spyLink.mockRestore();
     // Engine rolled back in-process already; verify the state and that another apply is clean.
     expect(r.status).toBe("rolled-back");
     expect(await readText(root, "a.txt")).toBe("a0");
@@ -572,18 +607,21 @@ describe("error-code hygiene (S-407)", () => {
       { path: "b.txt", content: "b" },
     ]);
     const realRename = fs.rename.bind(fs);
+    const realLink = fs.link.bind(fs);
     const inUserTree = (p: string): boolean => !p.includes(`${path.sep}.axiom${path.sep}`);
-    let userRenames = 0;
+    const fromStaging = (p: string): boolean => String(p).includes(`${path.sep}staging${path.sep}`);
+    let commitMutations = 0;
     let restores = 0;
-    const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    const failSecondCommit = (): boolean => {
+      commitMutations++;
+      return commitMutations === 2;
+    };
+    const spyRename = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
       const fromStr = String(from);
       const toStr = String(to);
       // Commit: staging → target. Fail the 2nd one so step 1 is done and must be rolled back.
-      if (inUserTree(toStr) && fromStr.includes(`${path.sep}staging${path.sep}`)) {
-        userRenames++;
-        if (userRenames === 2) {
-          throw Object.assign(new Error("disk on fire"), { code: "EIO" });
-        }
+      if (inUserTree(toStr) && fromStaging(fromStr) && failSecondCommit()) {
+        throw Object.assign(new Error("disk on fire"), { code: "EIO" });
       }
       // Rollback: backup → target. Make it fail too.
       if (inUserTree(toStr) && fromStr.includes(`${path.sep}backup${path.sep}`)) {
@@ -592,11 +630,18 @@ describe("error-code hygiene (S-407)", () => {
       }
       return realRename(from, to);
     });
+    const spyLink = vi.spyOn(fs, "link").mockImplementation(async (from, to) => {
+      if (inUserTree(String(to)) && fromStaging(from) && failSecondCommit()) {
+        throw Object.assign(new Error("disk on fire"), { code: "EIO" });
+      }
+      return realLink(from, to);
+    });
     let r: Awaited<ReturnType<typeof fsApply>>;
     try {
       r = await fsApply(bundle, root);
     } finally {
-      spy.mockRestore();
+      spyRename.mockRestore();
+      spyLink.mockRestore();
     }
     expect(restores).toBeGreaterThan(0);
     expect(r.status).toBe("failed");
@@ -738,21 +783,159 @@ describe("lock", () => {
     expect(await readText(root, "two.txt")).toBe("2");
   });
 
-  it("stale lock (dead pid) is reclaimed", async () => {
+  it("a lock whose heartbeat went quiet is reclaimed (A1-3)", async () => {
     const root = await mkRoot();
-    await fs.mkdir(path.join(root, ".axiom"), { recursive: true });
+    const p = path.join(root, ".axiom", "lock");
+    await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(
-      path.join(root, ".axiom", "lock"),
+      p,
       JSON.stringify({
         pid: 999_999,
-        hostname: (await import("node:os")).hostname(),
+        hostname: hostname(),
         startedAt: new Date().toISOString(),
         manifestDigest: "x",
+        token: "quiet",
       }),
     );
+    const quiet = new Date(Date.now() - LOCK_STALE_MS - 5_000);
+    await fs.utimes(p, quiet, quiet);
     const r = await fsApply(makeBundle([{ path: "a.txt", content: "a" }]), root, {
       lockTimeoutMs: 500,
     });
     expect(r.status).toBe("applied");
+  });
+
+  it("a lock with a fresh heartbeat is NOT reclaimed, whatever its pid says (A1-3)", async () => {
+    const root = await mkRoot();
+    const p = path.join(root, ".axiom", "lock");
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        // Dead on this host, or alive in another pid namespace (WSL): unknowable, and irrelevant.
+        pid: 999_999,
+        hostname: hostname(),
+        startedAt: new Date(0).toISOString(),
+        manifestDigest: "sha256:other",
+        token: "live",
+      }),
+    );
+    const r = await fsApply(makeBundle([{ path: "a.txt", content: "a" }]), root, {
+      lockTimeoutMs: 300,
+    });
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_LOCKED");
+    expect(await exists(root, "a.txt")).toBe(false);
+    expect(await exists(root, ".axiom/lock")).toBe(true);
+  });
+});
+
+describe("commit hardening (A1-2, A1-11, A1-17, A1-24)", () => {
+  it("A1-17: a file created between the pre-image hash and the move is never replaced", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "new.txt", content: "FROM-AXIOM\n" }]);
+    const realLink = fs.link.bind(fs);
+    const spy = vi.spyOn(fs, "link").mockImplementation(async (from, to) => {
+      // The concurrent writer wins the race: it creates the target AFTER the pre-image re-hash.
+      await fs.writeFile(String(to), "FROM-SOMEONE-ELSE\n");
+      return realLink(from, to);
+    });
+    let r: Awaited<ReturnType<typeof fsApply>>;
+    try {
+      r = await fsApply(bundle, root);
+    } finally {
+      spy.mockRestore();
+    }
+    // The commit refuses; the rollback succeeds (the file is not ours, so there is nothing to undo).
+    expect(r.status).toBe("rolled-back");
+    expect(r.error?.code).toBe("ERR_PREIMAGE_CHANGED");
+    expect(await readText(root, "new.txt")).toBe("FROM-SOMEONE-ELSE\n");
+  });
+
+  it("A1-17: the happy path still writes (link then unlink), and the staging tree is empty", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "ok.txt", content: "ok\n", mode: "0755" }]);
+    const r = await fsApply(bundle, root);
+    expect(r.status).toBe("applied");
+    expect(await readText(root, "ok.txt")).toBe("ok\n");
+    expect(await exists(root, `.axiom/staging/${bundle.manifestDigest.slice(7)}`)).toBe(false);
+  });
+
+  it("A1-2: a parent created between staging and commit is contained, so the apply proceeds", async () => {
+    const root = await mkRoot();
+    // `sub/` does not exist while the manifest is staged, so the captured parent is the root
+    // itself. Creating it in the window (as a concurrent writer, or as an earlier artifact of
+    // this very bundle, would) must NOT be mistaken for an escape: the resolved parent is still
+    // under the captured one.
+    const bundle = makeBundle([{ path: "sub/x.txt", content: "x\n" }]);
+    const r = await fsApply(bundle, root, {
+      preChecks: async () => {
+        await fs.mkdir(path.join(root, "sub"), { recursive: true });
+        return passReport(bundle);
+      },
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe("applied");
+    expect(await readText(root, "sub/x.txt")).toBe("x\n");
+  });
+
+  it("A1-2: a parent swapped for a junction outside the root is refused, nothing escapes", async () => {
+    const root = await mkRoot();
+    const outside = await mkRoot();
+    await fs.mkdir(path.join(root, "sub"), { recursive: true });
+    const bundle = makeBundle([{ path: "sub/x.txt", content: "ESCAPED\n" }]);
+    const r = await fsApply(bundle, root, {
+      preChecks: async () => {
+        await fs.rm(path.join(root, "sub"), { recursive: true, force: true });
+        await fs.symlink(outside, path.join(root, "sub"), "junction");
+        return passReport(bundle);
+      },
+    });
+    // The commit refuses with the containment error; the rollback then refuses to walk the
+    // junction either, which surfaces as ERR_ROLLBACK. What must hold either way: nothing
+    // outside the root is touched.
+    expect(r.status).toBe("failed");
+    expect(["ERR_CONTAINMENT", "ERR_SYMLINK_IN_PATH", "ERR_ROLLBACK"]).toContain(r.error?.code);
+    expect(await fs.readdir(outside)).toEqual([]);
+    expect(await exists(root, "sub/x.txt")).toBe(false);
+  });
+
+  it("A1-11: an artifact path over 945 chars keeps the journal readable and rollback possible", async () => {
+    const root = await mkRoot();
+    // 30 segments of 30 chars plus a 60-char name: each component stays well under the 255-char
+    // volume limit while the whole path exceeds the 1024-char `RelPath` cap once the
+    // `.axiom/backup/<64 hex>/` prefix (79 chars) is added.
+    const segments = Array.from(
+      { length: 30 },
+      (_, i) => `d${String(i).padStart(2, "0")}-${"x".repeat(26)}`,
+    );
+    const deep = `${segments.join("/")}/${"z".repeat(56)}.txt`;
+    // `.axiom/backup/` + 64 hex + "/" + this path: longer than the 1024-char RelPath cap, which is
+    // what used to make the whole journal unreadable after a successful apply.
+    expect(deep.length).toBeGreaterThan(945);
+    expect(deep.length).toBeLessThanOrEqual(1024);
+    await writeTree(root, { [deep]: "v1" });
+    const bundle = makeBundle([{ path: deep, content: "v2", op: "overwrite" }]);
+    expect((await fsApply(bundle, root)).status).toBe("applied");
+    const j = await readJournal(root, bundle.manifestDigest);
+    expect(j?.steps[0]?.path).toBe(deep);
+    // 4.0 derives the backup path instead of storing it.
+    expect(j?.steps[0]?.backup).toBeUndefined();
+    expect(await rollback(root, bundle.manifestDigest)).toMatchObject({ phase: "rolled-back" });
+    expect(await readText(root, deep)).toBe("v1");
+  });
+
+  it("A1-24: a schema-valid bundle without `blobs` fails cleanly, never with a TypeError", async () => {
+    const root = await mkRoot();
+    const bundle = makeBundle([{ path: "nb.txt", content: "nb" }]);
+    const noBlobs = {
+      manifest: bundle.manifest,
+      manifestDigest: bundle.manifestDigest,
+    } as unknown as ManifestBundle;
+    const r = await fsApply(noBlobs, root);
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("ERR_BLOB_MISSING");
+    expect(r.error?.path).toBe("nb.txt");
+    expect(await exists(root, "nb.txt")).toBe(false);
   });
 });

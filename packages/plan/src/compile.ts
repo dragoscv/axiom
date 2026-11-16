@@ -1,6 +1,8 @@
 import {
   buildStatement,
+  CanonicalizeError,
   canonicalDigestRef,
+  findLoneSurrogate,
   type InTotoStatementV1,
   parseDigestRef,
   sha256Hex,
@@ -26,12 +28,17 @@ import { decodeBlob, encodeBlob, isBase64, utf8Bytes } from "./blob.js";
 import { casGetUnverified, casPut } from "./cas.js";
 import { type PreImageState, readContained, realRoot } from "./contained.js";
 import { applyPatchText } from "./patch.js";
+import { findJsonTooDeep, MAX_PLAN_JSON_DEPTH, stripPlanEditorKeys } from "./plan-input.js";
 import { type RefNetOptions, resolveRef } from "./ref.js";
 import type { EmitterRegistry } from "./template.js";
 
 /** Decoded byte budget for a base64 inline source (§2.5). */
 export const INLINE_BASE64_DECODED_MAX: number = 192 * 1024;
-/** Toolchain version recorded when the caller supplies none. */
+/**
+ * Format generation recorded as `toolchain.axiom` when the caller supplies neither
+ * `toolchain.axiom` nor `toolchainVersion`. It is a fallback for library callers that do not
+ * know a release version — the CLI and the MCP server pass their package version (A1-16/DX-26).
+ */
 export const AXIOM_VERSION: string = "2.0.0";
 
 export interface CompileOptions {
@@ -39,8 +46,18 @@ export interface CompileOptions {
   store?: "inline" | "cas";
   /** Repository root — required to read `cas` sources and to write when `store: "cas"`. */
   root?: string;
-  /** `{ axiom, <emitter>: <version> }`; `axiom` defaults to 2.0.0. */
+  /**
+   * `{ axiom, <emitter>: <version> }`. `axiom` here wins over `toolchainVersion`, which wins
+   * over `AXIOM_VERSION`.
+   */
   toolchain?: Record<string, string>;
+  /**
+   * Version of the tool that produced the bundle, recorded as `toolchain.axiom` (and in the
+   * attestation's `builder.version`) when `toolchain.axiom` is absent. Callers that know a
+   * release version — the CLI and the MCP server — MUST pass it; it is part of the hashed
+   * manifest, so it names what really produced the bytes.
+   */
+  toolchainVersion?: string;
   /** Clock for `runDetails.metadata.startedOn/finishedOn`. Omit for a fully deterministic statement. */
   now?: () => string;
   invocationId?: string;
@@ -76,6 +93,41 @@ function invalidPlan(err: { issues: readonly unknown[] }): AxiomError {
   return new AxiomError("ERR_INVALID_PLAN", "plan does not match PlanSchema", {
     details: { issues: err.issues },
   });
+}
+
+/**
+ * JCS-digest a plan-derived value, mapping a canonicalization failure (lone surrogate, over-deep
+ * nesting, non-finite number) onto `ERR_INVALID_PLAN`. The PLAN is what is malformed — reporting
+ * `ERR_INTERNAL` would blame the compiler and hide a caller-fixable input.
+ */
+function canonicalPlanRef(value: unknown): DigestRef {
+  try {
+    return canonicalDigestRef(value);
+  } catch (err) {
+    if (err instanceof CanonicalizeError) {
+      throw new AxiomError("ERR_INVALID_PLAN", `plan is not canonical JSON: ${err.message}`, {
+        cause: err,
+        details: { reason: err.message },
+      });
+    }
+    throw err;
+  }
+}
+
+/**
+ * UTF-8 bytes for text that lands in a digest. A JS string may hold unpaired surrogates that
+ * `TextEncoder` would silently replace with U+FFFD, so two different plans would hash alike.
+ * Fail closed instead: the caller gets `ERR_INVALID_PLAN` naming the byte index.
+ */
+function hashedBytes(text: string, relPath: string, what: string): Uint8Array {
+  const at = findLoneSurrogate(text);
+  if (at >= 0) {
+    throw new AxiomError("ERR_INVALID_PLAN", `${what} contains an unpaired surrogate`, {
+      path: relPath,
+      details: { what, index: at },
+    });
+  }
+  return utf8Bytes(text);
 }
 
 interface SourceBytes {
@@ -120,7 +172,8 @@ function renderTemplate(
     });
   }
   const rendered = def.render(parsed.data);
-  const bytes = typeof rendered === "string" ? utf8Bytes(rendered) : rendered;
+  const bytes =
+    typeof rendered === "string" ? hashedBytes(rendered, a.path, "template output") : rendered;
   if (bytes.length > INLINE_CONTENT_MAX) {
     throw new AxiomError("ERR_BLOB_TOO_LARGE", `template rendered ${bytes.length} bytes`, {
       path: a.path,
@@ -140,7 +193,7 @@ async function resolveSource(a: PlanArtifact, opts: CompileOptions): Promise<Sou
   switch (src.type) {
     case "inline": {
       if (src.encoding === "utf8") {
-        const bytes = utf8Bytes(src.content);
+        const bytes = hashedBytes(src.content, a.path, "inline utf8 content");
         if (bytes.length > INLINE_CONTENT_MAX) {
           throw new AxiomError(
             "ERR_BLOB_TOO_LARGE",
@@ -298,7 +351,7 @@ async function applyPatchSource(
     }
     throw err;
   }
-  const bytes = utf8Bytes(out);
+  const bytes = hashedBytes(out, a.path, "patched content");
   if (bytes.length > INLINE_CONTENT_MAX) {
     throw new AxiomError("ERR_BLOB_TOO_LARGE", `patched content is ${bytes.length} bytes`, {
       path: a.path,
@@ -367,9 +420,10 @@ function digestOnlyPlan(plan: Plan, digests: ReadonlyMap<string, string>): Recor
 function splitToolchain(
   input: Record<string, string> | undefined,
   used: ReadonlyMap<string, string>,
+  fallbackAxiom: string,
 ): Toolchain {
   const emitters: Record<string, string> = {};
-  let axiom = AXIOM_VERSION;
+  let axiom = fallbackAxiom;
   for (const key of Object.keys(input ?? {}).sort()) {
     const v = input?.[key];
     if (v === undefined) continue;
@@ -397,7 +451,19 @@ export async function compilePlan(
   opts: CompileOptions = {},
 ): Promise<CompileResult> {
   const startedOn = opts.now?.();
-  const parsed = PlanSchema.safeParse(planInput);
+  // Bound the nesting FIRST: a 2000-deep `metadata` value makes zod's `z.json()` overflow the
+  // stack (RangeError), which would escape as ERR_INTERNAL instead of blaming the plan.
+  const tooDeep = findJsonTooDeep(planInput);
+  if (tooDeep !== undefined) {
+    throw new AxiomError(
+      "ERR_INVALID_PLAN",
+      `plan nests ${tooDeep.depth} levels deep, over the ${MAX_PLAN_JSON_DEPTH} limit`,
+      { details: { at: tooDeep.at, depth: tooDeep.depth, max: MAX_PLAN_JSON_DEPTH } },
+    );
+  }
+  // An editor-added top-level `$schema` is an editor hint, not plan data: drop it exactly as the
+  // YAML reader does, so `plan.json` and `plan.yaml` with the same content share one digest.
+  const parsed = PlanSchema.safeParse(stripPlanEditorKeys(planInput));
   if (!parsed.success) throw invalidPlan(parsed.error);
   const plan = parsed.data;
 
@@ -428,8 +494,12 @@ export async function compilePlan(
     if (r.artifact.digest !== undefined) digests.set(r.artifact.path, r.artifact.digest.sha256);
     if (r.emitter !== undefined) usedEmitters.set(r.emitter.id, r.emitter.version);
   }
-  const planDigest = canonicalDigestRef(digestOnlyPlan(plan, digests));
-  const toolchain = splitToolchain(opts.toolchain, usedEmitters);
+  const planDigest = canonicalPlanRef(digestOnlyPlan(plan, digests));
+  const toolchain = splitToolchain(
+    opts.toolchain,
+    usedEmitters,
+    opts.toolchainVersion ?? AXIOM_VERSION,
+  );
 
   // S-402: bind the manifest to the tree it was compiled against. Sorted like artifacts.
   const read = preImageReader(opts);
@@ -460,7 +530,7 @@ export async function compilePlan(
   };
   if (plan.counter !== undefined) body.counter = plan.counter;
   if (preImage !== undefined) body.preImage = preImage;
-  const manifestDigest = canonicalDigestRef(body);
+  const manifestDigest = canonicalPlanRef(body);
 
   const blobs: Record<DigestRef, Blob> = {};
   const useCas = opts.store === "cas" && opts.root !== undefined;

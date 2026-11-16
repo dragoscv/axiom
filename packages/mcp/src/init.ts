@@ -28,6 +28,7 @@ import {
 } from "./daemon-proto.js";
 import { OPENCODE_PLUGIN_JS } from "./opencode-plugin.js";
 import { realDir } from "./roots.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 export const HARNESSES = [
   "copilot",
@@ -300,30 +301,54 @@ export const CLAUDE_POST_HOOK_ENTRY = {
   hooks: [{ type: "command", command: gatePostCommand("claude"), timeout: HOOK_TIMEOUT_SEC }],
 };
 
+/**
+ * npm spec of the AXIOM MCP server written into every harness entry: the SAME major as this
+ * build (A3-2/DX-3). It used to be the literal `@codai/axiom-mcp@2`, so a fresh `init` wired the
+ * 2.x server — which cannot read a 3.0+ plan or profile and carries the 2.x apply bugs
+ * (`SECURITY.md` calls that line unsupported). `doctor` and `--upgrade` read entries through
+ * `npxMcpArgs`, which accepts any spec, so an old `@2` entry is still recognised (and rewritten
+ * with `--upgrade`).
+ */
+/** Major of the running build: what every generated MCP entry must name (A3-2). */
+export const AXIOM_MCP_MAJOR: string = PACKAGE_VERSION.split(".")[0] ?? "";
+
+/** Any `@codai/axiom-mcp` version spec, with or without a major (`@2`, `@3.1.0`, bare). */
+export const AXIOM_PKG_RE: RegExp = /^@codai\/axiom-mcp(?:@[^\s]*)?$/;
+
+/** Major pinned by an `@codai/axiom-mcp@<major>` spec, or `undefined` when it names none. */
+export function axiomMcpSpecMajor(spec: string): string | undefined {
+  return /^@codai\/axiom-mcp@(\d+)(?:[.\-+].*)?$/.exec(spec)?.[1];
+}
+
+export function axiomMcpSpec(version: string = PACKAGE_VERSION): string {
+  const major = version.split(".")[0];
+  return major === undefined || major === "" ? "@codai/axiom-mcp" : `@codai/axiom-mcp@${major}`;
+}
+
 export const MCP_SERVER_ENTRY = {
   type: "stdio",
   command: "npx",
   // biome-ignore lint/suspicious/noTemplateCurlyInString: VS Code substitutes ${workspaceFolder} itself.
-  args: ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "${workspaceFolder}"],
+  args: ["-y", axiomMcpSpec(), "mcp", "--root", "${workspaceFolder}"],
 };
 
 /** Cursor interpolates `${workspaceFolder}` in mcp.json command/args/env. */
 export const CURSOR_MCP_ENTRY = {
   command: "npx",
   // biome-ignore lint/suspicious/noTemplateCurlyInString: Cursor substitutes ${workspaceFolder} itself.
-  args: ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "${workspaceFolder}"],
+  args: ["-y", axiomMcpSpec(), "mcp", "--root", "${workspaceFolder}"],
 };
 
 /** Harnesses without a documented workspace variable: the server starts in the project dir. */
 export const PROJECT_MCP_ENTRY = {
   command: "npx",
-  args: ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "."],
+  args: ["-y", axiomMcpSpec(), "mcp", "--root", "."],
 };
 
 export const CODEX_MCP_TOML = [
   "[mcp_servers.axiom]",
   'command = "npx"',
-  'args = ["-y", "@codai/axiom-mcp@2", "mcp", "--root", "."]',
+  `args = ["-y", "${axiomMcpSpec()}", "mcp", "--root", "."]`,
 ];
 
 export function cursorHooks(bin: GateBin = "axiom"): Record<string, unknown> {
@@ -1337,8 +1362,6 @@ export function toDaemonCommand(cmd: string): string {
     .replace(/(^|[\s"'&(])axiom(?=\s+gate\b)/g, "$1axiom-hook");
 }
 
-const AXIOM_PKG_RE = /^@codai\/axiom-mcp(?:@[^\s]*)?$/;
-
 /** `npx -y @codai/axiom-mcp@2 mcp --root X` args → `["mcp", "--root", X]`; undefined = not ours. */
 export function npxMcpArgs(command: unknown, args: unknown): string[] | undefined {
   if (command !== "npx" || !Array.isArray(args)) return undefined;
@@ -1362,6 +1385,17 @@ function upgradeMcpEntry(
   const rest = npxMcpArgs(entry.command, entry.args);
   if (rest === undefined) return [];
   if (!binPresent) {
+    // No global bin to point at: keep npx, but move a stale spec forward to THIS major (A3-2).
+    // Leaving `@2` in place is what made `--upgrade` a silent no-op on an old wiring.
+    const args: unknown[] = Array.isArray(entry.args) ? entry.args : [];
+    const at = args.findIndex((a) => typeof a === "string" && AXIOM_PKG_RE.test(a));
+    const spec = axiomMcpSpec();
+    if (at >= 0 && args[at] !== spec) {
+      const next = [...args];
+      next[at] = spec;
+      entry.args = next;
+      return [`${key}.axiom: npx spec -> ${spec}`];
+    }
     skipped.npx = true;
     return [];
   }

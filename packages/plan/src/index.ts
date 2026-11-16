@@ -20,6 +20,13 @@ export {
   parseV4A,
 } from "./patch.js";
 export {
+  findJsonTooDeep,
+  type JsonDepthViolation,
+  MAX_PLAN_JSON_DEPTH,
+  PLAN_EDITOR_KEYS,
+  stripPlanEditorKeys,
+} from "./plan-input.js";
+export {
   hostAllowed,
   REF_BYTES_MAX,
   REF_TIMEOUT_MS,

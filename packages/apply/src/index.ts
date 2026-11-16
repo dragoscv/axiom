@@ -15,10 +15,15 @@ export { CAS_BLOB_BYTES_MAX, casPath, resolveContent } from "./blobs.js";
 export type { ResolvedTarget } from "./contain.js";
 export {
   checkOnDiskCaseCollision,
+  checkOnDiskPathCollision,
   checkReservedDir,
   checkTargetType,
+  gitDirReal,
   isReservedAxiomPath,
+  isReservedDirPath,
   probeCaseInsensitive,
+  RESERVED_DIR,
+  RESERVED_DIR_GIT,
   resolveContained,
   validateArtifactPaths,
 } from "./contain.js";
@@ -33,6 +38,7 @@ export {
   defaultBranchName,
   defaultCommitMessage,
   GIT_TIMEOUT_MS,
+  materializeWorktreePaths,
   parseRemote,
   removeWorktree,
   runGit,
@@ -50,6 +56,7 @@ export type {
   HistoryFile,
   JournalStatus,
   JournalSummary,
+  ListJournalsOptions,
 } from "./journal.js";
 export {
   appendChainEntry,
@@ -57,12 +64,15 @@ export {
   CHAIN_FILE,
   CHAIN_GENESIS,
   chainPath,
+  finalizeJournal,
   journalDir,
   journalPath,
   journalStatus,
   listJournals,
   newJournal,
   parseJournal,
+  pendingDir,
+  pendingPath,
   readHistory,
   readJournal,
   recordTerminal,
@@ -76,8 +86,10 @@ export type { Intent, IntentRecord, Lock, LockHolder, LockStatus } from "./lock.
 export {
   acquireLock,
   intentsDir,
+  LOCK_HEARTBEAT_MS,
   LOCK_STALE_MS,
   LOCK_TIMEOUT_MS,
+  liveHolderDigest,
   lockPath,
   lockStatus,
   overlappingPaths,

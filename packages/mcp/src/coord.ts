@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import type { RuleVerdict } from "./gate-verdict.js";
 import { gitDirs } from "./gitfacts.js";
+import { commandUnits } from "./shell-lex.js";
 
 export type CommandClass = "build" | "install" | "commit" | "deploy";
 
@@ -346,6 +347,11 @@ async function evaluateLeases(
  * Coordination rules for `command` (run in the checkout at `ctx.root`): `coord.leased`, then
  * `coord.frozen`, then `coord.queueRequired`. `undefined` = no opinion (also when a configured
  * dir does not exist). Never throws: any other read failure is a fail-closed verdict.
+ *
+ * Every check runs on the command UNITS that are not exempt, not on the raw string (EN-6): a
+ * wrapper named in a comment (`pnpm build # run-build.ps1`) or in another statement
+ * (`echo agentq.ps1; git commit -m x`) no longer exempts a command it never ran, and each unit is
+ * classified on its own.
  */
 export async function evaluateCoordination(
   command: string,
@@ -356,30 +362,35 @@ export async function evaluateCoordination(
   const env = ctx.env ?? process.env;
   const expand = (p: string | undefined): string | undefined =>
     p === undefined ? undefined : expandPath(p, home, env);
-  let exempt = false;
+  const exemptRe: RegExp[] = [];
   try {
-    exempt = (cfg.exemptVia ?? []).some((src) => new RegExp(src, "i").test(command));
+    for (const src of cfg.exemptVia ?? []) exemptRe.push(new RegExp(src, "i"));
   } catch {
     return failClosed("coord.frozen", "exemptVia regex");
   }
-  if (exempt) return undefined;
+  const units = commandUnits(command).map((u) => u.text);
+  const judged = (units.length > 0 ? units : [command]).filter(
+    (u) => !exemptRe.some((re) => re.test(u)),
+  );
+  if (judged.length === 0) return undefined;
+  const effective = judged.join("; ");
   const slotsRoot = expand(cfg.slotsRoot);
 
   const leasesDir = expand(cfg.leasesDir);
   if (leasesDir !== undefined && leasesDir !== "") {
     try {
-      const v = await evaluateLeases(command, leasesDir, slotsRoot);
+      const v = await evaluateLeases(effective, leasesDir, slotsRoot);
       if (v !== undefined) return v;
     } catch {
       return failClosed("coord.leased", "leases");
     }
   }
 
-  const classes = commandClasses(command);
+  const classes = commandClasses(effective);
   const marksDir = expand(cfg.marksDir);
   if (marksDir !== undefined && marksDir !== "") {
     try {
-      const v = await evaluateMarks(command, classes, marksDir, ctx.root, cfg);
+      const v = await evaluateMarks(effective, classes, marksDir, ctx.root, cfg);
       if (v !== undefined) return v;
     } catch {
       return failClosed("coord.frozen", "marks");
@@ -387,14 +398,17 @@ export async function evaluateCoordination(
   }
 
   for (const q of cfg.queueRequired ?? []) {
-    if (!classes.includes(q.class)) continue;
-    let via: boolean;
+    let via: RegExp;
     try {
-      via = new RegExp(q.via, "i").test(command);
+      via = new RegExp(q.via, "i");
     } catch {
       return failClosed("coord.queueRequired", "queueRequired regex");
     }
-    if (!via) {
+    // The wrapper must be the program of the unit that belongs to the class: naming it elsewhere
+    // in the command is not going through it.
+    for (const unit of judged) {
+      if (!commandClasses(unit).includes(q.class)) continue;
+      if (via.test(unit)) continue;
       return {
         id: "coord.queueRequired",
         reason: `${q.class} commands must go through the coordination queue, not run directly.`,

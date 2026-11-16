@@ -17,7 +17,18 @@ export class CanonicalizeError extends Error {
   }
 }
 
-function assertNoLoneSurrogates(s: string): void {
+/**
+ * Maximum object/array nesting `canonicalize` accepts (256 levels). Deeper input is rejected
+ * with a `CanonicalizeError` instead of overflowing the call stack, which would surface as a
+ * `RangeError` (and, upstream, as a generic `ERR_INTERNAL`).
+ */
+export const MAX_CANONICAL_DEPTH: number = 256;
+
+/**
+ * Index of the first unpaired surrogate in `s`, or -1. `TextEncoder` replaces such a code unit
+ * with U+FFFD without telling anyone, so any string bound for a digest must be checked first.
+ */
+export function findLoneSurrogate(s: string): number {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
@@ -26,10 +37,16 @@ function assertNoLoneSurrogates(s: string): void {
         i++;
         continue;
       }
-      throw new CanonicalizeError("lone high surrogate");
+      return i;
     }
-    if (c >= 0xdc00 && c <= 0xdfff) throw new CanonicalizeError("lone low surrogate");
+    if (c >= 0xdc00 && c <= 0xdfff) return i;
   }
+  return -1;
+}
+
+function assertNoLoneSurrogates(s: string): void {
+  const at = findLoneSurrogate(s);
+  if (at >= 0) throw new CanonicalizeError(`lone surrogate at index ${at}`);
 }
 
 function sortKeys(a: string, b: string): number {
@@ -37,8 +54,10 @@ function sortKeys(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Serialise `value` to its RFC 8785 canonical JSON text. */
-export function canonicalize(value: unknown): string {
+function serialize(value: unknown, depth: number): string {
+  if (depth > MAX_CANONICAL_DEPTH) {
+    throw new CanonicalizeError(`nesting exceeds ${MAX_CANONICAL_DEPTH} levels`);
+  }
   if (value === null) return "null";
   switch (typeof value) {
     case "boolean":
@@ -60,7 +79,7 @@ export function canonicalize(value: unknown): string {
   }
   if (Array.isArray(value)) {
     const items: unknown[] = value;
-    return `[${items.map((v) => canonicalize(v === undefined ? null : v)).join(",")}]`;
+    return `[${items.map((v) => serialize(v === undefined ? null : v, depth + 1)).join(",")}]`;
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj)
@@ -69,7 +88,12 @@ export function canonicalize(value: unknown): string {
   const parts: string[] = [];
   for (const k of keys) {
     assertNoLoneSurrogates(k);
-    parts.push(`${JSON.stringify(k)}:${canonicalize(obj[k])}`);
+    parts.push(`${JSON.stringify(k)}:${serialize(obj[k], depth + 1)}`);
   }
   return `{${parts.join(",")}}`;
+}
+
+/** Serialise `value` to its RFC 8785 canonical JSON text. */
+export function canonicalize(value: unknown): string {
+  return serialize(value, 0);
 }

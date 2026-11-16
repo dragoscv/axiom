@@ -192,31 +192,44 @@ describe.skipIf(!hasDist)("cli (dist/cli.js)", () => {
     const text = await readFile(CLI, "utf8");
     const mainText = await readFile(join(here, "..", "dist", "cli-main.js"), "utf8");
     expect(text.startsWith("#!/usr/bin/env node")).toBe(true);
+    /** Statement-level imports, single-line or a multi-line named list (`[^'"]` spans newlines). */
+    const staticImports = (src: string) =>
+      [...src.matchAll(/^import\s+[^'"]*?from\s*["']([^"']+)["']|^import\s+["']([^"']+)["']/gm)]
+        .map((m) => m[1] ?? m[2])
+        .filter((s): s is string => s !== undefined);
     // ESM bundle: every statement-level import must be a node: builtin or a sibling chunk. (Strings
     // `require("ajv/...")` inside ajv's code generator are template text, not module requests.)
     for (const src of [text, mainText]) {
-      const imports = [
-        ...src.matchAll(/^import\b[^\n]*?from\s+["']([^"']+)["']|^import\s+["']([^"']+)["']/gm),
-      ]
-        .map((m) => m[1] ?? m[2])
-        .filter((s): s is string => s !== undefined);
+      const imports = staticImports(src);
       expect(imports.length).toBeGreaterThan(0);
       expect(imports.filter((s) => !s.startsWith("node:") && !s.startsWith("./"))).toEqual([]);
     }
-    // The eager bundle must not statically pull sibling chunks (the .axm parser is `import()`-only).
-    expect(mainText).not.toMatch(/^import\b[^\n]*?from\s+["']\.\//m);
+    // The eager bundle must not statically pull a LAZY chunk: the gate engine, the MCP SDK, the
+    // .axm parser and the other CLI-only chunks are `import()`-only, so `axiom --version` and the
+    // hook fast path never pay for them. A small shared chunk (canon + signing keys) is fine, the
+    // same way `cli.js` has always shared the gate fast path; the run below copies every sibling
+    // chunk, transitively, and is the proof that the bundle needs no node_modules.
+    expect(staticImports(mainText).filter((s) => /^\.\/[a-z-]+-lazy/.test(s))).toEqual([]);
     // Empirical: a copy of the bundle in a directory with no node_modules still runs.
     const alone = join(repo.root, "alone");
     await mkdir(join(alone, "dist"), { recursive: true });
     await writeFile(join(alone, "dist", "cli.js"), text);
     await writeFile(join(alone, "dist", "cli-main.js"), mainText);
-    // cli.js may statically import small shared chunks (the zero-dependency gate fast path).
-    for (const m of text.matchAll(/^import\b[^\n]*?from\s+["']\.\/([^"']+)["']/gm)) {
-      const chunk = m[1] as string;
-      await writeFile(
-        join(alone, "dist", chunk),
-        await readFile(join(here, "..", "dist", chunk), "utf8"),
-      );
+    // Both entries may statically import small shared chunks; copy them and theirs, to a fixed point.
+    const copied = new Set<string>();
+    for (let queue = [text, mainText]; queue.length > 0; ) {
+      const next: string[] = [];
+      for (const src of queue) {
+        for (const m of src.matchAll(/from\s*["']\.\/([^"']+)["']/g)) {
+          const chunk = m[1] as string;
+          if (copied.has(chunk)) continue;
+          copied.add(chunk);
+          const body = await readFile(join(here, "..", "dist", chunk), "utf8");
+          await writeFile(join(alone, "dist", chunk), body);
+          next.push(body);
+        }
+      }
+      queue = next;
     }
     await writeFile(
       join(alone, "package.json"),

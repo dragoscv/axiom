@@ -109,6 +109,40 @@ describe("ManifestBodySchema", () => {
       false,
     );
   });
+
+  it("A1-20: preImage must cover exactly the artifact paths", () => {
+    const m = validManifest();
+    m.preImage = [
+      { path: "src/a.ts", sha256: HEX_A },
+      { path: "src/b.ts", sha256: "absent" },
+    ];
+    expect(ManifestBodySchema.safeParse(m).success).toBe(true);
+    // An empty preImage means "nothing was verified", which would let a check report
+    // `preImage: "verified"` over an empty set: structurally invalid, not vacuous.
+    m.preImage = [];
+    let r = ManifestBodySchema.safeParse(m);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "preImage")).toBe(true);
+      expect(
+        r.error.issues.map((i) => (i as { params?: { code?: string } }).params?.code ?? ""),
+      ).toContain("ERR_INVALID_MANIFEST");
+    }
+    // a subset, an extra path and a renamed path are refused too
+    m.preImage = [{ path: "src/a.ts", sha256: "absent" }];
+    expect(ManifestBodySchema.safeParse(m).success).toBe(false);
+    m.preImage = [
+      { path: "src/a.ts", sha256: "absent" },
+      { path: "src/z.ts", sha256: "absent" },
+    ];
+    expect(ManifestBodySchema.safeParse(m).success).toBe(false);
+    m.preImage = [
+      { path: "src/a.ts", sha256: "absent" },
+      { path: "src/renamed.ts", sha256: "absent" },
+    ];
+    r = ManifestBodySchema.safeParse(m);
+    expect(r.success).toBe(false);
+  });
 });
 
 describe("blobByteLength", () => {
@@ -144,6 +178,15 @@ describe("ManifestBundleSchema", () => {
     delete b.blobs;
     const r = ManifestBundleSchema.parse(b);
     expect(r.blobs).toEqual({});
+  });
+
+  it("A1-24: a bundle with no inline content is valid — the bytes may live in the CAS", () => {
+    const b = validBundle();
+    delete b.blobs;
+    const r = ManifestBundleSchema.parse(b);
+    expect(r.blobs).toEqual({});
+    // the artifacts still carry digests, so content is addressed even when it does not travel
+    expect(r.manifest.artifacts.some((a) => a.digest !== undefined)).toBe(true);
   });
 
   it("blob keys must be DigestRefs", () => {

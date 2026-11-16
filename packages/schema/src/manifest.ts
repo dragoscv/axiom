@@ -105,13 +105,34 @@ export const ManifestBodySchema = z
   })
   .strict()
   .superRefine((m, ctx) => {
-    if (m.preImage !== undefined && !isSortedUnique(m.preImage.map((p) => p.path))) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["preImage"],
-        message: "preImage must be sorted by path (UTF-8 byte order) and unique",
-        params: { code: "ERR_NOT_CANONICAL" },
-      });
+    if (m.preImage !== undefined) {
+      if (!isSortedUnique(m.preImage.map((p) => p.path))) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["preImage"],
+          message: "preImage must be sorted by path (UTF-8 byte order) and unique",
+          params: { code: "ERR_NOT_CANONICAL" },
+        });
+      }
+      // S-402 binding: `preImage` describes the tree the MANIFEST was compiled against, so it
+      // covers exactly the manifest's artifact paths — no more, no less. An empty or partial
+      // list would make a check report `preImage: "verified"` without verifying anything.
+      const artifactPaths = m.artifacts.map((a) => a.path);
+      const preImagePaths = m.preImage.map((p) => p.path);
+      const sameLength = artifactPaths.length === preImagePaths.length;
+      const samePaths = sameLength && artifactPaths.every((path, i) => path === preImagePaths[i]);
+      if (!samePaths) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["preImage"],
+          message: "preImage paths must equal the artifact paths",
+          params: {
+            code: "ERR_INVALID_MANIFEST",
+            artifacts: artifactPaths.length,
+            preImage: preImagePaths.length,
+          },
+        });
+      }
     }
     if (!isSortedUnique(m.artifacts.map((a) => a.path))) {
       ctx.addIssue({
@@ -283,7 +304,16 @@ export const ManifestBundleSchema = z
           .loose(),
       )
       .optional(),
-    /** Inline side-channel keyed by `sha256:<hex>`. */
+    /**
+     * Inline side-channel keyed by `sha256:<hex>`.
+     *
+     * Optional on purpose (D-22): content is not part of the canonical manifest and may travel
+     * entirely out of band — `compile --store cas` writes every blob under
+     * `<root>/.axiom/cas` and `ref` artifacts are resolved from the CAS too. A bundle with no
+     * `blobs` therefore means "no inline content", not "unusable bundle"; consumers read it
+     * through the schema default (`{}`) or the CAS. Apply resolves a missing blob as
+     * `ERR_BLOB_MISSING`, never as a crash (A1-24).
+     */
     blobs: z.record(DigestRefSchema, BlobSchema).default({}),
   })
   .strict()

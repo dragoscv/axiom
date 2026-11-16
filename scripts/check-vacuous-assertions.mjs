@@ -39,7 +39,6 @@ const WAIVER = /\/\/\s*message-ok:\s*\S{3,}/;
  */
 const LEGACY_ALLOW = new Map([
   ["packages/apply/src/fsx.test.ts", { skipIf: 1 }],
-  ["packages/apply/src/git.test.ts", { skipIf: 1 }],
   ["packages/checks/src/predicates/cel.test.ts", { message: 1 }],
   ["packages/checks/src/predicates/predicates.test.ts", { message: 2 }],
   ["packages/checks/src/predicates/util.test.ts", { skipIf: 2 }],

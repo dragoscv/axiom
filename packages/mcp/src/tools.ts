@@ -2,7 +2,15 @@ import { access, constants, lstat, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { appliedPath, apply, rollback } from "@codai/axiom-apply";
 import { type GuardOptions, loadProfile, runChecks } from "@codai/axiom-checks";
-import { compilePlan, diffManifests, type EmitterRegistry, verifyBundle } from "@codai/axiom-plan";
+import {
+  compilePlan,
+  diffManifests,
+  type EmitterRegistry,
+  findJsonTooDeep,
+  MAX_PLAN_JSON_DEPTH,
+  stripPlanEditorKeys,
+  verifyBundle,
+} from "@codai/axiom-plan";
 import {
   API_VERSION,
   ApplyResultSchema,
@@ -42,6 +50,7 @@ import {
   type TaskStore,
 } from "./tasks.js";
 import { CORE_TOOL_NAMES, type Toolset } from "./toolset.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 export {
   CORE_TOOL_NAMES,
@@ -167,6 +176,16 @@ export function guardPayloadSize(label: string, value: unknown): void {
 
 function parseBundle(raw: unknown): ManifestBundle {
   guardPayloadSize("bundle", raw);
+  // A bundle's `checks[].params` is free-form JSON: cap the nesting before the schema walks it,
+  // or a deep `params` overflows zod's recursion with a RangeError (A1-15).
+  const tooDeep = findJsonTooDeep(raw);
+  if (tooDeep !== undefined) {
+    throw new AxiomError(
+      "ERR_INVALID_MANIFEST",
+      `bundle nests ${tooDeep.depth} levels deep, over the ${MAX_PLAN_JSON_DEPTH} limit`,
+      { details: { at: tooDeep.at, depth: tooDeep.depth, max: MAX_PLAN_JSON_DEPTH } },
+    );
+  }
   const parsed = ManifestBundleSchema.safeParse(raw);
   if (!parsed.success) {
     throw new AxiomError("ERR_INVALID_MANIFEST", "bundle does not match ManifestBundleSchema", {
@@ -516,6 +535,7 @@ async function compileWrite(
     store: "inline",
     emitters: NO_EMITTERS,
     root: rootReal,
+    toolchainVersion: PACKAGE_VERSION,
   });
   return bundle;
 }
@@ -680,7 +700,23 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     annotations: READ,
     async handler(ctx, { plan }) {
       guardPayloadSize("plan", plan);
-      const parsed = PlanSchema.safeParse(plan);
+      // Same JSON-depth cap compile enforces: zod's `z.json()` recurses per level and a
+      // 2000-deep `metadata` value would overflow the stack (RangeError) instead of reporting
+      // an issue (A1-15).
+      const tooDeep = findJsonTooDeep(plan);
+      if (tooDeep !== undefined) {
+        return {
+          ok: false,
+          errors: [
+            {
+              path: tooDeep.at,
+              message: `plan nests ${tooDeep.depth} levels deep, over the ${MAX_PLAN_JSON_DEPTH} limit`,
+              code: "ERR_INVALID_PLAN",
+            },
+          ],
+        };
+      }
+      const parsed = PlanSchema.safeParse(stripPlanEditorKeys(plan));
       if (!parsed.success) {
         return {
           ok: false,
@@ -697,7 +733,11 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       }
       try {
         const { bundle } = await withEmitterHint(
-          compilePlan(parsed.data, { store: "inline", emitters: ctx.emitters ?? NO_EMITTERS }),
+          compilePlan(parsed.data, {
+            store: "inline",
+            emitters: ctx.emitters ?? NO_EMITTERS,
+            toolchainVersion: PACKAGE_VERSION,
+          }),
         );
         return { ok: true, planDigest: bundle.manifest.planDigest, errors: [] };
       } catch (err) {
@@ -902,6 +942,14 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
     annotations: ACT,
     async handler(ctx, { sessionId, artifacts }) {
       guardPayloadSize("artifacts", artifacts);
+      const tooDeep = findJsonTooDeep(artifacts);
+      if (tooDeep !== undefined) {
+        throw new AxiomError(
+          "ERR_INVALID_PLAN",
+          `artifacts nest ${tooDeep.depth} levels deep, over the ${MAX_PLAN_JSON_DEPTH} limit`,
+          { details: { at: tooDeep.at, depth: tooDeep.depth, max: MAX_PLAN_JSON_DEPTH } },
+        );
+      }
       const parsed = z.array(PlanArtifactSchema).safeParse(artifacts);
       if (!parsed.success) {
         throw new AxiomError("ERR_INVALID_PLAN", "artifacts do not match PlanArtifactSchema", {
@@ -1408,6 +1456,9 @@ async function compileToBundle(
   const opts: Parameters<typeof compilePlan>[1] = {
     store: store ?? "inline",
     emitters: ctx.emitters ?? NO_EMITTERS,
+    // Provenance (A1-16): both `axiom_plan_compile` and `axiom_plan_seal` funnel through here,
+    // so a sealed chunked plan and a one-shot compile of the same Plan agree byte for byte.
+    toolchainVersion: PACKAGE_VERSION,
   };
   if (rootReal !== undefined) opts.root = rootReal;
   const { bundle } = await withEmitterHint(compilePlan(plan, opts));

@@ -1,7 +1,7 @@
 import type { Finding } from "@codai/axiom-schema";
 import { z } from "zod";
 import { definePredicate } from "../types.js";
-import { finding, globMatcher, isUtf8 } from "./util.js";
+import { finding, GlobListSchema, globMatcher, isUtf8, unreadableContent } from "./util.js";
 
 /** Luhn checksum over a digit string (ISO/IEC 7812-1); every real PAN passes it. */
 export function luhnValid(digits: string): boolean {
@@ -152,13 +152,10 @@ export const PII_PATTERN_NAMES: readonly string[] = SECRET_PATTERNS.filter(
   (p) => p.kind === "pii",
 ).map((p) => p.name);
 
-/** Max bytes scanned per artifact; longer content is scanned as a prefix. */
-const SCAN_LIMIT = 4 * 1024 * 1024;
-
 const NoSecretsParams = z
   .object({
     disable: z.array(z.string()).default([]),
-    allowPaths: z.array(z.string().min(1)).default([]),
+    allowPaths: GlobListSchema.default([]),
     /** Also scan for personal data (`cnp`, `email`, `phoneRo`, `card`). Default off. */
     pii: z.boolean().default(false),
   })
@@ -178,8 +175,13 @@ export const contentNoSecrets = definePredicate<z.infer<typeof NoSecretsParams>>
     for (const a of ctx.manifest.artifacts) {
       if (a.op === "delete" || skip(a.path)) continue;
       const bytes = await ctx.facts.content(a.path);
-      if (bytes === undefined) continue;
-      const text = decoder.decode(bytes.subarray(0, SCAN_LIMIT));
+      // A1-9: the whole artifact is scanned (a secret past the old 4 MiB prefix was invisible)
+      // and unreadable content is a provider failure, not a pass.
+      if (bytes === undefined) {
+        out.push(unreadableContent("content.noSecrets", a.path));
+        continue;
+      }
+      const text = decoder.decode(bytes);
       for (const p of active) {
         const hit = p.test !== undefined ? p.test(text) : (p.re?.test(text) ?? false);
         if (!hit) continue;
@@ -199,7 +201,7 @@ export const contentNoSecrets = definePredicate<z.infer<typeof NoSecretsParams>>
 });
 
 const MaxBytesParams = z
-  .object({ max: z.int().nonnegative(), globs: z.array(z.string().min(1)).optional() })
+  .object({ max: z.int().nonnegative(), globs: GlobListSchema.optional() })
   .strict();
 
 export const contentMaxBytes = definePredicate<z.infer<typeof MaxBytesParams>>({
@@ -213,7 +215,11 @@ export const contentMaxBytes = definePredicate<z.infer<typeof MaxBytesParams>>({
       if (a.op === "delete" || !applies(a.path)) continue;
       let bytes = a.bytes;
       if (bytes === undefined) bytes = (await ctx.facts.content(a.path))?.length;
-      if (bytes === undefined || bytes <= max) continue;
+      if (bytes === undefined) {
+        out.push(unreadableContent("content.maxBytes", a.path));
+        continue;
+      }
+      if (bytes <= max) continue;
       out.push(
         finding({
           id: "content.maxBytes",
@@ -228,7 +234,7 @@ export const contentMaxBytes = definePredicate<z.infer<typeof MaxBytesParams>>({
   },
 });
 
-const EncodingParams = z.object({ globs: z.array(z.string().min(1)).optional() }).strict();
+const EncodingParams = z.object({ globs: GlobListSchema.optional() }).strict();
 
 export const contentEncodingUtf8 = definePredicate<z.infer<typeof EncodingParams>>({
   id: "content.encodingUtf8",
@@ -240,7 +246,11 @@ export const contentEncodingUtf8 = definePredicate<z.infer<typeof EncodingParams
     for (const a of ctx.manifest.artifacts) {
       if (a.op === "delete" || !applies(a.path)) continue;
       const bytes = await ctx.facts.content(a.path);
-      if (bytes === undefined || isUtf8(bytes)) continue;
+      if (bytes === undefined) {
+        out.push(unreadableContent("content.encodingUtf8", a.path));
+        continue;
+      }
+      if (isUtf8(bytes)) continue;
       out.push(
         finding({
           id: "content.encodingUtf8",

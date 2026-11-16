@@ -2,6 +2,7 @@ import cp, { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import * as path from "node:path";
+import { canonicalDigestRef, sha256Hex } from "@codai/axiom-canon";
 import type { ManifestBundle } from "@codai/axiom-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apply } from "./apply.js";
@@ -150,6 +151,7 @@ describe("compare url", () => {
   });
 });
 
+// skipIf: PR mode needs a real `git` binary on PATH (spawn-based branch + commit).
 describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
   it("happy path: deterministic branch, commits exactly the touched paths, shared tree untouched", async () => {
     const root = await mkRepo();
@@ -471,3 +473,52 @@ describe.skipIf(!gitAvailable)("PR mode (real git)", () => {
     expect(killed).toBe(1);
   });
 });
+
+// skipIf: the line-ending fix is only observable through a real `git` checkout.
+describe.skipIf(!gitAvailable)(
+  "QA-3: pre-images survive line-ending normalisation (PR mode)",
+  () => {
+    /** A repo whose system-level `core.autocrlf=true` is the reported failure trigger. */
+    async function mkRepoAutocrlf(diskEol: "lf" | "crlf"): Promise<string> {
+      const root = await mkRoot();
+      git(root, ["init", "-q", "-b", "main"]);
+      git(root, ["config", "user.email", "axiom@test.invalid"]);
+      git(root, ["config", "user.name", "axiom test"]);
+      git(root, ["config", "commit.gpgsign", "false"]);
+      git(root, ["config", "core.autocrlf", "true"]);
+      await fs.writeFile(path.join(root, "over.txt"), diskEol === "lf" ? "v1\n" : "v1\r\n");
+      git(root, ["add", "--", "over.txt"]);
+      git(root, ["commit", "-q", "-m", "init"]);
+      // git normalises when comparing, so a CRLF working tree is still clean.
+      expect(git(root, ["status", "--porcelain"])).toBe("");
+      return root;
+    }
+
+    for (const diskEol of ["lf", "crlf"] as const) {
+      it(`applies the overwrite with core.autocrlf=true and a ${diskEol.toUpperCase()} working tree`, async () => {
+        const root = await mkRepoAutocrlf(diskEol);
+        const disk = diskEol === "lf" ? "v1\n" : "v1\r\n";
+        const bundle = makeBundle([{ path: "over.txt", op: "overwrite", content: "v2\n" }], {
+          name: "auto",
+        });
+        // What `plan compile` recorded: the bytes exactly as the shared tree holds them.
+        const manifest = {
+          ...bundle.manifest,
+          preImage: [{ path: "over.txt", sha256: sha256Hex(disk) }],
+        };
+        const bound = {
+          ...bundle,
+          manifest,
+          manifestDigest: canonicalDigestRef(manifest),
+        };
+        const r = await prApply(bound, root);
+        expect(r.error, JSON.stringify(r.error)).toBeUndefined();
+        expect(r.status).toBe("applied");
+        // The shared tree is untouched; the branch carries the new content.
+        expect(await readText(root, "over.txt")).toBe(disk);
+        expect(git(root, ["show", `${r.git?.branch ?? "?"}:over.txt`])).toBe("v2\n");
+        expect(git(root, ["status", "--porcelain"])).toBe("");
+      });
+    }
+  },
+);

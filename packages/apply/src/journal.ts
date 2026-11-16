@@ -13,6 +13,7 @@ import {
   type JournalStep,
 } from "@codai/axiom-schema";
 import { errnoCode, fsyncDir, nsPath } from "./fsx.js";
+import { liveHolderDigest } from "./lock.js";
 
 export function journalDir(root: string): string {
   return path.join(root, ".axiom", "journal");
@@ -20,6 +21,63 @@ export function journalDir(root: string): string {
 
 export function journalPath(root: string, digest: DigestRef): string {
   return path.join(journalDir(root), `${digest.slice("sha256:".length)}.json`);
+}
+
+/**
+ * A1-18: the crash-recovery hot path must not parse the whole history. Every journal still in a
+ * non-terminal phase has a marker in this directory (an empty file named after the digest); the
+ * journal file itself stays at `.axiom/journal/<hex>.json`, so no reader, path or document
+ * changes. `listJournals(root, { pendingOnly: true })` reads only the markers, which makes
+ * recovery O(in-flight) instead of O(history).
+ */
+export function pendingDir(root: string): string {
+  return path.join(journalDir(root), "pending");
+}
+
+export function pendingPath(root: string, digest: DigestRef): string {
+  return path.join(pendingDir(root), digest.slice("sha256:".length));
+}
+
+/**
+ * Phases whose journal is still listed in the pending index. `committed` is listed too: until the
+ * applied marker exists and the staging tree is gone, recovery still has work (and A1-19: a
+ * committed journal without a marker must be rebuildable). `apply()` calls `finalizeJournal`
+ * once that work is done, which is what keeps the index small however long the history grows.
+ */
+const PENDING_PHASES: ReadonlySet<JournalPhase> = new Set<JournalPhase>([
+  "staged",
+  "committing",
+  "committed",
+  "rolling-back",
+]);
+
+/** Idempotent; written BEFORE the journal so a non-terminal journal is never unlisted. */
+async function markPending(root: string, digest: DigestRef): Promise<void> {
+  const dir = pendingDir(root);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(nsPath(pendingPath(root, digest)), "", "utf8");
+}
+
+/** Removed AFTER the terminal journal is on disk, so a stale marker can only ever be inert. */
+async function clearPending(root: string, digest: DigestRef): Promise<void> {
+  await fs.rm(nsPath(pendingPath(root, digest)), { force: true }).catch(() => undefined);
+}
+
+/**
+ * Drop a digest from the pending index. Called by the engine once a committed journal has its
+ * applied marker and no staging tree left, and by recovery after it has done the same.
+ */
+export async function finalizeJournal(root: string, digest: DigestRef): Promise<void> {
+  await clearPending(root, digest);
+}
+
+async function readdirOrEmpty(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return [];
+    throw err;
+  }
 }
 
 export function newJournal(manifestDigest: DigestRef, steps: JournalStep[]): Journal {
@@ -37,6 +95,10 @@ export async function writeJournal(root: string, journal: Journal): Promise<stri
   const dir = journalDir(root);
   await fs.mkdir(dir, { recursive: true });
   const target = journalPath(root, journal.manifestDigest);
+  const pending = PENDING_PHASES.has(journal.phase);
+  // Marker first: a crash after it leaves an inert marker, never an unlisted non-terminal
+  // journal (which recovery would miss).
+  if (pending) await markPending(root, journal.manifestDigest);
   const tmp = `${target}.tmp-${process.pid}`;
   const fh = await fs.open(nsPath(tmp), "w");
   try {
@@ -47,6 +109,7 @@ export async function writeJournal(root: string, journal: Journal): Promise<stri
   }
   await fs.rename(nsPath(tmp), nsPath(target));
   await fsyncDir(dir);
+  if (!pending) await clearPending(root, journal.manifestDigest);
   return target;
 }
 
@@ -81,10 +144,58 @@ export function parseJournal(raw: string, p: string): Journal {
   return r.data;
 }
 
+export interface ListJournalsOptions {
+  /**
+   * Read only the pending index: the journals still in a non-terminal phase. This is what
+   * crash recovery needs, and it keeps the cost independent of how much history a root has
+   * accumulated (A1-18).
+   */
+  pendingOnly?: boolean;
+}
+
+/**
+ * The pending index, resolved back to journals. A marker whose journal is gone (crashed between
+ * the marker and the journal write) is dropped; one whose journal is corrupt is reported.
+ */
+async function listPendingJournals(
+  root: string,
+): Promise<{ journals: Journal[]; corrupt: string[] }> {
+  const journals: Journal[] = [];
+  const corrupt: string[] = [];
+  for (const name of await readdirOrEmpty(pendingDir(root))) {
+    if (!/^[a-f0-9]{64}$/.test(name)) continue;
+    const digest: DigestRef = `sha256:${name}`;
+    const p = journalPath(root, digest);
+    let raw: string;
+    try {
+      raw = await fs.readFile(nsPath(p), "utf8");
+    } catch {
+      // Nothing to recover and no journal to report: the marker is stale, drop it.
+      await clearPending(root, digest);
+      continue;
+    }
+    let journal: Journal;
+    try {
+      journal = parseJournal(raw, p);
+    } catch {
+      corrupt.push(p);
+      continue;
+    }
+    if (!PENDING_PHASES.has(journal.phase)) {
+      await clearPending(root, digest);
+      continue;
+    }
+    journals.push(journal);
+  }
+  return { journals, corrupt };
+}
+
 /** All journals under `.axiom/journal/` (corrupt ones are reported, not thrown). */
 export async function listJournals(
   root: string,
+  opts: ListJournalsOptions = {},
 ): Promise<{ journals: Journal[]; corrupt: string[] }> {
+  if (opts.pendingOnly === true) return listPendingJournals(root);
   const dir = journalDir(root);
   let names: string[];
   try {
@@ -119,6 +230,7 @@ export async function setPhase(
 
 export async function removeJournal(root: string, digest: DigestRef): Promise<void> {
   await fs.rm(journalPath(root, digest), { force: true });
+  await clearPending(root, digest);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,8 +611,11 @@ const INTERRUPTED: ReadonlySet<JournalPhase> = new Set<JournalPhase>([
 /** Snapshot for `axiom status`. Read-only; does not need the lock. */
 export async function journalStatus(root: string): Promise<JournalStatus> {
   const { journals, corrupt } = await listJournals(root);
+  // QA-14: a journal whose digest is announced by a LIVE lock holder (heartbeat inside
+  // LOCK_STALE_MS) is an apply in flight, not an interrupted one.
+  const live = await liveHolderDigest(root);
   const interrupted = journals
-    .filter((j) => INTERRUPTED.has(j.phase))
+    .filter((j) => INTERRUPTED.has(j.phase) && j.manifestDigest !== live)
     .map((j) => ({
       manifestDigest: j.manifestDigest,
       phase: j.phase,

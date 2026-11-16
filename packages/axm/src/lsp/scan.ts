@@ -21,16 +21,31 @@ const IDENT_START = /[A-Za-z0-9_]/;
 const IDENT_PART = /[A-Za-z0-9_-]/;
 const DIGEST = /^"sha256:[a-f0-9]{64}"$/;
 
+/**
+ * True when the token at `k` is the plan's NAME, i.e. it directly follows `plan` (keywords are
+ * valid identifiers, so `plan meta {` names a plan called `meta`). Mirrors `isPlanName` in
+ * `../lexer.ts`; without it the scanner took that `{` for a JSON block (A3-16 scanner drift).
+ */
+function isPlanName(sig: readonly ScanToken[], k: number): boolean {
+  const prev = sig[k - 1];
+  return prev !== undefined && prev.kind === "ident" && prev.image === "plan";
+}
+
 function isJsonExpected(sig: readonly ScanToken[]): boolean {
   let i = sig.length - 1;
   const at = (k: number): ScanToken | undefined => sig[k];
-  if (at(i)?.image === "meta" && at(i)?.kind === "ident") return true;
+  if (at(i)?.image === "meta" && at(i)?.kind === "ident") return !isPlanName(sig, i);
   if (at(i)?.kind === "string" || at(i)?.kind === "digest") i--;
   if (at(i)?.kind !== "ident") return false;
+  if (isPlanName(sig, i)) return false;
   i--;
   while (at(i)?.image === "." && at(i - 1)?.kind === "ident") i -= 2;
   const head = at(i);
-  return head?.kind === "ident" && (head.image === "using" || head.image === "template");
+  return (
+    head?.kind === "ident" &&
+    (head.image === "using" || head.image === "template") &&
+    !isPlanName(sig, i)
+  );
 }
 
 function scanBalanced(text: string, start: number): number {

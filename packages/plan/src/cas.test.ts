@@ -59,4 +59,18 @@ describe("cas", () => {
     expect(code).toBe("ERR_DIGEST_MISMATCH");
     expect(new TextDecoder().decode(await casGetUnverified(root, hex))).toBe("EVIL");
   });
+
+  it("casPut heals a corrupt entry instead of leaving that digest unusable forever", async () => {
+    root = await mkdtemp(join(tmpdir(), "axiom-cas-"));
+    const bytes = new TextEncoder().encode("TRUTH");
+    const hex = sha256Hex(bytes);
+    const p = casPath(root, hex);
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, "POISON");
+    expect(await casPut(root, bytes)).toBe(hex);
+    expect(await casGet(root, hex)).toEqual(bytes);
+    // a second put of a healthy entry is still a no-op
+    expect(await casPut(root, bytes)).toBe(hex);
+    expect(new TextDecoder().decode(await casGetUnverified(root, hex))).toBe("TRUTH");
+  });
 });

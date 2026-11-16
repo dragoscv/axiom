@@ -701,6 +701,7 @@
                   "ERR_PREDICATE_UNKNOWN",
                   "ERR_PREDICATE_PARAMS",
                   "ERR_PROVIDER_FAILED",
+                  "ERR_POLICY_FLOOR",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
                   "ERR_FACT_DISABLED",
@@ -731,6 +732,7 @@
                   "ERR_NOT_CANONICAL",
                   "ERR_DAEMON_AUTH",
                   "ERR_USAGE",
+                  "ERR_INVALID_INPUT",
                   "ERR_UNSUPPORTED_OP",
                   "ERR_INTERNAL"
                 ]
@@ -2432,6 +2434,14 @@
             "description": "Relative POSIX path, NFC, no reserved names"
           }
         },
+        "interrupted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "sha256:<64 lowercase hex>"
+          }
+        },
         "error": {
           "type": "object",
           "properties": {
@@ -2474,6 +2484,7 @@
                 "ERR_PREDICATE_UNKNOWN",
                 "ERR_PREDICATE_PARAMS",
                 "ERR_PROVIDER_FAILED",
+                "ERR_POLICY_FLOOR",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
                 "ERR_FACT_DISABLED",
@@ -2504,6 +2515,7 @@
                 "ERR_NOT_CANONICAL",
                 "ERR_DAEMON_AUTH",
                 "ERR_USAGE",
+                "ERR_INVALID_INPUT",
                 "ERR_UNSUPPORTED_OP",
                 "ERR_INTERNAL"
               ]
@@ -2740,6 +2752,14 @@
             "description": "Relative POSIX path, NFC, no reserved names"
           }
         },
+        "interrupted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "sha256:<64 lowercase hex>"
+          }
+        },
         "error": {
           "type": "object",
           "properties": {
@@ -2782,6 +2802,7 @@
                 "ERR_PREDICATE_UNKNOWN",
                 "ERR_PREDICATE_PARAMS",
                 "ERR_PROVIDER_FAILED",
+                "ERR_POLICY_FLOOR",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
                 "ERR_FACT_DISABLED",
@@ -2812,6 +2833,7 @@
                 "ERR_NOT_CANONICAL",
                 "ERR_DAEMON_AUTH",
                 "ERR_USAGE",
+                "ERR_INVALID_INPUT",
                 "ERR_UNSUPPORTED_OP",
                 "ERR_INTERNAL"
               ]
@@ -3079,6 +3101,14 @@
             "description": "Relative POSIX path, NFC, no reserved names"
           }
         },
+        "interrupted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "sha256:<64 lowercase hex>"
+          }
+        },
         "error": {
           "type": "object",
           "properties": {
@@ -3121,6 +3151,7 @@
                 "ERR_PREDICATE_UNKNOWN",
                 "ERR_PREDICATE_PARAMS",
                 "ERR_PROVIDER_FAILED",
+                "ERR_POLICY_FLOOR",
                 "ERR_GUARD_TIMEOUT",
                 "ERR_GUARD_OUTPUT",
                 "ERR_FACT_DISABLED",
@@ -3151,6 +3182,7 @@
                 "ERR_NOT_CANONICAL",
                 "ERR_DAEMON_AUTH",
                 "ERR_USAGE",
+                "ERR_INVALID_INPUT",
                 "ERR_UNSUPPORTED_OP",
                 "ERR_INTERNAL"
               ]
@@ -3771,6 +3803,7 @@
                   "ERR_PREDICATE_UNKNOWN",
                   "ERR_PREDICATE_PARAMS",
                   "ERR_PROVIDER_FAILED",
+                  "ERR_POLICY_FLOOR",
                   "ERR_GUARD_TIMEOUT",
                   "ERR_GUARD_OUTPUT",
                   "ERR_FACT_DISABLED",
@@ -3801,6 +3834,7 @@
                   "ERR_NOT_CANONICAL",
                   "ERR_DAEMON_AUTH",
                   "ERR_USAGE",
+                  "ERR_INVALID_INPUT",
                   "ERR_UNSUPPORTED_OP",
                   "ERR_INTERNAL"
                 ]

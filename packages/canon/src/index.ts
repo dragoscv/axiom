@@ -33,7 +33,12 @@ export {
   signEnvelopeBound,
   verifyEnvelope,
 } from "./dsse.js";
-export { CanonicalizeError, canonicalize } from "./jcs.js";
+export {
+  CanonicalizeError,
+  canonicalize,
+  findLoneSurrogate,
+  MAX_CANONICAL_DEPTH,
+} from "./jcs.js";
 export { DSSE_IN_TOTO_PAYLOAD_TYPE, pae } from "./pae.js";
 export type {
   AgentDecisionPolicyEvaluation,

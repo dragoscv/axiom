@@ -254,6 +254,33 @@ describe("queueRequired", () => {
 });
 
 describe("evaluateCoordination", () => {
+  const agentq = (): CoordinationConfig => ({
+    ...AGENTQ_EXAMPLE,
+    marksDir: marks,
+    leasesDir: leases,
+  });
+
+  describe("EN-6: the wrapper has to be the program of the unit, not a mention", () => {
+    it("refuses a build or commit that only names the wrapper", async () => {
+      for (const cmd of [
+        "pnpm build # run-build.ps1",
+        "pnpm build; echo run-build.ps1",
+        "rg -n 'agentq.ps1' docs; pnpm build",
+        w("echo", "agentq.ps1;", "git", "commit", "-m", "x"),
+      ]) {
+        const v = await evaluateCoordination(cmd, agentq(), ctx());
+        expect(v?.id, cmd).toBe("coord.queueRequired");
+      }
+    });
+
+    it("exempts the unit that really goes through the wrapper", async () => {
+      const queued = w("pwsh", "-File", "run-build.ps1", "-Command", "'pnpm build'");
+      expect(await evaluateCoordination(queued, agentq(), ctx())).toBeUndefined();
+      const committed = w("pwsh", "-File", "agentq.ps1", "commit", "-Paths", "a.ts");
+      expect(await evaluateCoordination(committed, agentq(), ctx())).toBeUndefined();
+    });
+  });
+
   it("never throws on arbitrary command strings", async () => {
     await json(join(marks, "a.json"), {
       resource: "deploy:machine",

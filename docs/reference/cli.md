@@ -132,6 +132,7 @@ Nothing else is read: there is no root, profile or allowlist environment fallbac
 | `axiom setup import-guard` | `import-guard` | PowerShell guard pattern tables -> gate profile commands JSON |
 | `axiom explain` | - | why the gate decided what it did: rule, profile, paths, and how to fix it |
 | `axiom journal replay` | - | re-judge one session's recorded decisions with the current profile (read-only) |
+| `axiom journal sessions` | - | undo sessions of a root: one row per (agent, session), oldest first |
 | `axiom report` | - | self-contained HTML report of gate decisions (no external assets) |
 | `axiom pin` | - | pin MCP server configs (.vscode/.cursor/.mcp.json); --check reports drift (exit 1) |
 | `axiom acp-proxy` | - | ACP stdio proxy: answers session/request_permission with the gate |
@@ -564,6 +565,27 @@ axiom journal replay --session copilot:abc123
 ```
 
 <!-- notes:journal replay -->
+<!-- /notes -->
+
+### `axiom journal sessions`
+
+undo sessions of a root: one row per (agent, session), oldest first.
+
+```
+axiom journal sessions [--root <dir>] [--json]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--root <dir>` | `.` | repository root |
+| `--json` | - | print the full result object instead of the text summary |
+
+```sh
+axiom journal sessions
+axiom journal sessions --json
+```
+
+<!-- notes:journal sessions -->
 <!-- /notes -->
 
 ## `keys`

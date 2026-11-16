@@ -36,6 +36,17 @@ describe("path.*", () => {
     expect((await ids(b, "path.deny", { globs: ["**/*.md"] })).verdict).toBe("fail");
     expect((await ids(b, "path.deny", { globs: ["**/*.py"] })).verdict).toBe("pass");
   });
+  it("A1-14: a deny is case-insensitive on every platform (.GIT/config)", async () => {
+    const gb = makeBundle([{ path: ".GIT/config", content: "x" }]);
+    const r = await ids(gb, "path.deny", { globs: [".git/**"] });
+    expect(r.verdict).toBe("fail");
+    expect(r.findings[0]?.path).toBe(".GIT/config");
+  });
+  it("A1-21: a negated glob in path.allow is refused, never honoured", async () => {
+    const r = await ids(b, "path.allow", { globs: ["src/**", "!src/secret/**"] });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_PREDICATE_PARAMS");
+  });
   it("Next.js route groups `(app)` in globs match literally without manual escaping (S-408)", async () => {
     const rg = makeBundle([
       { path: "apps/web/src/app/(app)/dashboard/page.tsx", content: "" },
@@ -272,12 +283,13 @@ describe("content.noSecrets", () => {
       "pass",
     );
   });
-  it("skips deletes and artifacts without content", async () => {
-    const b = makeBundle([
-      { path: "d.txt", op: "delete" },
-      { path: "n.txt", content: samples.awsKey!, noBlob: true },
-    ]);
-    expect((await ids(b, "content.noSecrets", {})).verdict).toBe("pass");
+  it("skips deletes; unreadable content is a provider error (A1-9), never a pass", async () => {
+    const del = makeBundle([{ path: "d.txt", op: "delete" }]);
+    expect((await ids(del, "content.noSecrets", {})).verdict).toBe("pass");
+    const b = makeBundle([{ path: "n.txt", content: samples.awsKey!, noBlob: true }]);
+    const r = await ids(b, "content.noSecrets", {});
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_BLOB_MISSING");
   });
 });
 
@@ -352,6 +364,36 @@ describe("deps.*", () => {
     expect(r.ids).toEqual(["deps.deny.left_pad"]);
     expect((await ids(b, "deps.deny", { packages: ["nope"] })).verdict).toBe("pass");
   });
+  it("A1-22: optional/peer dependencies and `npm:` aliases are read too", async () => {
+    const all = makeBundle([
+      {
+        path: "package.json",
+        content: JSON.stringify({
+          dependencies: { a: "1" },
+          optionalDependencies: { "left-pad": "1" },
+          peerDependencies: { react: "19" },
+        }),
+      },
+    ]);
+    expect((await ids(all, "deps.deny", { packages: ["left-pad"] })).verdict).toBe("fail");
+    expect((await ids(all, "deps.deny", { packages: ["react"] })).verdict).toBe("fail");
+    expect((await ids(all, "deps.max", { max: 2 })).verdict).toBe("fail");
+    const alias = makeBundle([
+      {
+        path: "package.json",
+        content: JSON.stringify({ dependencies: { "my-pad": "npm:left-pad@^1.2.0" } }),
+      },
+    ]);
+    expect((await ids(alias, "deps.deny", { packages: ["left-pad"] })).verdict).toBe("fail");
+  });
+  it("A1-9: an unreadable package.json is a provider error", async () => {
+    const b = makeBundle([
+      { path: "package.json", content: '{"dependencies":{"a":"1"}}', noBlob: true },
+    ]);
+    const r = await ids(b, "deps.max", { max: 0 });
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_BLOB_MISSING");
+  });
 });
 
 describe("repo.*", () => {
@@ -378,11 +420,28 @@ describe("repo.*", () => {
     const create = makeBundle([{ path: "pnpm-lock.yaml", op: "create", content: "x" }]);
     expect((await ids(create, "repo.noOverwriteOf", { globs }, root)).verdict).toBe("pass");
   });
-  it("noOverwriteOf is skipped without a root", async () => {
+  it("A1-30: a required repo fact with no root is an error; allowRepo:false is the only skip", async () => {
     const b = makeBundle([{ path: "pnpm-lock.yaml", op: "overwrite", content: "x" }]);
     const r = await runChecks({ bundle: b, profile: one("repo.noOverwriteOf", { globs: ["**"] }) });
-    expect(r.verdict).toBe("pass");
-    expect(r.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
+    expect(r.verdict).toBe("error");
+    expect(r.findings[0]?.facts.code).toBe("ERR_FACT_DISABLED");
+    expect(r.providers.find((p) => p.name === "repo")?.status).toBe("error");
+    const off = await runChecks({
+      bundle: b,
+      profile: profileWith(
+        [
+          {
+            id: "x",
+            predicate: "repo.noOverwriteOf",
+            params: { globs: ["**"] },
+            severity: "error",
+          },
+        ],
+        { allowRepo: false },
+      ),
+    });
+    expect(off.verdict).toBe("pass");
+    expect(off.providers.find((p) => p.name === "repo")?.status).toBe("skipped");
   });
 
   const rules = {

@@ -6,10 +6,12 @@ import {
   findTrailingOverride,
   normalizeGit,
   programName,
+  redirectTargets,
   shellWords,
   splitSegments,
   stripTrailingOverride,
   UNDECODABLE,
+  wordReadings,
 } from "./shell-lex.js";
 
 const enc = (s: string): string => Buffer.from(s, "utf16le").toString("base64");
@@ -172,10 +174,24 @@ describe("expandNested / commandUnits", () => {
     expect(inner?.variants).toContainEqual(["git", "push", "-f"]);
     expect(units.find((u) => u.text === "bash -c 'git push -f'")?.nested).toBe(false);
   });
+
+  it("reads a backtick substitution and `eval` as a command (corpus FP029/FP041)", () => {
+    expect(expandNested("echo `git push -f`")).toContain("git push -f");
+    expect(commandUnits('eval "git push -f"').map((u) => u.text)).toContain("git push -f");
+    // A single-word body is a value, not a command.
+    expect(expandNested("ls 'a`b`c'")).toEqual(["ls 'a`b`c'"]);
+    expect(commandUnits("echo $x").map((u) => u.text)).toEqual(["echo $x"]);
+  });
 });
 
 describe("findTrailingOverride / stripTrailingOverride", () => {
   const REASON = "owner approved the release rewrite";
+
+  it("does not unlock on a quoted override text after a `;` (corpus OV235)", () => {
+    const cmd = 'git add -A; echo "# axiom-override: this is a quoted reason"';
+    expect(findTrailingOverride(cmd)).toBeUndefined();
+    expect(stripTrailingOverride(cmd)).toBe(cmd);
+  });
 
   it("accepts a trailing comment outside quotes with a real reason", () => {
     const cmd = `git push -f origin main # axiom-override: ${REASON}`;
@@ -202,6 +218,60 @@ describe("findTrailingOverride / stripTrailingOverride", () => {
     expect(findTrailingOverride("x # axiom-override:")).toBeUndefined();
     expect(findTrailingOverride(`x # axiom-override: ${"word ".repeat(70)}`)).toBeUndefined();
     expect(findTrailingOverride("x # just a comment")).toBeUndefined();
+  });
+});
+
+describe("wordReadings", () => {
+  it("gives the words of one segment per shell reading", () => {
+    const readings = wordReadings("Set-Content packages\\db\\.env 'X=1'");
+    const bash = readings.find((r) => r.mode === "bash")?.words;
+    const pwsh = readings.find((r) => r.mode === "pwsh")?.words;
+    expect(bash).toEqual(["Set-Content", "packagesdb.env", "X=1"]);
+    expect(pwsh).toEqual(["Set-Content", "packages\\db\\.env", "X=1"]);
+  });
+
+  it("strips env assignments and prefix commands, and can be asked for one reading", () => {
+    expect(wordReadings("FOO=1 sudo rm x", ["pwsh"]).map((r) => r.words)).toEqual([["rm", "x"]]);
+    expect(wordReadings("", ["pwsh"])).toEqual([]);
+  });
+
+  it("treats the non-breaking spaces PowerShell accepts as word separators (corpus FP062)", () => {
+    const reading = wordReadings("git\u00a0push\u00a0-f", ["pwsh"])[0];
+    expect(reading?.words).toEqual(["git", "push", "-f"]);
+    expect(programName(reading?.words ?? [])).toBe("git");
+  });
+});
+
+describe("redirectTargets", () => {
+  it("reads the target of every redirection form", () => {
+    expect(redirectTargets("echo a > out.txt")).toEqual(["out.txt"]);
+    expect(redirectTargets("echo a >> 'my file.txt'")).toEqual(["my file.txt"]);
+    expect(redirectTargets('cmd 2>&1 > "q.log"')).toEqual(["q.log"]);
+    expect(redirectTargets("echo x> .env")).toEqual([".env"]);
+    expect(redirectTargets("echo x >>.env")).toEqual([".env"]);
+    expect(redirectTargets("echo x >| .env", ["bash"])).toEqual([".env"]);
+    expect(redirectTargets("echo x 2> err.log", ["pwsh"])).toEqual(["err.log"]);
+  });
+
+  it("treats quoted text as data and skips a file-descriptor duplication", () => {
+    expect(redirectTargets('echo "a > b" > out.txt')).toEqual(["out.txt"]);
+    // The `>` of a quoted `sh -c '…'` argument is data; the scan reads the nested command itself.
+    expect(redirectTargets("sh -c 'echo x > inside.txt'", ["bash"])).toEqual([]);
+    expect(redirectTargets("echo x > inside.txt", ["bash"])).toEqual(["inside.txt"]);
+    expect(redirectTargets("exec 3>&1")).toEqual([]);
+    expect(redirectTargets("echo plain")).toEqual([]);
+  });
+
+  it("returns a substitution as written; rejecting it is the scan's job", () => {
+    expect(redirectTargets("echo $X > $(mktemp)")).toEqual(["$(mktemp)"]);
+  });
+});
+
+describe("splitSegments: a clobber redirect is not a pipe", () => {
+  it("keeps `>|` in one segment", () => {
+    expect(splitSegments("echo x >| .env")).toEqual(["echo x >| .env"]);
+    expect(splitSegments("a | b")).toEqual(["a", "b"]);
+    expect(splitSegments("a > b | c")).toEqual(["a > b", "c"]);
   });
 });
 

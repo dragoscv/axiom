@@ -70,6 +70,7 @@ import {
   allowDocument,
   GATE_EXIT_ALLOW,
   GATE_EXIT_DENY,
+  GATE_FORMAT_TABLE,
   GateDeny,
   HINT_FORMATS,
   renderDeny,
@@ -94,6 +95,15 @@ import type { RuleVerdict } from "./gate-verdict.js";
 import { evaluateGit, type GitRules } from "./gitfacts.js";
 import { resolvePolicy } from "./policy.js";
 import { postMain } from "./post-write.js";
+import {
+  isSelfHardCode,
+  SELF_ASK_CODE,
+  SELF_ASK_GLOBS,
+  SELF_PROTECT_CODE,
+  SELF_PROTECT_GLOBS,
+  SELF_TREE_DELETE_CODE,
+  selfProtectHomeTier,
+} from "./self-protect.js";
 import {
   checkSessionWrite,
   checkStaleScript,
@@ -400,6 +410,119 @@ export async function runAskGlobs(
   return askDeny(f.path);
 }
 
+// ------------------------------------------ built-in self-protection (S-1410) --
+
+/** Root-relative HARD set (`dot: true`, case-insensitive on Windows/macOS) — see `self-protect.ts`. */
+const selfHardGlobs: (p: string) => boolean = globMatcher([...SELF_PROTECT_GLOBS], false);
+/** Root-relative ASK set. */
+const selfAskGlobs: (p: string) => boolean = globMatcher([...SELF_ASK_GLOBS], false);
+
+function selfProtectDeny(relPath: string): GateDeny {
+  return new GateDeny(
+    SELF_PROTECT_CODE,
+    `"${relPath}" decides whether AXIOM runs and what it enforces (policy, trust store, hook wiring or pins): only the human changes it, from the CLI`,
+    relPath,
+  );
+}
+
+function selfAskDeny(relPath: string): GateDeny {
+  return new GateDeny(
+    SELF_ASK_CODE,
+    `"${relPath}" is harness configuration AXIOM shares with other tools: confirm before the agent edits it`,
+    relPath,
+    { ask: true },
+  );
+}
+
+/** Absolute path of a root-relative POSIX target. */
+function rootRelativeAbs(root: string, relPath: string): string {
+  return path.join(root, ...relPath.split("/"));
+}
+
+/**
+ * S-1410: the built-in set judged WITHOUT the profile. A profile must not be able to weaken it
+ * (reality check #2: warn mode plus one allowed write rewrote the policy file), and `--profile`
+ * may only tighten. Hard tier → deny; ask tier → the human confirms.
+ */
+export function selfProtectionDenies(
+  targets: readonly ResolvedGateTarget[],
+  root: string,
+  home: string | undefined,
+): { hard: GateDeny[]; ask: GateDeny[] } {
+  const hard: GateDeny[] = [];
+  const ask: GateDeny[] = [];
+  for (const t of targets) {
+    const rel = t.relPath;
+    const abs = rootRelativeAbs(root, rel);
+    const tree = selfTreeDeleteDeny(abs, root, home, t.target.recursive, rel);
+    if (tree !== undefined) {
+      hard.push(tree);
+      continue;
+    }
+    const tier = home === undefined ? undefined : selfProtectHomeTier(abs, home);
+    if (selfHardGlobs(rel) || tier === "hard") hard.push(selfProtectDeny(rel));
+    else if (selfAskGlobs(rel) || tier === "ask") ask.push(selfAskDeny(rel));
+  }
+  return { hard, ask };
+}
+
+/**
+ * S-1410: tier of an ABSOLUTE target that escaped the repository root. `outside: allow|warn` used
+ * to let `~/.axiom/**` through (EN-3/A3-1) — a policy or daemon file planted in the home
+ * directory is still AXIOM's, whatever `outside` says. `undefined` means "not ours".
+ */
+export function selfOutsideDeny(abs: string, home: string | undefined): GateDeny | undefined {
+  if (home === undefined) return undefined;
+  const shown = abs.replace(/\\/g, "/");
+  const tier = selfProtectHomeTier(abs, home);
+  if (tier === "hard") return selfProtectDeny(shown);
+  if (tier === "ask") return selfAskDeny(shown);
+  return undefined;
+}
+
+/** True when `abs` is `dir`, an ancestor of `dir`, or the repository's own `dir/.git`. */
+function isDirOrAncestorOrGit(abs: string, dir: string, win32: boolean): boolean {
+  const strip = (p: string): string => {
+    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return win32 ? s.toLowerCase() : s;
+  };
+  const a = strip(abs);
+  const d = strip(dir);
+  if (a === "" || d === "") return false;
+  if (a === `${d}/.git`) return true;
+  if (a.endsWith("/.git")) return false; // a nested .git belongs to another repository
+  if (a === d) return true;
+  return d.startsWith(`${a}/`); // `abs` is an ancestor of `dir`
+}
+
+/**
+ * S-1410: a RECURSIVE delete that would take the home directory, the repository root (or one of
+ * its ancestors), a filesystem root or the repository's `.git` with it is a hard deny in every
+ * mode (`self.treeDelete`) — no profile, override or `--fail-open` may allow it.
+ */
+export function selfTreeDeleteDeny(
+  abs: string,
+  root: string,
+  home: string | undefined,
+  recursive: boolean | undefined,
+  /** What the verdict names the target by: the root-relative path when there is one. */
+  shown: string = abs.replace(/\\/g, "/"),
+): GateDeny | undefined {
+  if (recursive !== true) return undefined;
+  const p = abs.replace(/\\/g, "/").replace(/\/+$/, "");
+  const isFsRoot = p === "" || /^[A-Za-z]:$/.test(p);
+  const win32 = process.platform === "win32";
+  const hits = [root, home].some(
+    (d) => d !== undefined && d !== "" && isDirOrAncestorOrGit(abs, d, win32),
+  );
+  if (!isFsRoot && !hits) return undefined;
+  return new GateDeny(
+    SELF_TREE_DELETE_CODE,
+    `recursive delete of ${shown === "" ? "a filesystem root" : `"${shown}"`} would take the repository, the home directory or AXIOM's own state with it`,
+    shown,
+  );
+}
+
 /** Deny id of `steer: "require"` (predicate-style, like `path.deny`). */
 export const STEER_REQUIRE_CODE = "steer.requireApply";
 
@@ -514,6 +637,11 @@ export interface GateOptions {
   root?: string;
   /** stdin exceeded the size cap: an agent action, judged fail-closed (unlike an empty stdin). */
   stdinTooLarge?: boolean;
+  /**
+   * 4.0 (A2-17/A3-18): bytes received before the read gave up. A timeout that received NOTHING is
+   * a harness hiccup (allow + warn); a timeout after bytes arrived truncated a write (fail closed).
+   */
+  stdinBytes?: number;
   /** Explicit profile file (overrides the search path). */
   profilePath?: string;
   /** @deprecated Gate v2 is fail-closed by default; kept as a no-op alias for old hook configs. */
@@ -710,6 +838,10 @@ export async function runGate(
     return internal(`stdin exceeded ${GATE_STDIN_MAX_BYTES} bytes`);
   }
   if (payloadText === undefined) {
+    // 4.0 (A3-18): a timeout that HAD received bytes is a truncated write, not a hiccup.
+    if ((opts.stdinBytes ?? 0) > 0) {
+      return internal(`stdin timed out after ${opts.stdinBytes} bytes`);
+    }
     log("warn", "no payload on stdin (timeout or empty) — allowing");
     return allow("no payload on stdin");
   }
@@ -721,6 +853,22 @@ export async function runGate(
     return internal(`payload is not JSON (${payloadText.length} bytes)`);
   }
   const payload = normalizePayload(raw);
+  // 4.0 (A2-18): a payload that IS a hook tool call but names no tool. With an explicit --format
+  // that is a wrong shape guess, not a harness hiccup: warn about it, and deny it outright for
+  // the formats that do not read stdout (an empty allow would pass silently).
+  if (payload !== undefined && payload.unknownTool === true) {
+    const explicit = format !== "auto";
+    log(explicit ? "warn" : "info", `payload names no tool (--format ${format})`);
+    if (explicit && GATE_FORMAT_TABLE[format].document === "none" && opts.failOpen !== true) {
+      return deny(
+        new GateDeny(
+          "ERR_INVALID_INPUT",
+          `payload from --format ${format} names no tool; check the hook wiring`,
+        ),
+      );
+    }
+    return allow("payload carries no tool name");
+  }
   // No tool name at all: not a PreToolUse payload we understand. Nothing to judge → allow
   // (a hook wired to the wrong event must not brick the editor); logged at info.
   if (payload === undefined) {
@@ -749,8 +897,23 @@ export async function runGate(
   const targets = extracted.targets;
   // A shell command with no write target may still hit a command / coordination / git rule
   // (v2.6), so it needs the profile; a write tool with none was handled above.
-  const command = extracted.cls === "shell" ? commandString(payload.input) : undefined;
-  if (targets.length === 0 && command === undefined && !extracted.undetermined)
+  // 4.0 (A2-9/A2-25): prefer the command the payload extractor resolved - argv elements quoted,
+  // a `run_task` id through `.vscode/tasks.json`, a tasks.json write - over the raw input.
+  const command =
+    extracted.command ??
+    (extracted.cls === "shell"
+      ? commandString(payload.input, {
+          ...(payload.commandCwd === undefined ? {} : { cwd: payload.commandCwd }),
+        })
+      : undefined);
+  // A `noTarget` write (nothing on disk to judge) must still reach the journal, so it continues
+  // to the profile instead of being allowed here.
+  if (
+    targets.length === 0 &&
+    command === undefined &&
+    !extracted.undetermined &&
+    extracted.noTarget !== true
+  )
     return allow(`tool ${payload.toolName} writes nothing recognisable`);
   const agentId = `${payload.harness ?? (format === "auto" ? "unknown" : format)}:${payload.sessionId ?? "unknown"}`;
 
@@ -768,6 +931,12 @@ export async function runGate(
   let shadowOf: GateResult | undefined;
   /** Id of the v2.6 rule that decided (enforced or shadowed), for the journal's `rule` field. */
   let ruleOf: string | undefined;
+  /**
+   * 4.0: a RELAXABLE command verdict is remembered here instead of being returned at once, so the
+   * hard whole-tree / self-protection checks on the targets are judged first (3.0 returned the
+   * command verdict before them, which let a relaxable code shadow a hard one).
+   */
+  let pendingRuleVerdict: RuleVerdict | undefined;
   /** 2.7: denies let through as warnings (`mode: "warn"`, an override, or `outside`). */
   const warnings: string[] = [];
   let relaxedKind: "warn" | "override" | undefined;
@@ -775,7 +944,9 @@ export async function runGate(
   const overrideReason = findOverrideReason(payload.input, command);
   /** True when `d` is let through (and remembered as a warning); hard codes and asks never are. */
   const relax = (d: GateDeny, p: GateProfile | undefined = rec?.profile): boolean => {
-    if (p === undefined || d.ask || isHardCode(p.hard, d.code)) return false;
+    // `isSelfHardCode` (S-1410): the built-in set is hard in EVERY mode, whatever `hard` lists.
+    if (p === undefined || d.ask || isHardCode(p.hard, d.code) || isSelfHardCode(d.code))
+      return false;
     let kind: "warn" | "override";
     if (p.override && overrideReason !== undefined) kind = "override";
     else if (p.mode === "warn") kind = "warn";
@@ -817,6 +988,8 @@ export async function runGate(
           : {}),
         ...(judged.reason === undefined ? {} : { reason: judged.reason }),
         paths: [...new Set(judgedPaths)],
+        // 4.0: a write-named tool with nothing on disk to judge is allowed and marked as such.
+        ...(extracted.noTarget === true ? { no_target: true as const } : {}),
         profile: rec.source,
         ...(decidingProfile !== undefined && decidingProfile !== rec.source
           ? { profile_decided: decidingProfile }
@@ -864,6 +1037,12 @@ export async function runGate(
     // Relative targets are relative to where the agent runs (the payload cwd), even after the
     // root is discovered above it.
     const cwdReal = rootReal;
+    // 4.0 (contract 3): SHELL operands resolve against the directory the tool INPUT names
+    // (`commandCwd`); a file tool keeps resolving against the payload cwd.
+    const operandCwd =
+      extracted.cls === "shell" && payload.commandCwd !== undefined
+        ? path.resolve(cwdReal, payload.commandCwd)
+        : cwdReal;
     if (opts.noRootDiscovery !== true) {
       const discovered = await discoverRoot(rootReal, opts.home);
       if (discovered !== rootReal) {
@@ -891,6 +1070,11 @@ export async function runGate(
     const profile = main.profile;
     rec = { root: rootReal, profile, source: main.source };
     log("debug", `class=${extracted.cls} targets=${targets.length}`);
+    // 4.0: nothing on disk to judge (`noTarget`): allow it here, where the profile - and with it
+    // the decision journal - is known, so the call leaves a trace instead of vanishing.
+    if (extracted.noTarget === true) {
+      return recorded(allow(`tool ${payload.toolName} writes nothing recognisable`));
+    }
     if (extracted.undetermined) {
       // Write-class tool, target unknown (D-18: unknown → deny with reason) — judged after the
       // profile loads so warn mode / an override relax it like any other deny (3.0).
@@ -903,12 +1087,37 @@ export async function runGate(
     }
     if (command !== undefined) {
       const found = await runCommandRules(command, profile, rootReal, opts.home);
+      // 4.0 (contract 4): a verdict carrying `advisory: true` never blocks. The reason is attached
+      // as a warning; with `oncePerSession` it is shown once per (root, session, rule), claimed
+      // through the same hint file steer hints use (`D-53`: `house.typecheckUnqueued`).
+      const blocking: RuleVerdict[] = [];
+      for (const x of found) {
+        if (x.advisory !== true) {
+          blocking.push(x);
+          continue;
+        }
+        const once =
+          x.oncePerSession === true &&
+          !(await claimSessionHint(rootReal, `${payload.sessionId ?? "no-session"}:${x.id}`));
+        if (once) continue;
+        const msg = `AXIOM GATE ADVISE ${x.id}: ${x.reason}${x.fix === undefined ? "" : ` — fix: ${x.fix}`}`;
+        warnings.push(msg);
+        if (RANK.warn <= RANK[level]) stderr.push(msg);
+      }
       // A hard verdict anywhere wins over an earlier relaxable one (3.0: hard by code, never
       // by evaluation order).
-      const v = found.find((x) => isHardCode(profile.hard, x.id)) ?? found[0];
+      const v = blocking.find((x) => isHardCode(profile.hard, x.id)) ?? blocking[0];
       if (v !== undefined) {
-        const r = await ruleVerdict(v);
-        if (r !== undefined) return r;
+        // 4.0: a RELAXABLE command verdict no longer short-circuits the hard target checks
+        // (self-protection, whole-tree discard): it is remembered and the targets are judged
+        // first, so `git -C . checkout -- .axiom/axiom.json` keeps answering the hard code. The
+        // verdict is still returned when nothing hard comes out of them, which is the 3.0 order.
+        if (isHardCode(profile.hard, v.id)) {
+          const r = await ruleVerdict(v);
+          if (r !== undefined) return r;
+        } else {
+          pendingRuleVerdict = v;
+        }
       }
     }
     /** Targets grouped by the root they are judged against (the main root, or a sibling worktree). */
@@ -943,18 +1152,35 @@ export async function runGate(
         continue;
       }
       try {
-        add(rootReal, await resolveGateTarget(rootReal, t, cwdReal));
+        add(rootReal, await resolveGateTarget(rootReal, t, operandCwd));
       } catch (err) {
         if (err instanceof GateDeny && err.code === "ERR_CONTAINMENT") {
-          const wt = await sameRepoWorktreeRoot(rootReal, t.rawPath, cwdReal);
+          const wt = await sameRepoWorktreeRoot(rootReal, t.rawPath, operandCwd);
           if (wt !== undefined) {
             log("debug", `target ${JSON.stringify(t.rawPath)} judged in worktree ${wt}`);
-            add(wt, await resolveGateTarget(wt, t, cwdReal));
+            add(wt, await resolveGateTarget(wt, t, operandCwd));
             continue;
           }
+          const supplied = t.rawPath.replace(/\\/g, "/");
+          const abs = path.isAbsolute(supplied) ? supplied : path.resolve(operandCwd, supplied);
+          // S-1410: a recursive delete that would take the home directory, the repository root,
+          // an ancestor or `.git` with it is hard in every mode, `outside` included.
+          const tree = selfTreeDeleteDeny(abs, rootReal, opts.home, t.recursive);
+          if (tree !== undefined) {
+            if (relax(tree)) continue;
+            throw tree;
+          }
+          // S-1410: `outside: allow|warn` never covers AXIOM's own home state (EN-3/A3-1).
+          const selfDeny = selfOutsideDeny(abs, opts.home);
+          if (selfDeny !== undefined) {
+            if (selfDeny.ask === true) {
+              pendingAsk ??= selfDeny;
+              continue;
+            }
+            if (relax(selfDeny)) continue;
+            throw selfDeny;
+          }
           if (profile.outside !== "deny") {
-            const supplied = t.rawPath.replace(/\\/g, "/");
-            const abs = path.isAbsolute(supplied) ? supplied : path.resolve(cwdReal, supplied);
             if (profile.outside === "warn" || isSystemPath(abs)) {
               const msg = `AXIOM GATE WARN ERR_CONTAINMENT: ${abs} is outside ${rootReal}${isSystemPath(abs) ? " (operating-system directory)" : ""} — allowed (outside: ${profile.outside})`;
               warnings.push(msg);
@@ -984,10 +1210,20 @@ export async function runGate(
       const loadedP = await loadFor(root);
       const p = loadedP.profile;
       const steer = await runSteerRequire(resolved, p);
-      const found = [...(await gatePredicateDenies(resolved, p)), ...(steer ? [steer] : [])];
+      // S-1410: the built-in set is judged first and independently of this profile.
+      const selfDenies = selfProtectionDenies(resolved, root, opts.home);
+      const found = [
+        ...selfDenies.hard,
+        ...(await gatePredicateDenies(resolved, p)),
+        ...(steer ? [steer] : []),
+      ];
       // A hard code anywhere wins over earlier relaxable findings.
       const blocking =
-        found.find((d) => isHardCode(p.hard, d.code)) ?? found.find((d) => !relax(d, p));
+        found.find((d) => isSelfHardCode(d.code) || isHardCode(p.hard, d.code)) ??
+        // 4.0: with a relaxable command verdict pending, a relaxable target finding does not
+        // decide — that verdict is returned after the loop (the 3.0 answer), so only a HARD
+        // finding can win over it.
+        (pendingRuleVerdict === undefined ? found.find((d) => !relax(d, p)) : undefined);
       if (blocking !== undefined) {
         if (loadedP.source !== main.source) decidingProfile = loadedP.source;
         await noteDeniedCreate(
@@ -1001,8 +1237,17 @@ export async function runGate(
         );
         return recorded(deny(blocking));
       }
-      pendingAsk ??= await runAskGlobs(resolved, p);
+      pendingAsk ??= selfDenies.ask[0] ?? (await runAskGlobs(resolved, p));
       n += resolved.length;
+    }
+    // 4.0: the relaxable command verdict remembered above is the 3.0 answer when no HARD target
+    // finding won (a hard one returned inside the loop). Shadow mode / warn / override relax it
+    // here exactly as they would have at the command block.
+    if (pendingRuleVerdict !== undefined) {
+      const pending = pendingRuleVerdict;
+      pendingRuleVerdict = undefined;
+      const r = await ruleVerdict(pending);
+      if (r !== undefined) return r;
     }
     const sessionTargets = toSessionTargets(groups.get(rootReal) ?? [], payload.toolName);
     if (profile.sessions !== undefined && extracted.cls === "write") {
@@ -1144,6 +1389,7 @@ export async function gateMain(
     "no-shell-scan"?: boolean;
     "no-root-discovery"?: boolean;
     "track-reads"?: boolean;
+    "dry-run"?: boolean;
     "deny-exit"?: string;
     format?: string;
     "log-level"?: string;
@@ -1161,6 +1407,7 @@ export async function gateMain(
         "no-shell-scan": { type: "boolean" },
         "no-root-discovery": { type: "boolean" },
         "track-reads": { type: "boolean" },
+        "dry-run": { type: "boolean" },
         "deny-exit": { type: "string" },
         format: { type: "string" },
         "log-level": { type: "string" },
@@ -1193,8 +1440,12 @@ export async function gateMain(
   if (values["no-shell-scan"] === true) opts.noShellScan = true;
   if (values["no-root-discovery"] === true) opts.noRootDiscovery = true;
   if (values["track-reads"] === true) opts.trackReads = true;
+  // DX-18: a probe (doctor, try, a harness self-test) must not append to the decision journal.
+  // Contract §6 says the caller passes `dryRun`; this is the flag that does it.
+  if (values["dry-run"] === true) opts.dryRun = true;
   if (io.cwdFallback !== undefined) opts.cwdFallback = io.cwdFallback;
   if (io.home !== undefined) opts.home = io.home;
+  if (read.bytes !== undefined) opts.stdinBytes = read.bytes;
   if (read.tooLarge) {
     // An oversize payload IS an agent action (a huge write): never fail open on it unless the
     // operator asked for --fail-open.

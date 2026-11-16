@@ -532,13 +532,16 @@ describe("gate: decisions", () => {
       expect(r.decision).toBe("allow");
       expect(r.toolClass).toBe("shell");
     });
-    it("rm outside the root is ERR_CONTAINMENT (cd is not tracked, so `cd src && … ../.env` also lands there); a shell tool without a command string is allowed; --no-shell-scan allows everything", async () => {
+    it("rm outside the root is ERR_CONTAINMENT (4.0 tracks a leading `cd`, so `cd src && … ../.env` resolves inside the root and is path.deny); a shell tool without a command string is allowed; --no-shell-scan allows everything", async () => {
       const out = await runGate(sh("rm -rf ../../elsewhere"), opts());
       expect(out.decision).toBe("deny");
       expect(out.code).toBe("ERR_CONTAINMENT");
       const cd = await runGate(sh("cd src && echo hi >> ../.env"), opts());
       expect(cd.decision).toBe("deny");
-      expect(cd.code).toBe("ERR_CONTAINMENT");
+      // 4.0 (contract 3): a leading `cd <dir>` moves the relative operands that follow in the same
+      // command, so `../.env` is `<root>/.env` — inside the root (no containment) and covered by
+      // the default `.env` deny glob.
+      expect(cd.code).toBe("path.deny");
       const none = await runGate(claude("Bash", { description: "noop" }, repo.root), opts());
       expect(none.decision).toBe("allow");
       const off = await runGate(sh("echo x > .env"), { ...opts(), noShellScan: true });
@@ -647,7 +650,7 @@ describe("gate: decisions", () => {
   it("readStdin: times out and caps size; oversize stdin is a deny (fail-closed) with a warn", async () => {
     const never = new Readable({ read() {} });
     const t = await readStdin(never, { timeoutMs: 20 });
-    expect(t).toStrictEqual({ text: undefined, timedOut: true, tooLarge: false });
+    expect(t).toStrictEqual({ text: undefined, timedOut: true, tooLarge: false, bytes: 0 });
     const big = Readable.from([Buffer.alloc(64), Buffer.alloc(64)]);
     const s = await readStdin(big, { maxBytes: 100 });
     expect(s.tooLarge).toBe(true);
@@ -1040,7 +1043,9 @@ describe("gate: harness payload shapes (Phase 8)", () => {
       tool_info: { command_line: "rm -rf .git", cwd: repo.root },
     });
     expect(run.toolClass).toBe("shell");
-    expect(run.code).toBe("path.deny");
+    // 4.0 (contract 5): a recursive delete of a protected tree answers the BUILT-IN hard code
+    // `self.treeDelete`, which is judged independently of the profile and wins over `path.deny`.
+    expect(run.code).toBe("self.treeDelete");
     const mcp = normalizePayload({
       agent_action_name: "pre_mcp_tool_use",
       tool_info: { mcp_tool_name: "create_file", mcp_tool_arguments: { path: "src/a.ts" } },
@@ -1122,7 +1127,8 @@ describe("gate: harness payload shapes (Phase 8)", () => {
       tool_name: "Bash",
       tool_input: { command: ["rm", "-rf", ".git"] },
     });
-    expect(bash.code).toBe("path.deny");
+    // 4.0 (contract 5): the built-in hard `self.treeDelete`, not the profile's `path.deny`.
+    expect(bash.code).toBe("self.treeDelete");
   });
 
   it("Gemini CLI: write_file, replace (now write-class) and run_shell_command", async () => {
@@ -1171,8 +1177,9 @@ describe("gate: harness payload shapes (Phase 8)", () => {
     const diff = `<<<<<<< SEARCH\na\n=======\n${AWS_KEY}\n>>>>>>> REPLACE`;
     const rep = await judge(cline("replace_in_file", { path: "src/a.ts", diff }));
     expect(rep.code).toBe("content.noSecrets.awsKey");
+    // 4.0 (contract 5): the built-in hard code for a protected tree delete.
     expect((await judge(cline("execute_command", { command: "rm -rf .git" }))).code).toBe(
-      "path.deny",
+      "self.treeDelete",
     );
   });
 });

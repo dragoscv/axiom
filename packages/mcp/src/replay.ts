@@ -189,6 +189,10 @@ export async function replaySession(o: ReplayOptions): Promise<ReplayResult> {
           profilePath: tmpProfile,
           noRootDiscovery: true,
           cwdFallback: () => o.root,
+          // Contract 6: a probe never reaches the journal, and `sanitizeProfile` alone cannot
+          // promise that — the repo layer's `record: true` beats the temp profile's `false` in the
+          // 4.0 merge (contract 1), which made the replay append a line while re-judging.
+          dryRun: true,
           ...(o.home === undefined ? {} : { home: o.home }),
         });
         const raw = g.verdict === "ask" ? "ask" : g.decision;

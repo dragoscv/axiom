@@ -11,7 +11,15 @@ import {
   runChecks,
   signManifestKeyless,
 } from "@codai/axiom-checks";
-import { compilePlan, diffManifests, isYamlPath, verifyBundle } from "@codai/axiom-plan";
+import {
+  compilePlan,
+  diffManifests,
+  findJsonTooDeep,
+  isYamlPath,
+  MAX_PLAN_JSON_DEPTH,
+  stripPlanEditorKeys,
+  verifyBundle,
+} from "@codai/axiom-plan";
 import {
   AxiomError,
   isAxiomError,
@@ -213,7 +221,9 @@ async function readPlan(file: string): Promise<unknown> {
     const { parsePlanYaml } = await import("./yaml-lazy.js");
     return parsePlanYaml(text);
   }
-  if (path.extname(file).toLowerCase() !== ".axm") return readJson(file);
+  // The JSON branch drops the `$schema` editor hint too, so plan.json, plan.yaml and plan.axm
+  // with the same content compile to one digest (the YAML reader has always done this).
+  if (path.extname(file).toLowerCase() !== ".axm") return stripPlanEditorKeys(await readJson(file));
   const text = await readInput(file);
   const { parseAxm } = await import("./axm-lazy.js");
   const r = parseAxm(text);
@@ -222,6 +232,16 @@ async function readPlan(file: string): Promise<unknown> {
 }
 
 function parseBundleFile(raw: unknown) {
+  // `checks[].params` inside a bundle is free-form JSON; cap the nesting before the schema
+  // recurses into it (a deep value would surface as a RangeError, not ERR_INVALID_MANIFEST).
+  const tooDeep = findJsonTooDeep(raw);
+  if (tooDeep !== undefined) {
+    throw new AxiomError(
+      "ERR_INVALID_MANIFEST",
+      `bundle nests ${tooDeep.depth} levels deep, over the ${MAX_PLAN_JSON_DEPTH} limit`,
+      { details: { at: tooDeep.at, depth: tooDeep.depth, max: MAX_PLAN_JSON_DEPTH } },
+    );
+  }
   const parsed = ManifestBundleSchema.safeParse(raw);
   if (!parsed.success) {
     throw new AxiomError("ERR_INVALID_MANIFEST", "bundle does not match ManifestBundleSchema", {
@@ -384,7 +404,16 @@ export async function cmdCompile(argv: string[]): Promise<number> {
   const emitters = await withEmitterHint(
     loadEmitters(values.emitter ?? [], rootReal ?? process.cwd()),
   );
-  const compileOpts: Parameters<typeof compilePlan>[1] = { store, emitters, net };
+  const compileOpts: Parameters<typeof compilePlan>[1] = {
+    store,
+    emitters,
+    net,
+    // Provenance (A1-16/EN-17): the manifest is hashed, so it must name the real release, not
+    // the format generation. `axiom --version` and `toolchain.axiom` are the same string.
+    // `MIGRATE_VERSION` is the value `main()` was handed, so this stays in step with the entry
+    // and keeps `cli-main.js` free of a static `./version.js` chunk.
+    toolchainVersion: MIGRATE_VERSION,
+  };
   if (rootReal !== undefined) compileOpts.root = rootReal;
   const { bundle } = await withEmitterHint(compilePlan(await readPlan(file), compileOpts));
   if (rootReal !== undefined) await saveManifest(rootReal, bundle);
@@ -687,6 +716,10 @@ export async function cmdReplay(argv: string[]): Promise<number> {
 
 export async function cmdReport(argv: string[]): Promise<number> {
   return (await import("./v3-lazy.js")).reportMain(argv, cliIo);
+}
+
+export async function cmdJournalSessions(argv: string[]): Promise<number> {
+  return (await import("./undo.js")).journalSessionsMain(argv, cliIo);
 }
 
 export async function cmdPin(argv: string[]): Promise<number> {
@@ -1167,7 +1200,7 @@ export async function cmdImportGuard(argv: string[]): Promise<number> {
 
 export async function cmdMigrate(argv: string[]): Promise<number> {
   if (argv[0] === "--profile" || (argv.includes("--profile") && argv[0] !== "v1")) {
-    const { values } = opts(argv, {
+    const { values, positionals } = opts(argv, {
       profile: { type: "boolean" },
       root: { type: "string" },
       "dry-run": { type: "boolean" },
@@ -1175,9 +1208,12 @@ export async function cmdMigrate(argv: string[]): Promise<number> {
     });
     const root = await localRoot(values.root);
     const { migrateProfile } = await import("./v3-lazy.js");
+    // DX-2: the table documents `--profile [<name>]`; the value names the legacy profile to fold
+    // in. It used to be parsed and dropped, so `--profile mig` silently migrated the default one.
+    const wantedProfile = values.name ?? positionals[0];
     const r = await migrateProfile(root, {
       dryRun: values["dry-run"] === true,
-      ...(values.name === undefined ? {} : { profileName: values.name }),
+      ...(wantedProfile === undefined ? {} : { profileName: wantedProfile }),
     });
     if (values["dry-run"] === true) console.log(r.json);
     else for (const n of r.notes) console.log(n);

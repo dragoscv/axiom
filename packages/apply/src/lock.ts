@@ -11,18 +11,29 @@ import { errnoCode } from "./fsx.js";
  * (`.axiom/queue/*.ticket`) and an intent registry (`.axiom/intents/*.json`)
  * used for early multi-agent conflict detection (S-703).
  *
- * Only the head of the queue (lowest-sorted LIVE ticket) competes for the lock;
- * tickets and intents of dead pids on this host, or older than LOCK_STALE_MS,
- * are skipped and removed.
+ * Only the head of the queue (lowest-sorted LIVE ticket) competes for the lock.
+ *
+ * **Liveness is a heartbeat, never a pid (A1-3).** A holder writes a random `token` into the
+ * lock and touches the file every `LOCK_HEARTBEAT_MS`; a lock, ticket or intent is stale only
+ * when its mtime has been quiet for `LOCK_STALE_MS`. A pid is not evidence of anything here: WSL
+ * and Windows share a hostname but not a pid namespace, so a Windows writer would see a live WSL
+ * holder as dead (and reclaim a lock whose backups are about to be written), while a reused pid
+ * would keep a dead writer's lock for an hour. `release` compares the token it wrote, so it can
+ * never delete a lock that a different writer has since legitimately taken.
  */
 export interface LockHolder {
   pid: number;
   hostname: string;
   startedAt: string;
   manifestDigest: string;
+  /** Random per-acquisition; `release` only removes the lock while it still owns this token. */
+  token: string;
 }
 
-export const LOCK_STALE_MS: number = 60 * 60 * 1000;
+/** How often a holder refreshes its lock, its ticket and its intents. */
+export const LOCK_HEARTBEAT_MS = 5_000;
+/** Quiet for this long (no heartbeat at all) = stale. */
+export const LOCK_STALE_MS: number = 60_000;
 export const LOCK_TIMEOUT_MS = 30_000;
 const LOCK_POLL_MS = 50;
 
@@ -36,17 +47,6 @@ export function intentsDir(root: string): string {
   return path.join(root, ".axiom", "intents");
 }
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const c = errnoCode(err);
-    // EPERM = exists but not ours → alive.
-    return c === "EPERM";
-  }
-}
-
 async function readHolder(p: string): Promise<LockHolder | undefined> {
   try {
     const raw = await fs.readFile(p, "utf8");
@@ -57,22 +57,44 @@ async function readHolder(p: string): Promise<LockHolder | undefined> {
       hostname: typeof j.hostname === "string" ? j.hostname : "",
       startedAt: j.startedAt,
       manifestDigest: typeof j.manifestDigest === "string" ? j.manifestDigest : "",
+      token: typeof j.token === "string" ? j.token : "",
     };
   } catch {
     return undefined;
   }
 }
 
-/** Dead pid on this host, unparseable timestamp, or older than LOCK_STALE_MS. */
-function staleRecord(pid: number, host: string, since: string): boolean {
-  const age = Date.now() - Date.parse(since);
-  if (Number.isNaN(age) || age > LOCK_STALE_MS) return true;
-  return host === hostname() && !pidAlive(pid);
+/**
+ * `true` when the file's mtime is older than `ms`; `undefined` when it cannot be observed
+ * (vanished, or transiently unreadable on Windows) — callers must never turn that into "stale".
+ */
+async function quietFor(p: string, ms: number): Promise<boolean | undefined> {
+  try {
+    const st = await fs.stat(p);
+    return Date.now() - st.mtimeMs > ms;
+  } catch {
+    return undefined;
+  }
 }
 
-function isStale(holder: LockHolder | undefined): boolean {
-  if (holder === undefined) return true; // unreadable/corrupt → treat as stale
-  return staleRecord(holder.pid, holder.hostname, holder.startedAt);
+/** No heartbeat for `LOCK_STALE_MS` = stale. `undefined` = cannot tell (never stale). */
+async function heartbeatStale(p: string): Promise<boolean | undefined> {
+  return quietFor(p, LOCK_STALE_MS);
+}
+
+/** Refresh the heartbeat of a lock / ticket / intent we own. Best effort. */
+async function touch(p: string): Promise<void> {
+  const now = new Date();
+  await fs.utimes(p, now, now).catch(() => undefined);
+}
+
+/** Start the heartbeat that keeps `p` alive for as long as the returned stop() is not called. */
+function startHeartbeat(p: string): () => void {
+  const timer = setInterval(() => {
+    void touch(p);
+  }, LOCK_HEARTBEAT_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 let seqCounter = 0;
@@ -177,7 +199,9 @@ async function listTickets(root: string, prune: boolean): Promise<Ticket[]> {
       typeof j.pid === "number" &&
       typeof j.since === "string" &&
       typeof j.hostname === "string";
-    if (!ok || staleRecord(j.pid as number, j.hostname as string, j.since as string)) {
+    // A waiter refreshes its ticket's heartbeat (mtime) while it waits; quiet for LOCK_STALE_MS
+    // means the waiter is gone.
+    if (!ok || (await heartbeatStale(p)) === true) {
       if (prune) await rmQuiet(p);
       continue;
     }
@@ -218,6 +242,7 @@ export async function acquireLock(
   await fs.mkdir(path.dirname(p), { recursive: true });
   const started = Date.now();
   const deadline = started + timeoutMs;
+  const token = randomBytes(16).toString("hex");
   const ticketName = `${sortableId()}-${process.pid}${TICKET_SUFFIX}`;
   const ticketPath = await writeRecordAtomic(queueDir(root), ticketName, {
     pid: process.pid,
@@ -225,9 +250,15 @@ export async function acquireLock(
     since: new Date(started).toISOString(),
     manifestDigest,
   });
+  let lastTouch = started;
   let lastHolder: LockHolder | undefined;
   try {
     for (;;) {
+      const tick = Date.now();
+      if (tick - lastTouch >= LOCK_HEARTBEAT_MS) {
+        lastTouch = tick;
+        await touch(ticketPath);
+      }
       const tickets = await listTickets(root, true);
       const ahead = tickets.filter((t) => t.name < ticketName).length;
       if (ahead === 0) {
@@ -236,6 +267,7 @@ export async function acquireLock(
           hostname: hostname(),
           startedAt: new Date().toISOString(),
           manifestDigest,
+          token,
         };
         let fh: fs.FileHandle | undefined;
         let acquired = false;
@@ -250,24 +282,23 @@ export async function acquireLock(
           await fh?.close();
         }
         if (acquired) {
+          // Keep the heartbeat going for as long as the lock is held: a long apply must never
+          // look abandoned, and a crashed one must go quiet within LOCK_STALE_MS.
+          const stopHeartbeat = startHeartbeat(p);
           return {
             path: p,
             holder,
             release: async () => {
-              // Only remove if we still own it.
+              stopHeartbeat();
+              // Only remove if we still own it: a token we did not write means the lock was
+              // legitimately reclaimed (we were stale) and now belongs to someone else.
               const cur = await readHolder(p);
-              if (
-                cur !== undefined &&
-                cur.pid === holder.pid &&
-                cur.startedAt === holder.startedAt
-              ) {
-                await rmQuiet(p);
-              }
+              if (cur !== undefined && cur.token === token) await rmQuiet(p);
             },
           };
         }
         lastHolder = await readHolder(p);
-        if (isStale(lastHolder)) {
+        if ((await heartbeatStale(p)) !== false) {
           await rmQuiet(p);
           continue;
         }
@@ -367,7 +398,8 @@ async function listIntents(
       typeof j.pid === "number" &&
       typeof j.host === "string" &&
       typeof j.since === "string";
-    if (!ok || staleRecord(j.pid as number, j.host as string, j.since as string)) {
+    // An intent lives as long as its apply: its owner refreshes the heartbeat.
+    if (!ok || (await heartbeatStale(file)) === true) {
       if (prune) await rmQuiet(file);
       continue;
     }
@@ -420,21 +452,12 @@ async function withRegistryMutex<T>(root: string, fn: () => Promise<T>): Promise
       await fh?.close();
     }
     if (acquired) break;
-    const j = await readJsonRecord(p);
-    if (j !== undefined) {
-      const since = j !== null && typeof j.since === "string" ? Date.parse(j.since) : Number.NaN;
-      const deadPid =
-        j !== null && typeof j.pid === "number" && j.hostname === hostname() && !pidAlive(j.pid);
-      // A null (corrupt / mid-write) record is only reclaimed once it has aged out via mtime.
-      let aged = !Number.isNaN(since) && Date.now() - since > REGISTRY_MUTEX_STALE_MS;
-      if (j === null) {
-        const st = await fs.stat(p).catch(() => undefined);
-        aged = st !== undefined && Date.now() - st.mtimeMs > REGISTRY_MUTEX_STALE_MS;
-      }
-      if (deadPid || aged) {
-        await rmQuiet(p);
-        continue;
-      }
+    // The critical section lasts milliseconds, so a mutex whose heartbeat (mtime) has been quiet
+    // for REGISTRY_MUTEX_STALE_MS can only belong to a writer that died inside it. A pid proves
+    // nothing (namespaces, reuse) — the heartbeat is the whole rule here too.
+    if ((await quietFor(p, REGISTRY_MUTEX_STALE_MS)) !== false) {
+      await rmQuiet(p);
+      continue;
     }
     if (Date.now() >= deadline) {
       throw new AxiomError("ERR_LOCKED", "intent registry is busy", { details: { lock: p } });
@@ -492,10 +515,12 @@ export async function registerIntent(
       record,
     );
   });
+  const stopHeartbeat = startHeartbeat(file);
   return {
     path: file,
     record,
     release: async () => {
+      stopHeartbeat();
       await rmQuiet(file);
     },
   };
@@ -508,6 +533,18 @@ export interface LockStatus {
   holder?: { pid: number; host?: string; digest?: string; since?: string; stale: boolean };
   queue: { pid: number; since: string }[];
   intents: { digest: string; paths: string[]; pid: number; since: string }[];
+}
+
+/**
+ * The manifest digest announced by a holder that is still LIVE (heartbeat inside
+ * `LOCK_STALE_MS`), or `undefined` when the lock is free, unreadable or stale. `status` uses it
+ * so a healthy, in-flight apply is not reported as an interrupted journal (QA-14).
+ */
+export async function liveHolderDigest(root: string): Promise<string | undefined> {
+  const p = lockPath(root);
+  const h = await readHolder(p);
+  if (h === undefined || h.manifestDigest === "") return undefined;
+  return (await heartbeatStale(p)) === true ? undefined : h.manifestDigest;
 }
 
 /** Read-only snapshot of `.axiom/lock`, the wait queue and live intents. Never mutates. */
@@ -527,7 +564,8 @@ export async function lockStatus(root: string): Promise<LockStatus> {
       const holder: NonNullable<LockStatus["holder"]> = {
         pid: h.pid,
         since: h.startedAt,
-        stale: isStale(h),
+        // Unreadable / vanished mid-probe counts as stale, exactly like the old rule did.
+        stale: (await heartbeatStale(p)) !== false,
       };
       if (h.hostname !== "") holder.host = h.hostname;
       if (h.manifestDigest !== "") holder.digest = h.manifestDigest;

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { canonicalize } from "@codai/axiom-canon";
 import {
   API_VERSION,
   AxiomError,
@@ -9,6 +10,7 @@ import {
   ProfileNameSchema,
   ProfileSchema,
 } from "@codai/axiom-schema";
+import { SELF_PROTECT_HARD_GLOBS } from "./self-protect-globs.js";
 
 const MiB = 1024 * 1024;
 
@@ -19,6 +21,16 @@ export const BUILTIN_PROFILE_INPUTS: Readonly<Record<string, ProfileInput>> = {
     name: "default",
     checks: [
       { id: "path.reservedNames", predicate: "path.reservedNames", params: {} },
+      // S-1410 / A1-29: the self-protection set is denied by the built-in profile too, so a
+      // plan cannot create the hooks or the policy file that decide what AXIOM enforces
+      // (the gate applies the same set in-process; this covers `check` / `apply`). The id is
+      // `self.protect` (the gate's rule id for the same list) so that a profile which adds its
+      // own `path.deny` — the built-in `strict` does — cannot replace this check by id.
+      {
+        id: "self.protect",
+        predicate: "path.deny",
+        params: { globs: [".git/**", ...SELF_PROTECT_HARD_GLOBS] },
+      },
       { id: "content.noSecrets", predicate: "content.noSecrets", params: {} },
       { id: "manifest.maxArtifacts", predicate: "manifest.maxArtifacts", params: { max: 2000 } },
       {
@@ -156,54 +168,140 @@ export function mergeChecks(parent: readonly CheckRef[], child: readonly CheckRe
 }
 
 /**
+ * JCS identity of a check — the fields that decide what it does (4.0, D-50, A1-6). Two checks
+ * with the same id but a different identity are a policy-floor violation, never a replace.
+ */
+export function checkIdentity(c: CheckRef): string {
+  const body = {
+    id: c.id,
+    predicate: c.predicate,
+    params: c.params ?? null,
+    severity: c.severity ?? "error",
+  };
+  try {
+    return canonicalize(body);
+  } catch {
+    // A param value JCS refuses (a lone surrogate, a cycle) is still comparable, and unequal
+    // to anything that canonicalises: the fallback keeps the comparison total.
+    return JSON.stringify(body);
+  }
+}
+
+/** Structural identity: same id, predicate, params and severity. */
+export function checksIdentical(a: CheckRef, b: CheckRef): boolean {
+  return a.id === b.id && checkIdentity(a) === checkIdentity(b);
+}
+
+function profileFacts(profiles: readonly Profile[], floor: Profile["facts"] | undefined) {
+  let facts: Profile["facts"] = { allowRepo: true, allowGuards: false };
+  for (const p of profiles) facts = { ...facts, ...p.facts };
+  if (floor === undefined) return facts;
+  // 4.0 (D-50): a profile named by the caller/plan may tighten the repository facts, never
+  // relax them — `allowGuards` / `allowPlanGuards` are AND-ed, `allowRepo` is OR-ed.
+  const merged: Profile["facts"] = {
+    allowRepo: floor.allowRepo || facts.allowRepo,
+    allowGuards: floor.allowGuards && facts.allowGuards,
+  };
+  if (floor.allowPlanGuards === true && facts.allowPlanGuards === true) {
+    merged.allowPlanGuards = true;
+  }
+  return merged;
+}
+
+/**
  * Load `name`, resolving its `extends` chain (parent first). The result has
  * `extends` removed and the merged checks/limits/facts; `name` is the requested one.
  * Cycles and missing parents → ERR_INVALID_PROFILE.
+ *
+ * 4.0 (D-50, A1-6/A2-6): when `config` (the repository `checks` section) is given, the
+ * repository profile is ALWAYS part of the result, whatever `name` is. A name that is not the
+ * repository profile's own is resolved on top and may only ADD checks: a check whose id already
+ * exists in the repository policy is dropped, never allowed to replace it (the floor wins). The
+ * plan-side counterpart of this rule lives in `runChecks` (`ERR_POLICY_FLOOR`).
  */
 export async function loadProfile(name: string, opts: LoadProfileOptions = {}): Promise<Profile> {
   const builtins = opts.builtins ?? builtinProfiles();
   const resolved: LoadProfileOptions = { builtins };
   if (opts.searchDirs !== undefined) resolved.searchDirs = opts.searchDirs;
 
-  const chain: Profile[] = [];
-  const seen = new Set<string>();
-  let cur: string | undefined = name;
-  if (opts.config !== undefined) {
-    const leaf = parseConfigProfile(opts.config);
-    if (name === leaf.name || name === "default") {
-      // The leaf is the config itself; its parents resolve normally (a parent may share the
-      // leaf's name — `default` extending the builtin `default` — like a file shadowing a builtin).
-      chain.unshift(leaf);
-      cur = leaf.extends;
+  const step = async (
+    start: string | undefined,
+    seen: Set<string>,
+    into: Profile[],
+  ): Promise<void> => {
+    let cur = start;
+    while (cur !== undefined) {
+      if (seen.has(cur)) {
+        throw new AxiomError("ERR_INVALID_PROFILE", `profile extends cycle at "${cur}"`, {
+          details: { chain: [...seen, cur] },
+        });
+      }
+      seen.add(cur);
+      const p: Profile = await readOne(cur, resolved);
+      into.unshift(p);
+      cur = p.extends;
     }
-  }
-  while (cur !== undefined) {
-    if (seen.has(cur)) {
-      throw new AxiomError("ERR_INVALID_PROFILE", `profile extends cycle at "${cur}"`, {
-        details: { chain: [...seen, cur] },
-      });
-    }
-    seen.add(cur);
-    const p: Profile = await readOne(cur, resolved);
-    chain.unshift(p);
-    cur = p.extends;
+  };
+
+  const floor = opts.config === undefined ? undefined : parseConfigProfile(opts.config);
+  const nameIsFloor = floor !== undefined && (name === floor.name || name === "default");
+
+  // The repository layer (the config leaf and its parents), parents first.
+  const floorChain: Profile[] = [];
+  if (floor !== undefined) {
+    // The leaf is the config itself; its parents resolve normally (a parent may share the
+    // leaf's name — `default` extending the builtin `default` — like a file shadowing a builtin).
+    floorChain.unshift(floor);
+    await step(floor.extends, new Set<string>(), floorChain);
   }
 
-  let checks: CheckRef[] = [];
-  let limits: Profile["limits"] = {};
-  let facts: Profile["facts"] = { allowRepo: true, allowGuards: false };
-  for (const p of chain) {
-    checks = mergeChecks(checks, p.checks);
-    limits = { ...limits, ...p.limits };
-    facts = { ...facts, ...p.facts };
+  // The named profile, when it is not the repository one, on top of the floor.
+  const topChain: Profile[] = [];
+  if (floor === undefined || !nameIsFloor) {
+    await step(name, new Set<string>(), topChain);
   }
-  const leaf = chain[chain.length - 1];
+
+  const byId = new Map<string, CheckRef>();
+  let limits: Profile["limits"] = {};
+  for (const p of floorChain) {
+    for (const c of p.checks) byId.set(c.id, c);
+    limits = { ...limits, ...p.limits };
+  }
+  const floorIds = new Set(byId.keys());
+  for (const p of topChain) {
+    for (const c of p.checks) {
+      if (floorIds.has(c.id)) continue; // the repository check wins; a name may only ADD
+      byId.set(c.id, c);
+    }
+    limits = { ...limits, ...p.limits };
+  }
+
+  const leaf = topChain[topChain.length - 1] ?? floorChain[floorChain.length - 1];
+  const floorLeaf = floorChain[floorChain.length - 1];
+  // A1-6 / DX-6: the report must name the policy that actually judged the bundle. When a named
+  // profile sits on top of the repository policy, both names are reported (`axiom.strict`), so a
+  // report can never look like the repository policy had been replaced by the named one.
+  const resultName =
+    floorLeaf !== undefined && topChain.length > 0
+      ? `${floorLeaf.name}.${leaf?.name ?? name}`.slice(0, 64)
+      : (leaf?.name ?? name);
+  const floorFacts = floorChain.length > 0 ? aggregateFacts(floorChain) : undefined;
+  const facts =
+    topChain.length > 0
+      ? profileFacts(topChain, floorFacts)
+      : (floorFacts ?? { allowRepo: true, allowGuards: false });
   return {
     apiVersion: API_VERSION,
     kind: "Profile",
-    name: leaf?.name ?? name,
-    checks,
+    name: resultName,
+    checks: [...byId.values()],
     limits,
     facts,
   };
+}
+
+function aggregateFacts(profiles: readonly Profile[]): Profile["facts"] {
+  let facts: Profile["facts"] = { allowRepo: true, allowGuards: false };
+  for (const p of profiles) facts = { ...facts, ...p.facts };
+  return facts;
 }

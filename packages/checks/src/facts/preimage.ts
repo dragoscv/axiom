@@ -1,13 +1,49 @@
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 import { sha256Hex } from "@codai/axiom-canon";
-import type { PreImageEntry } from "@codai/axiom-schema";
+import { compareUtf8, type ManifestBody, type PreImageEntry } from "@codai/axiom-schema";
 import { isUnder, lstatWalk, realRoot } from "./contained.js";
 
 export interface PreImageDrift {
   path: string;
   expected: string;
   actual: string;
+}
+
+export interface PreImageCoverage {
+  ok: boolean;
+  /** Artifact paths with no `preImage` entry. */
+  missing: string[];
+  /** `preImage` entries that are not artifacts of this manifest. */
+  unexpected: string[];
+  /** Paths listed more than once. */
+  duplicates: string[];
+}
+
+/**
+ * A1-20: when a manifest carries `preImage`, its paths must be exactly the artifact paths.
+ * `preImage: []` on a bundle with artifacts compared nothing and still reported
+ * `preImage: "verified"`, and `verify --pre` answered `ok` with zero paths checked.
+ */
+export function preImageCovers(manifest: ManifestBody): PreImageCoverage {
+  const pre = manifest.preImage;
+  if (pre === undefined) return { ok: true, missing: [], unexpected: [], duplicates: [] };
+  const listed = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const e of pre) {
+    if (listed.has(e.path)) duplicates.add(e.path);
+    listed.add(e.path);
+  }
+  const artifacts = new Set<string>(manifest.artifacts.map((a) => a.path));
+  const missing = [...artifacts].filter((p) => !listed.has(p)).sort(compareUtf8);
+  const unexpected = [...listed].filter((p) => !artifacts.has(p)).sort(compareUtf8);
+  const dup = [...duplicates].sort(compareUtf8);
+  return {
+    ok: missing.length === 0 && unexpected.length === 0 && dup.length === 0,
+    missing,
+    unexpected,
+    duplicates: dup,
+  };
 }
 
 /**

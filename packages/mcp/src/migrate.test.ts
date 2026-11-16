@@ -17,6 +17,7 @@ import {
   normaliseV1Path,
   V1ManifestSchema,
 } from "./migrate.js";
+import { resolvePolicy } from "./policy.js";
 import { loadAxiomConfig, loadLegacyAxiomConfig } from "./profile-v3.js";
 import { tmpRepo } from "./test-helpers.js";
 
@@ -533,6 +534,74 @@ describe("migrateProfile (axiom migrate --profile, D-42)", () => {
       expect(GateProfileSchema.parse(cfg?.gate).deny).toEqual(["x/**"]);
       const p = await loadProfile("default", { config: cfg?.checks });
       expect(p.checks).toEqual((await loadProfile("default")).checks);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+});
+
+describe("migrateProfile — never emits an empty gate (4.0, A2-1)", () => {
+  /** A repo with ONLY a check profile: the state `--profile` used to turn into `gate: {}`. */
+  async function checksOnlyRepo() {
+    const repo = await tmpRepo("axiom-migrate-empty-gate-");
+    await mkdir(join(repo.root, ".axiom", "profiles"), { recursive: true });
+    await writeFile(
+      join(repo.root, ".axiom", "profiles", "team.json"),
+      JSON.stringify({ apiVersion: "axiom.dev/v2", kind: "Profile", name: "team", checks: [] }),
+    );
+    return repo;
+  }
+
+  it("omits the gate section so the resolver falls through to the built-in default", async () => {
+    const repo = await checksOnlyRepo();
+    try {
+      const r = await migrateProfile(repo.root);
+      expect("gate" in r.config).toBe(false);
+      expect(r.notes.some((n) => n.includes('no "gate" section'))).toBe(true);
+      const written = JSON.parse(await readFile(r.file, "utf8")) as Record<string, unknown>;
+      expect("gate" in written).toBe(false);
+      // The P0 was: `.env` and a force push were ALLOWed after this migration.
+      const p = await resolvePolicy(repo.root, { home: repo.root });
+      expect(p.gate.deny).toContain(".env");
+      expect(p.gate.deny).toContain(".axiom/**");
+      expect(p.source).toBe("builtin");
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("still writes the gate when one was folded in", async () => {
+    const repo = await tmpRepo("axiom-migrate-with-gate-");
+    try {
+      await mkdir(join(repo.root, ".axiom"), { recursive: true });
+      await writeFile(join(repo.root, ".axiom", "gate-profile.json"), '{"deny":["x/**"]}');
+      const r = await migrateProfile(repo.root);
+      expect(r.config.gate).toEqual({ deny: ["x/**"] });
+      expect(r.notes.some((n) => n.includes('no "gate" section'))).toBe(false);
+      // DX-4: the note must not invite removing .axiom/profiles/, which check still reads.
+      expect(r.notes[0]).toContain("keep .axiom/profiles/*.json");
+    } finally {
+      await repo.cleanup();
+    }
+  });
+});
+
+describe("migrateProfile — `--profile` with no value is tolerated (4.0, A2-26 / DX-2)", () => {
+  it("a blank or boolean-ish profileName means 'no explicit name', not a missing file", async () => {
+    const repo = await tmpRepo("axiom-migrate-blank-");
+    try {
+      await mkdir(join(repo.root, ".axiom", "profiles"), { recursive: true });
+      await writeFile(
+        join(repo.root, ".axiom", "profiles", "only.json"),
+        JSON.stringify({ apiVersion: "axiom.dev/v2", kind: "Profile", name: "only", checks: [] }),
+      );
+      for (const profileName of ["", "   ", "true"]) {
+        const dry = await migrateProfile(repo.root, { profileName, dryRun: true });
+        expect((dry.config.checks as { name?: string }).name).toBe("only");
+      }
+      // An explicit name still wins.
+      const explicit = await migrateProfile(repo.root, { profileName: "only", dryRun: true });
+      expect((explicit.config.checks as { name?: string }).name).toBe("only");
     } finally {
       await repo.cleanup();
     }

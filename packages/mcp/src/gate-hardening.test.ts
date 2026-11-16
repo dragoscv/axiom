@@ -88,7 +88,13 @@ describe("gate hardening (reality check 2026-10-19)", () => {
       await enforce();
       const r = await bash("git -C . checkout -- .env");
       expect(r.decision).toBe("deny");
-      expect(r.code).toBe("path.deny");
+      // 4.0 (S-1411): the command rules match through shell-lex, so the global `-C .` no longer
+      // hides the command (the 3.0 regex required `git checkout` adjacent to each other). The
+      // `house.checkoutDiscard` verdict is relaxable, so it answers before the `path.deny` the very
+      // same operand produces; the OPERAND resolution the title is about (`.env`, not the `-C`
+      // value) is pinned by the write forms in this block ("PowerShell aliases and -Path:value are
+      // scanned", "ri .env", "Remove-Item -Path:.env").
+      expect(r.code).toBe("house.checkoutDiscard");
     });
 
     it("PowerShell aliases and -Path:value are scanned", async () => {

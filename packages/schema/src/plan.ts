@@ -114,6 +114,17 @@ export const PlanSchema = z
     name: PlanNameSchema,
     intent: z.string().max(2000),
     profile: z.string().min(1).default("default"),
+    /**
+     * Capabilities the plan declares: what it is allowed to reach outside the tree
+     * (`fs`, `net`, `secret`, `ai`, `compute`, `git`).
+     *
+     * NOT dead, but not yet ENFORCED (A1-28): the `.axm` front-end parses and prints it, the
+     * testkit arbitrary generates it, `examples/notes.axm` uses it, and it is part of the
+     * canonical plan digest (`digestOnlyPlan` spreads the parsed plan), so two plans that differ
+     * only in capabilities are different plans. What is missing is a check that a plan's
+     * `net`/`secret` use is covered by its declaration — that belongs to a `checks` predicate
+     * (a plan must never grant itself a capability by declaring it), not to this schema.
+     */
     capabilities: z.array(CapabilitySchema).default([]),
     artifacts: z.array(PlanArtifactSchema).min(1).max(2000),
     checks: z.array(CheckRefSchema).default([]),

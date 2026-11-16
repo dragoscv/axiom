@@ -1,9 +1,9 @@
 import type { Finding } from "@codai/axiom-schema";
 import { z } from "zod";
 import { definePredicate, type FactContext } from "../types.js";
-import { finding, globMatcher } from "./util.js";
+import { finding, GlobListSchema, GlobPatternSchema, globMatcher } from "./util.js";
 
-const NoOverwriteParams = z.object({ globs: z.array(z.string().min(1)).min(1) }).strict();
+const NoOverwriteParams = z.object({ globs: GlobListSchema.min(1) }).strict();
 
 /** Fails when an overwrite/delete targets a protected path that exists in the repo. */
 export const repoNoOverwriteOf = definePredicate<z.infer<typeof NoOverwriteParams>>({
@@ -13,7 +13,9 @@ export const repoNoOverwriteOf = definePredicate<z.infer<typeof NoOverwriteParam
   async run(ctx, { globs }) {
     const repo = ctx.facts.repo;
     if (repo === undefined) return [];
-    const protectedPath = globMatcher(globs, false);
+    // A1-14: like `path.deny`, the protected set is matched case-insensitively on every
+    // platform — `.ENV` is `.env` on a case-insensitive mount, and must not be overwritten.
+    const protectedPath = globMatcher(globs, false, { nocase: true });
     const out: Finding[] = [];
     for (const a of ctx.manifest.artifacts) {
       if (a.op === "create" || !protectedPath(a.path)) continue;
@@ -38,13 +40,13 @@ const CompanionParams = z
       .array(
         z
           .object({
-            when: z.string().min(1),
+            when: GlobPatternSchema,
             expect: z
               .array(
                 z
                   .object({
                     name: z.string().min(1),
-                    match: z.string().min(1),
+                    match: GlobPatternSchema,
                     /**
                      * S-408 (A15): the companion must be *in this plan*, not merely exist in
                      * the repo. Use for "if you touch the schema you must touch the migration"
@@ -114,7 +116,7 @@ const ReferenceRuleSchema = z
   .object({
     name: z.string().min(1),
     /** Glob over plan artifact paths; every match triggers the rule. */
-    when: z.string().min(1),
+    when: GlobPatternSchema,
     /** The companion file, as a repo-relative path (not a glob). */
     in: z.string().min(1),
     /**

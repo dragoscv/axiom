@@ -319,6 +319,25 @@ describe("scanner", () => {
     expect(toks[2]).toContain('"ticket":"S-204"');
   });
 
+  it("A3-15: `plan meta {` opens the plan body — a plan NAMED `meta` is not a JSON block", () => {
+    const named = scan('axiom "2"\nplan meta {\n  intent "x"\n}\n');
+    const i = named.findIndex((t) => t.image === "meta");
+    expect(named[i]?.kind).toBe("ident");
+    expect(named[i + 1]?.kind).toBe("punct");
+    expect(named[i + 1]?.image).toBe("{");
+    const withMeta = scan('axiom "2"\nplan p {\n  intent "x"\n  meta {"a":1}\n}\n');
+    const j = withMeta.findIndex((t) => t.image === "meta");
+    expect(withMeta[j + 1]?.kind).toBe("json");
+  });
+
+  it("A3-15: a plan named `using` or `template` is not a JSON block either", () => {
+    for (const name of ["using", "template"]) {
+      const toks = scan(`axiom "2"\nplan ${name} {\n  intent "x"\n}\n`);
+      expect(toks.some((t) => t.kind === "json")).toBe(false);
+      expect(toks.filter((t) => t.kind === "punct" && t.image === "{")).toHaveLength(1);
+    }
+  });
+
   it("LineIndex roundtrips offsets", () => {
     const idx = new LineIndex(NOTES);
     for (const off of [0, 5, 10, 57, NOTES.length - 1]) {
