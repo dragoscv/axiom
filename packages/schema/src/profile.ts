@@ -17,6 +17,12 @@ export const ProfileFactsSchema = z
   .object({
     allowRepo: z.boolean().default(true),
     allowGuards: z.boolean().default(false),
+    /**
+     * 4.0 (D-50): a Plan may ADD `guard.external` checks of its own only when the profile says
+    * so. Absent = off: the commands that judge a change come from the operator, not from the
+    * change. Guards listed in the profile itself are governed by `allowGuards` alone.
+     */
+      allowPlanGuards: z.boolean().optional(),
   })
   .strict();
 

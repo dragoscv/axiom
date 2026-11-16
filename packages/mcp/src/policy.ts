@@ -56,13 +56,16 @@ export async function resolvePolicy(
   const loaded = await loadGateProfileForRoot(root, opts);
   let checks: unknown;
   let sources: string[] = [loaded.source];
-  let warnings: string[] = loaded.unknownKeys ?? [];
+  // Warnings are complete sentences: every consumer prints them as `<source>: <warning>`.
+  const warnings: string[] =
+    loaded.unknownKeys === undefined
+      ? []
+      : [`ignoring unknown key(s) ${loaded.unknownKeys.join(", ")} (written for a newer axiom?)`];
   if (opts.profilePath === undefined) {
     const cfg = await loadAxiomConfig(root, opts.home === undefined ? {} : { home: opts.home });
     if (cfg !== undefined) {
       checks = cfg.checks;
       sources = cfg.sources.length === 0 ? sources : [...cfg.sources];
-      warnings = [...warnings, ...cfg.warnings];
     }
   }
   return {
