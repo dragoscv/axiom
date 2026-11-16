@@ -32,7 +32,7 @@ catalog:
   # @types/vscode is newer than the engines floor (release run 38486626658). Bump both together.
   "@types/vscode": 1.138.0
   "@vscode/vsce": 4.0.0
-  astro: 7.3.8
+  astro: 7.4.7
   "@astrojs/starlight": 0.42.6
   astro-mermaid: 2.1.0
   mermaid: 12.1.0
