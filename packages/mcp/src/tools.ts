@@ -600,10 +600,30 @@ export const CONFIRM_DIGEST_CHARS = 12;
 
 export type HumanConfirmReason = "declined" | "cancelled" | "mismatch" | "elicitation-unsupported";
 
+/**
+ * Why the confirmation failed, in the words a user needs (MC-9). The owner's decision (2026-11-17)
+ * was to keep the human step unconditionally and make the DIAGNOSTIC explicit: an autonomous
+ * harness (VS Code Autopilot, a CI agent) cancels elicitation mechanically without asking anyone,
+ * so "cancelled" used to look identical to a user pressing Cancel and the apply simply never
+ * worked. AXIOM cannot tell those two apart, so the message names both possibilities and what to
+ * do about each.
+ */
+const CONFIRM_HINT: Record<HumanConfirmReason, string> = {
+  cancelled:
+    "the client cancelled the confirmation without a decision. In an autonomous mode (Editors: Autopilot on) the harness cancels elicitation mechanically, so nothing was ever shown to a human: re-run the apply in a mode where you can answer, or start a client that supports elicitation. If you did press Cancel, nothing was written",
+  declined: "the human declined; nothing was written",
+  mismatch:
+    "the typed characters did not match the manifest digest (both `confirm: true` and the digest prefix are required); nothing was written",
+  "elicitation-unsupported":
+    "the server runs with --require-human and this client declared no form elicitation, so the human step could not be performed at all; connect an eliciting client or drop --require-human",
+};
+
 function confirmRefused(reason: HumanConfirmReason, manifestDigest: string): never {
-  throw new AxiomError("ERR_CONFIRM_DIGEST_MISMATCH", `human confirmation refused: ${reason}`, {
-    details: { reason, manifestDigest },
-  });
+  throw new AxiomError(
+    "ERR_CONFIRM_DIGEST_MISMATCH",
+    `human confirmation refused: ${reason} - ${CONFIRM_HINT[reason]}`,
+    { details: { reason, manifestDigest } },
+  );
 }
 
 /** The elicitation sent before a write: digest, root, file count, ≤ 20 `op path` lines. */

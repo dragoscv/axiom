@@ -193,6 +193,26 @@ describe("axiom_apply with an eliciting client — 2025 era (legacy shim)", () =
     expect(await written()).toBe(false);
   });
 
+  it("a cancelled confirmation explains the autonomous-harness case (MC-9)", async () => {
+    // The owner's decision (2026-11-17): keep the human step unconditional, make the message
+    // actionable. VS Code Autopilot cancels elicitation mechanically, which used to be
+    // indistinguishable from a human pressing Cancel, so apply simply never worked.
+    const c = await connectLegacy(() => ({ action: "cancel" }));
+    const b = await compiled(c);
+    const r = await c.call("axiom_apply", applyArgs(b));
+    const text = JSON.stringify(r);
+    expect(refusal(r).details?.reason).toBe("cancelled");
+    expect(text).toContain("Autopilot");
+    expect(text).toContain("nothing was written");
+    // The other reasons stay short and specific rather than repeating that paragraph.
+    const declined = await (await connectLegacy(() => ({ action: "decline" }))).call(
+      "axiom_apply",
+      applyArgs(b),
+    );
+    expect(JSON.stringify(declined)).toContain("the human declined");
+    expect(JSON.stringify(declined)).not.toContain("Autopilot");
+  });
+
   it("a wrong confirmDigest echo is refused before anyone is asked", async () => {
     const c = await connectLegacy(accepting());
     const b = await compiled(c);
