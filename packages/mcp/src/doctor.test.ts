@@ -488,6 +488,36 @@ describe("axiom doctor — VS Code hook log", () => {
     expect(byId(r, "hook.log.vscode")?.message).toContain("p95 80 ms");
   });
 
+  it("a wired gate command whose program does not resolve fails (A3-3)", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    // The shape `setup init --daemon` used to write: a bare binary npm never puts on PATH.
+    await writeFile(
+      join(repo.root, ".github", "hooks", "axiom-gate.json"),
+      JSON.stringify({
+        hooks: {
+          preToolUse: [{ type: "command", command: "definitely-not-installed-axiom gate --stdin" }],
+        },
+      }),
+    );
+    const c = byId(await runDoctor(base()), "hook.bin");
+    expect(c?.status).toBe("fail");
+    expect(c?.message).toContain("definitely-not-installed-axiom");
+  });
+
+  it("a wired gate command with an empty entry list is not wiring (OPS-7)", async () => {
+    await runInit({ root: repo.root, profileName: "demo" });
+    await writeFile(
+      join(repo.root, ".github", "hooks", "axiom-gate.json"),
+      JSON.stringify({
+        hooks: { preToolUse: [] },
+        _note: "the axiom gate runs from the user-level hook-pre.ps1",
+      }),
+    );
+    const c = byId(await runDoctor(base()), "hook.bin");
+    // Nothing is wired, so there is no bin to resolve and no check to report.
+    expect(c).toBeUndefined();
+  });
+
   const foreignRun = (id: number, cwd: string) =>
     line(
       id,

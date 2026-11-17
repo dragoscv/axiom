@@ -26,13 +26,16 @@ import {
   defaultHealthFetch,
   GATE_COMMAND_RE,
   GITIGNORE_LINES,
+  gateCommandsOf,
   type HealthFetcher,
+  hookArgvOf,
   INIT_FILES,
   isAxiomGateHook,
   isAxiomPostEntry,
   isCopilotPostEntry,
   isExecOnlyGateEntry,
   POST_MIN_VERSION,
+  resolveHookProgram,
   STEER_MIN_VERSION,
 } from "./init.js";
 import { realDir } from "./roots.js";
@@ -652,6 +655,8 @@ async function checkHooks(
     }
   }
   out.push(...(await checkClineHooks(root, platform)));
+  const wired = await checkWiredHook(root);
+  if (wired !== undefined) out.push(wired);
   if (out.length === 0) {
     out.push(
       check("hook", "warn", "no PreToolUse hook config found for any harness", "axiom init"),
@@ -701,6 +706,50 @@ async function checkHooks(
     }
   }
   return out;
+}
+
+/** Hook documents that can carry a PreToolUse gate command (kept in step with INIT_FILES). */
+const WIRED_HOOK_FILES = [
+  INIT_FILES.copilotHook,
+  INIT_FILES.claudeSettings,
+  INIT_FILES.cursorHooks,
+  INIT_FILES.devinHooks,
+  INIT_FILES.windsurfHooks,
+  INIT_FILES.codexHooks,
+  INIT_FILES.geminiSettings,
+] as const;
+
+/**
+ * S-1413: resolve the program of every gate command the hook documents DECLARE. Looking at the
+ * wiring is not enough — `setup init --daemon` used to write a bare `axiom-hook`, which npm never
+ * puts on PATH, so every PreToolUse call failed while every other check stayed green (A3-3). A
+ * command whose program cannot be resolved is a fail, with the command in the message.
+ */
+async function checkWiredHook(root: string): Promise<DoctorCheck | undefined> {
+  const missing: string[] = [];
+  let resolved: string | undefined;
+  for (const rel of WIRED_HOOK_FILES) {
+    const r = await readJsonFile(path.join(root, rel));
+    if (r?.doc === undefined) continue;
+    for (const command of gateCommandsOf(r.doc)) {
+      const program = hookArgvOf(command)[0];
+      if (program === undefined) continue;
+      const found = await resolveHookProgram(program);
+      if (found === undefined) missing.push(`${rel}: ${command}`);
+      else resolved ??= `${program} -> ${found}`;
+    }
+  }
+  if (missing.length > 0) {
+    return check(
+      "hook.bin",
+      "fail",
+      `${missing.length} wired gate command(s) cannot run: ${missing.join("; ")} - every tool call fails or is allowed unchecked`,
+      "axiom setup init --force",
+    );
+  }
+  // Nothing wired: the caller's "no PreToolUse hook config found" warning covers it.
+  if (resolved === undefined) return undefined;
+  return check("hook.bin", "ok", `wired gate command resolves (${resolved})`);
 }
 
 async function isDirectory(abs: string): Promise<boolean> {

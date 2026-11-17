@@ -153,6 +153,92 @@ export async function gitignoreHidesPolicy(root: string): Promise<boolean> {
 export const GATE_COMMAND_RE = /\baxiom(?:-hook)?\b.*\bgate\b/;
 
 /**
+ * Keys whose string value a harness will actually RUN. Reality check #2 (OPS-7): the fleet view
+ * walked EVERY string in a hook document, so the `_note` prose of a file whose `preToolUse` was an
+ * empty array ("...the axiom gate runs from the user-level hook...") counted as wiring — 28
+ * checkouts were reported as protected while nothing ran.
+ */
+const COMMAND_KEYS: ReadonlySet<string> = new Set([
+  "command",
+  "bash",
+  "powershell",
+  "cmd",
+  "script",
+  "run",
+]);
+
+/** Every gate command a hook document declares, in document order (deduplicated). */
+export function gateCommandsOf(doc: unknown): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, key: string | undefined): void => {
+    if (typeof v === "string") {
+      if (key !== undefined && COMMAND_KEYS.has(key.toLowerCase()) && GATE_COMMAND_RE.test(v)) {
+        out.push(v);
+      }
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x, undefined);
+      return;
+    }
+    if (v !== null && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) walk(x, k);
+    }
+  };
+  walk(doc, undefined);
+  return [...new Set(out)];
+}
+
+/** Program of a hook command line: the tokens before the first shell metacharacter, unquoted. */
+export function hookArgvOf(command: string): string[] {
+  const simple = command.split(/[;|&>]/)[0] ?? "";
+  const out: string[] = [];
+  for (const m of simple.matchAll(/"([^"]*)"|'([^']*)'|([^\s"']+)/g)) {
+    const t = m[1] ?? m[2] ?? m[3] ?? "";
+    if (t !== "") out.push(t);
+  }
+  return out;
+}
+
+/** Executable suffixes a shell adds when resolving a bare program name. */
+const PATHEXT_WIN = [".exe", ".cmd", ".bat", ".ps1", ".com"];
+
+/**
+ * The wired hook's program as the HARNESS would resolve it — a bare name against `PATH` (with
+ * `PATHEXT` on Windows), a path against the filesystem. `undefined` means every PreToolUse call
+ * fails (deny, or fail-open where the harness ignores the exit code): the A3-3 case in which
+ * `init --daemon` wired a bare `axiom-hook` that npm does not put on PATH while doctor stayed
+ * fully green.
+ */
+export async function resolveHookProgram(
+  program: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  if (program === "") return undefined;
+  const isWin = (env.OS ?? process.platform) === "Windows_NT" || process.platform === "win32";
+  const exts = isWin ? PATHEXT_WIN : [""];
+  // A hook may name the shim explicitly (`axiom.cmd`), so the name itself is a candidate too.
+  const candidates = (base: string): string[] => [
+    ...new Set([base, ...exts.map((e) => `${base}${e}`)]),
+  ];
+  const isFile = (p: string): Promise<boolean> =>
+    stat(p).then(
+      (s) => s.isFile(),
+      () => false,
+    );
+  if (/[\\/]/.test(program)) {
+    for (const c of candidates(program)) if (await isFile(c)) return c;
+    return undefined;
+  }
+  for (const dir of (env.PATH ?? env.Path ?? "").split(isWin ? ";" : ":")) {
+    const d = dir.trim().replace(/^"|"$/g, "");
+    if (d === "") continue;
+    for (const c of candidates(path.join(d, program))) if (await isFile(c)) return c;
+  }
+  return undefined;
+}
+
+/**
  * Seconds a hook may take. Every harness that documents a timeout lets the tool run when it
  * fires (fail-open), and a cold Windows PowerShell start alone can exceed 5 s under load.
  */

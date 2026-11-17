@@ -193,4 +193,22 @@ describe("axiom setup doctor --fleet (I-1)", () => {
       }),
     ).toEqual(["axiom gate --stdin", "axiom gate --stdin --post"]);
   });
+
+  it("gateCommandsOf ignores prose, so an unwired file is not reported as wired (OPS-7)", () => {
+    // The real shape: the entry list is empty and only the note mentions the gate. The old
+    // implementation walked every string and called this "wired" for 28 checkouts.
+    expect(
+      gateCommandsOf({
+        hooks: { preToolUse: [] },
+        _note: "the axiom gate runs from the user-level hook-pre.ps1, not from this file",
+      }),
+    ).toEqual([]);
+    // A `_note` next to a REAL command is fine: only the command keys are read.
+    expect(
+      gateCommandsOf({
+        hooks: { preToolUse: [{ command: "axiom gate --stdin" }] },
+        _note: "axiom gate --stdin is the contract",
+      }),
+    ).toEqual(["axiom gate --stdin"]);
+  });
 });

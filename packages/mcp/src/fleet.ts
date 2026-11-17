@@ -21,9 +21,11 @@ import {
   type BinLocator,
   compareVersions,
   defaultBinLocator,
-  GATE_COMMAND_RE,
+  gateCommandsOf,
   INIT_FILES,
 } from "./init.js";
+
+export { gateCommandsOf };
 
 export type FleetStatus = "ok" | "warn" | "fail";
 
@@ -168,19 +170,6 @@ async function mainRootOf(dir: string): Promise<string | undefined> {
   const common = await gitCommonDir(dir);
   if (common === undefined || path.basename(common).toLowerCase() !== ".git") return undefined;
   return realOr(path.dirname(common));
-}
-
-function collectStrings(v: unknown, out: string[]): void {
-  if (typeof v === "string") out.push(v);
-  else if (Array.isArray(v)) for (const x of v) collectStrings(x, out);
-  else if (isRecord(v)) for (const x of Object.values(v)) collectStrings(x, out);
-}
-
-/** Every gate command string (pre and post) a hook document declares, in document order. */
-export function gateCommandsOf(doc: unknown): string[] {
-  const all: string[] = [];
-  collectStrings(doc, all);
-  return [...new Set(all.filter((s) => GATE_COMMAND_RE.test(s)))];
 }
 
 async function hookFilesOf(root: string): Promise<FleetHookFile[]> {
