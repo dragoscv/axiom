@@ -393,11 +393,18 @@ describe("axiom init — every harness", () => {
     ]);
   });
 
-  it("--daemon: claude http hook, axiom-hook in every command hook, daemon note", async () => {
+  it("--daemon: wires the native client only when its self-test passes (A3-3)", async () => {
     for (const d of [".github", ".claude", ".cursor", ".codex", ".gemini", ".windsurf"]) {
       await mkdir(join(repo.root, d));
     }
-    const r = await runInit({ root: repo.root, profileName: "demo", daemon: true });
+    const native = { path: "axiom-hook", kind: "native" as const };
+    const r = await runInit({
+      root: repo.root,
+      profileName: "demo",
+      daemon: true,
+      resolveHookBin: async () => native,
+      hookSelfTest: async () => ({ ok: true, ms: 12 }),
+    });
     expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK_DAEMON);
     const claude = (await readJson(".claude/settings.json")) as {
       hooks: { PreToolUse: unknown[] };
@@ -414,12 +421,44 @@ describe("axiom init — every harness", () => {
     });
     expect(await readJson(".windsurf/hooks.json")).toEqual(windsurfHooks("axiom-hook"));
     expect(r.notes.some((n) => n.includes("axiom serve --hook --root"))).toBe(true);
+    expect(r.notes.some((n) => n.includes("answered its self-test in 12 ms"))).toBe(true);
     // A daemon re-run recognises the http entry as ours; a plain run recognises axiom-hook.
-    const again = await runInit({ root: repo.root, profileName: "demo", daemon: true });
+    const again = await runInit({
+      root: repo.root,
+      profileName: "demo",
+      daemon: true,
+      resolveHookBin: async () => native,
+      hookSelfTest: async () => ({ ok: true, ms: 12 }),
+    });
     expect(again.files.every((f) => f.action === "skipped")).toBe(true);
     const plain = await runInit({ root: repo.root, profileName: "demo" });
     expect(plain.files.find((f) => f.path === ".claude/settings.json")?.action).toBe("skipped");
     expect(plain.files.find((f) => f.path === ".cursor/hooks.json")?.action).toBe("skipped");
+
+    // A client that cannot answer its self-test must NOT be wired: a bare `axiom-hook` is not on
+    // PATH after an npm install, and every tool call would then be denied (A3-3).
+    const bad = await runInit({
+      root: repo.root,
+      profileName: "demo",
+      daemon: true,
+      force: true,
+      resolveHookBin: async () => native,
+      hookSelfTest: async () => ({ ok: false, reason: "spawn-failed" }),
+    });
+    expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK);
+    expect(await readJson(".cursor/hooks.json")).toEqual(cursorHooks("axiom"));
+    expect(bad.notes.some((n) => n.includes("failed its self-test (spawn-failed)"))).toBe(true);
+
+    // And with no native client installed at all, the node client is wired with a note.
+    const none = await runInit({
+      root: repo.root,
+      profileName: "demo",
+      daemon: true,
+      force: true,
+      resolveHookBin: async () => undefined,
+    });
+    expect(await readJson(".github/hooks/axiom-gate.json")).toEqual(COPILOT_HOOK);
+    expect(none.notes.some((n) => n.includes("no native hook client installed"))).toBe(true);
   });
 
   it("isAxiomGateEntry accepts axiom, axiom-hook and the daemon http hook, nothing else", () => {

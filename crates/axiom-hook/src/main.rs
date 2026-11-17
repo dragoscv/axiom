@@ -11,6 +11,7 @@
 //! with ERR_DAEMON_AUTH. Wire protocol: packages/mcp/src/daemon-proto.ts — change both together.
 
 mod deny;
+mod deny_table;
 mod fallback;
 mod http;
 mod json;
@@ -119,7 +120,15 @@ fn gate(args: Vec<String>) -> ExitCode {
     if let Some(code) =
         launcher.and_then(|l| fallback::run(&l, &args, input.bytes, fallback::timeout()))
     {
-        return exit_code(code);
+        // A3-6: a verdict comes back as exit 0 (the document on stdout carries the decision) or
+        // exit 2 (the exit-code-only harnesses). Any other exit means the fallback died before it
+        // decided (an old `node` first on PATH, a crashed CLI): passing it through handed the
+        // harness an empty stdout and a non-verdict exit while the README promises fail-closed.
+        if code == 0 || code == 2 {
+            return exit_code(code);
+        }
+        let reason = format!("the fallback gate exited {code} without a verdict (fail-closed)");
+        return emit(&deny::render_code(&flags, deny::CODE, &reason));
     }
 
     // Deliberately fail closed even under --fail-open: that flag relaxes the gate's own

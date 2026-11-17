@@ -42,6 +42,8 @@ import {
   H_VERSION,
   HEALTH_PATH,
   NONCE_RE,
+  pidAlive,
+  readDaemonState,
 } from "./daemon-proto.js";
 import {
   GATE_LOG_LEVELS,
@@ -67,6 +69,11 @@ export interface ServeOptions {
   home?: string;
   /** Do not write the state file (tests). */
   noStateFile?: boolean;
+  /**
+   * Replace a LIVE daemon's state file instead of refusing to start (A2-28). The running daemon
+   * keeps its port and its key, so the hooks move to this one and the old one is unreachable.
+   */
+  force?: boolean;
   /** Called for every judged request (tests, metrics). */
   onRequest?: (r: { path: string; status: number; ms: number }) => void;
   /** S-1217: one `execute_tool` span per judged request (opt-in; flushed on close). */
@@ -278,6 +285,20 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
   if (opts.roots.length === 0) {
     throw new AxiomError("ERR_ROOT_REQUIRED", "serve --hook needs at least one --root");
   }
+  const statePath = daemonStatePath(opts.home ?? homedir());
+  if (opts.noStateFile !== true && opts.force !== true) {
+    // A2-28: ONE state file holds the daemon every hook in every repo talks to. Starting a second
+    // daemon overwrote it, so the first kept running while nothing could reach it (orphaned) and
+    // the hooks silently moved to the new one. Refuse, and say what to do about it.
+    const live = await readDaemonState(opts.home);
+    if (live !== undefined && live.pid !== process.pid && pidAlive(live.pid)) {
+      throw new AxiomError(
+        "ERR_LOCKED",
+        `a gate daemon is already running (pid ${live.pid} on ${live.host}:${live.port}); stop it or pass --force`,
+        { details: { pid: live.pid, host: live.host, port: live.port, roots: live.roots } },
+      );
+    }
+  }
   const roots = [...opts.roots];
   const startedAt = new Date().toISOString();
   const key = randomBytes(32).toString("hex");
@@ -482,7 +503,6 @@ export async function startDaemon(opts: ServeOptions): Promise<RunningDaemon> {
     startedAt,
     key,
   };
-  const statePath = daemonStatePath(opts.home ?? homedir());
   if (opts.noStateFile !== true) await writeStateFile(statePath, state);
   const urlHost = host.includes(":") ? `[${host}]` : host;
   return {

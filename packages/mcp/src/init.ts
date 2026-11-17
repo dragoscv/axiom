@@ -26,6 +26,7 @@ import {
   isLoopbackHost,
   readDaemonState,
 } from "./daemon-proto.js";
+import { type HookBin, type HookSelfTest, resolveHookBin, selfTestHook } from "./hook-bin.js";
 import { OPENCODE_PLUGIN_JS } from "./opencode-plugin.js";
 import { realDir } from "./roots.js";
 import { PACKAGE_VERSION } from "./version.js";
@@ -107,6 +108,10 @@ export interface InitOptions {
   locateBin?: BinLocator;
   /** Test seam (upgrade): is a resident daemon answering health? Default reads ~/.axiom/daemon.json. */
   daemonRunning?: () => Promise<boolean>;
+  /** Test seam: the native hook client (default `resolveHookBin()`); `undefined` = not installed. */
+  resolveHookBin?: () => Promise<HookBin | undefined>;
+  /** Test seam: the self-test of a resolved client (default the real one, one canned allow run). */
+  hookSelfTest?: (bin: HookBin) => Promise<HookSelfTest>;
 }
 
 /** Root-relative files `init` owns (doctor reads the same list). */
@@ -200,43 +205,8 @@ export function hookArgvOf(command: string): string[] {
   return out;
 }
 
-/** Executable suffixes a shell adds when resolving a bare program name. */
-const PATHEXT_WIN = [".exe", ".cmd", ".bat", ".ps1", ".com"];
-
-/**
- * The wired hook's program as the HARNESS would resolve it — a bare name against `PATH` (with
- * `PATHEXT` on Windows), a path against the filesystem. `undefined` means every PreToolUse call
- * fails (deny, or fail-open where the harness ignores the exit code): the A3-3 case in which
- * `init --daemon` wired a bare `axiom-hook` that npm does not put on PATH while doctor stayed
- * fully green.
- */
-export async function resolveHookProgram(
-  program: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string | undefined> {
-  if (program === "") return undefined;
-  const isWin = (env.OS ?? process.platform) === "Windows_NT" || process.platform === "win32";
-  const exts = isWin ? PATHEXT_WIN : [""];
-  // A hook may name the shim explicitly (`axiom.cmd`), so the name itself is a candidate too.
-  const candidates = (base: string): string[] => [
-    ...new Set([base, ...exts.map((e) => `${base}${e}`)]),
-  ];
-  const isFile = (p: string): Promise<boolean> =>
-    stat(p).then(
-      (s) => s.isFile(),
-      () => false,
-    );
-  if (/[\\/]/.test(program)) {
-    for (const c of candidates(program)) if (await isFile(c)) return c;
-    return undefined;
-  }
-  for (const dir of (env.PATH ?? env.Path ?? "").split(isWin ? ";" : ":")) {
-    const d = dir.trim().replace(/^"|"$/g, "");
-    if (d === "") continue;
-    for (const c of candidates(path.join(d, program))) if (await isFile(c)) return c;
-  }
-  return undefined;
-}
+/** One implementation, in the module that owns the native client (re-exported for doctor/fleet). */
+export { resolveHookProgram } from "./hook-bin.js";
 
 /**
  * Seconds a hook may take. Every harness that documents a timeout lets the tool run when it
@@ -244,14 +214,28 @@ export async function resolveHookProgram(
  */
 export const HOOK_TIMEOUT_SEC = 15;
 
-export type GateBin = "axiom" | "axiom-hook";
+/**
+ * The command word every hook calls. `axiom` / `axiom-hook` are the names a shell resolves; a
+ * resolved ABSOLUTE path is also accepted (4.0, S-1412), because an npm install never puts
+ * `axiom-hook` on PATH and the self-test may find it at
+ * `@codai/axiom-hook-<platform>/bin/axiom-hook[.exe]`.
+ */
+export type GateBin = string;
 
 export function gateCommand(bin: GateBin, format: string): string {
-  return `${bin} gate --stdin --format ${format}`;
+  return `${commandWord(bin)} gate --stdin --format ${format}`;
+}
+
+/** A path with spaces must be quoted, or the shell splits the command at the first space. */
+export function commandWord(bin: GateBin): string {
+  return bin.includes(" ") && !bin.startsWith('"') ? `"${bin}"` : bin;
 }
 
 function windowsExe(bin: GateBin): string {
-  return bin === "axiom" ? "axiom.cmd" : "axiom-hook.exe";
+  if (bin === "axiom") return "axiom.cmd";
+  if (bin === "axiom-hook") return "axiom-hook.exe";
+  // A resolved absolute path already names the file (the self-test stat'd it).
+  return commandWord(bin);
 }
 
 /**
@@ -1326,12 +1310,37 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const w = new Writer(root, opts.force === true, opts.dryRun === true);
   const notes: string[] = [];
   const daemon = opts.daemon === true;
-  const wire: HarnessWiring = { bin: daemon ? "axiom-hook" : "axiom", daemon, post: true };
+  // D-51/A3-3: `--daemon` prefers the native thin client, but only AFTER it answers a canned call.
+  // A bare `axiom-hook` is not on PATH after an npm install, and wiring it denied every tool call
+  // while doctor stayed green; a client that cannot answer now falls back to the node gate.
+  let bin: GateBin = "axiom";
+  if (daemon) {
+    const native = await (opts.resolveHookBin ?? resolveHookBin)();
+    const test =
+      native === undefined
+        ? undefined
+        : await (opts.hookSelfTest ?? ((b: HookBin) => selfTestHook(b, { cwd: root })))(native);
+    if (native !== undefined && test?.ok === true) {
+      bin = native.path;
+      notes.push(
+        `--daemon: native hook client (${native.path}) answered its self-test in ${Math.round(test.ms ?? 0)} ms`,
+      );
+    } else {
+      notes.push(
+        native === undefined
+          ? "--daemon: no native hook client installed; wiring the node client instead (still fast enough with the daemon up)"
+          : `--daemon: the native client at ${native.path} failed its self-test (${test?.reason ?? "unknown"}); wiring the node client instead`,
+      );
+    }
+  }
+  const wire: HarnessWiring = { bin, daemon, post: true };
   const has = (h: HarnessName) => harnesses.includes(h);
 
   await w.mergeJson(INIT_FILES.mcp, () => ({ servers: { axiom: MCP_SERVER_ENTRY } }), mergeMcp);
   if (has("copilot") || has("vscode")) {
-    const text = json(daemon ? COPILOT_HOOK_DAEMON : COPILOT_HOOK);
+    // The command is `wire.bin` (the self-test's verdict), not the raw `--daemon` flag: wiring a
+    // bare `axiom-hook` that npm never puts on PATH denies every tool call (A3-3).
+    const text = json(copilotHook(wire.bin));
     if (await isLegacyExecHook(path.join(root, INIT_FILES.copilotHook))) {
       await w.replaceOwned(
         INIT_FILES.copilotHook,

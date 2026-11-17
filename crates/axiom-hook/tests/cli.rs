@@ -490,7 +490,7 @@ fn no_state_file_and_deny_exit_2() {
 }
 
 #[test]
-fn fallback_cli_receives_args_and_stdin() {
+fn fallback_cli_receives_args_and_stdin_and_a_crash_fails_closed() {
     // A fake `axiom` that echoes its argv and stdin, run through the override (node + .js).
     if !node_on_path() {
         eprintln!("node not on PATH: skipping fallback relay test");
@@ -509,16 +509,38 @@ fn fallback_cli_receives_args_and_stdin() {
         b"{\"p\":1}",
         &js,
     );
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The fallback really received the gate argv and the payload bytes...
+    assert!(
+        stdout.contains(r#"{"argv":["gate","--stdin","--format","codex"],"stdin":"{\"p\":1}"}"#),
+        "stdout: {stdout}"
     );
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        r#"{"argv":["gate","--stdin","--format","codex"],"stdin":"{\"p\":1}"}"#
+    // ...and exit 3 is NOT a verdict: A3-6 was passing it through with an empty stdout.
+    assert_eq!(out.status.code(), Some(0), "stderr: {stderr}");
+    assert!(stderr.contains("exited 3 without a verdict"), "stderr: {stderr}");
+    assert!(stdout.contains(r#""permissionDecision":"deny""#), "stdout: {stdout}");
+}
+
+#[test]
+fn fallback_exit_2_is_relayed_verbatim() {
+    // The exit-code-only contract (windsurf/kiro): the fallback's own 2 IS the verdict, so the
+    // client must not append a second document.
+    if !node_on_path() {
+        eprintln!("node not on PATH: skipping fallback relay test");
+        return;
+    }
+    let home = temp_home("fb2");
+    let js = home.join("deny-cli.js");
+    std::fs::write(&js, "process.exit(2);").unwrap();
+    let out = run(
+        &home,
+        &["gate", "--stdin", "--format", "windsurf"],
+        b"{}",
+        &js,
     );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
 }
 
 fn node_on_path() -> bool {

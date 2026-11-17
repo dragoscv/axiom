@@ -35,6 +35,7 @@ import {
   verifyDaemonMac,
 } from "./daemon-proto.js";
 import { formatFromArgv } from "./gate-fast.js";
+import { GateDeny, renderDeny } from "./gate-format.js";
 
 export interface DaemonVerdict {
   exitCode: number;
@@ -57,49 +58,28 @@ export interface DaemonCallInput {
 const AUTH_REASON =
   "gate daemon answer failed authentication (x-axiom-mac) — another process may be squatting the daemon port";
 
-/** Fail-closed deny in the harness format (mirrors gate.ts `renderDeny`, zero-dependency). */
+/** Code of the fail-closed deny when a daemon answer cannot be authenticated. */
+export const DAEMON_AUTH_CODE = "ERR_DAEMON_AUTH";
+
+/**
+ * Fail-closed deny in the harness format for an unauthenticated daemon answer. The document comes
+ * from the ONE per-format table (`gate-format.ts`, via `renderDeny`) — the 3.x version kept a
+ * private copy of the switch, which had no `kiro` case and no `auto` `axiom` block (A2-19), and
+ * `gate-format.test.ts` pins the two against each other.
+ */
 export function daemonAuthDeny(argv: readonly string[]): DaemonVerdict {
   const reason = AUTH_REASON;
   const format = formatFromArgv(argv);
   const di = argv.indexOf("--deny-exit");
   const denyExit =
-    (di >= 0 && argv[di + 1] === "2") || argv.includes("--deny-exit=2") ? 2 : undefined;
-  const hook = {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: reason,
-  };
-  let stdout = "";
-  let exit = 0;
-  switch (format) {
-    case "codex":
-      stdout = JSON.stringify({ hookSpecificOutput: hook });
-      break;
-    case "cursor":
-      stdout = JSON.stringify({ permission: "deny", user_message: reason, agent_message: reason });
-      break;
-    case "windsurf":
-      exit = 2;
-      break;
-    case "gemini":
-    case "junie":
-      stdout = JSON.stringify({ decision: "deny", reason });
-      break;
-    case "cline":
-      stdout = JSON.stringify({ cancel: true, errorMessage: reason });
-      break;
-    default:
-      stdout = JSON.stringify({
-        hookSpecificOutput: hook,
-        permissionDecision: "deny",
-        permissionDecisionReason: reason,
-        axiom: { verdict: "deny", code: "ERR_DAEMON_AUTH", standard: "owasp-acs/0.1" },
-      });
-  }
+    (di >= 0 && argv[di + 1] === "2") || argv.includes("--deny-exit=2") ? (2 as const) : undefined;
+  const out = renderDeny(format, new GateDeny(DAEMON_AUTH_CODE, reason), reason, {
+    ...(denyExit === undefined ? {} : { denyExit }),
+  });
   return {
-    exitCode: denyExit ?? exit,
-    stdout,
-    stderr: [`AXIOM GATE DENY ERR_DAEMON_AUTH: ${reason}`],
+    exitCode: out.exitCode,
+    stdout: out.stdout ?? "",
+    stderr: [`AXIOM GATE DENY ${DAEMON_AUTH_CODE}: ${reason}`],
   };
 }
 
