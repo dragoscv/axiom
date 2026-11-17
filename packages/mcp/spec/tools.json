@@ -811,10 +811,10 @@
   {
     "name": "axiom_check",
     "description": "Evaluate the profile's predicates (plus the manifest's own checks) against the bundle. Repo facts are read from the root when one is available and the profile allows it. Verdict `error` means a provider could not run — never a silent pass.",
-    "riskClass": "READ",
+    "riskClass": "ACT",
     "toolset": "core",
     "annotations": {
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false
@@ -1022,10 +1022,10 @@
   {
     "name": "axiom_check_start",
     "description": "Same evaluation as axiom_check, but returned immediately as a task so long `guard.external` suites (up to 15 min per guard) outlive the client's per-call timeout. Poll axiom_task_get with the returned taskId every pollIntervalMs until status is completed|failed|cancelled; the CheckReport is in `result`. Finished tasks are pollable for ttlMs, then forgotten. Tasks live in this server process only (D-24 — tool-level tasks, not the io.modelcontextprotocol/tasks wire extension).",
-    "riskClass": "READ",
+    "riskClass": "ACT",
     "toolset": "full",
     "annotations": {
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false
@@ -2273,10 +2273,10 @@
   {
     "name": "axiom_apply_dry_run",
     "description": "Stage the bundle under <root>/.axiom/staging, run pre-apply checks and produce a unified diff against the current tree. Nothing outside .axiom/ is touched. Echo the returned manifestDigest as `confirmDigest` to axiom_apply.",
-    "riskClass": "READ",
+    "riskClass": "ACT",
     "toolset": "core",
     "annotations": {
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false

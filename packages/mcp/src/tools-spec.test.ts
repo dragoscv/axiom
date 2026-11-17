@@ -45,10 +45,12 @@ describe("spec/tools.json parity", () => {
     expect(risk.axiom_apply).toBe("SENSITIVE");
     expect(risk.axiom_rollback).toBe("SENSITIVE");
     expect(risk.axiom_plan_compile).toBe("ACT");
-    expect(risk.axiom_check).toBe("READ");
-    expect(risk.axiom_apply_dry_run).toBe("READ");
-    // S-406: starting/polling a check reads only; cancel and plan sessions mutate server state (ACT)
-    expect(risk.axiom_check_start).toBe("READ");
+    // MC-13: these three PERSIST (a report, a background task's report, staging) under <root>/.axiom/,
+    // so they are ACT under the spec's definition of read-only ("does not modify its environment").
+    expect(risk.axiom_check).toBe("ACT");
+    expect(risk.axiom_apply_dry_run).toBe("ACT");
+    expect(risk.axiom_check_start).toBe("ACT");
+    // Polling a task reads; cancel and the plan session mutate server state (ACT).
     expect(risk.axiom_task_get).toBe("READ");
     expect(risk.axiom_task_cancel).toBe("ACT");
     expect(risk.axiom_plan_begin).toBe("ACT");

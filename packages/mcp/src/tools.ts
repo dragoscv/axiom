@@ -826,7 +826,11 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       root: RootArg,
     },
     outputSchema: CheckReportSchema,
-    annotations: READ,
+    // MC-13: `checkBundle` persists a report under `<root>/.axiom/reports/`, and a
+    // `guard.external` check runs a command. `readOnlyHint: true` was therefore false — the spec
+    // means "does not modify its environment" — and clients are entitled to skip confirmation,
+    // undo accounting and concurrency limits on a read-only tool.
+    annotations: ACT,
     async handler(ctx, { bundle, profile, root }) {
       const parsed = parseBundle(bundle);
       const rootReal = await optionalRoot(ctx, root);
@@ -846,7 +850,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       root: RootArg,
     },
     outputSchema: TaskDescriptorOutput,
-    annotations: READ,
+    annotations: ACT,
     async handler(ctx, { bundle, profile, root }) {
       // Validate synchronously so a malformed bundle / disallowed root is an immediate error,
       // not a task that fails two seconds later.
@@ -1003,7 +1007,8 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
       profile: ProfileArg,
     },
     outputSchema: ApplyResultSchema,
-    annotations: READ,
+    // MC-13: the dry run writes staging under `<root>/.axiom/` (and runs the pre-apply checks).
+    annotations: ACT,
     async handler(ctx, { bundle, root, profile }) {
       const parsed = parseBundle(bundle);
       const { rootReal } = await resolveRoot(ctx.policy, root);
