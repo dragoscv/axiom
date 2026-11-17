@@ -146,6 +146,20 @@ export interface ElicitConfirmResult {
 export const ELICIT_CONFIRM_KEY = "axiom_confirm";
 /** A confirmation round older than this is asked again (the requestState carries its mint time). */
 export const ELICIT_STATE_TTL_MS = 15 * 60_000;
+/**
+ * Nonces already consumed by a confirmation (MC-7). The token is otherwise stateless: minted and
+ * verified in this process, so a single-use set costs one `Set` and closes the replay — otherwise
+ * the same `requestState` plus answer authorised a SECOND destructive apply inside the 15-minute
+ * window (the audit re-applied a change after a rollback). Bounded by {@link ELICIT_STATE_TTL_MS}.
+ */
+const CONSUMED_STATES = new Map<string, number>();
+
+function rememberConsumed(nonce: string, now: number): void {
+  for (const [k, at] of CONSUMED_STATES) {
+    if (now - at > ELICIT_STATE_TTL_MS) CONSUMED_STATES.delete(k);
+  }
+  CONSUMED_STATES.set(nonce, now);
+}
 
 const STATE_PREFIX = "axc1";
 // Per-process key: requestState round-trips through the client and is attacker-controlled
@@ -162,17 +176,20 @@ function mintState(binding: string, now: number): string {
   return `${STATE_PREFIX}.${t}.${nonce}.${stateMac(binding, t, nonce)}`;
 }
 
-function stateValid(state: unknown, binding: string, now: number): boolean {
-  if (typeof state !== "string") return false;
+/** The validated nonce of a confirmation round, or `undefined` when the token is not one of ours. */
+function stateNonce(state: unknown, binding: string, now: number): string | undefined {
+  if (typeof state !== "string") return undefined;
   const parts = state.split(".");
-  if (parts.length !== 4 || parts[0] !== STATE_PREFIX) return false;
+  if (parts.length !== 4 || parts[0] !== STATE_PREFIX) return undefined;
   const [, t = "", nonce = "", mac = ""] = parts;
   const minted = Number.parseInt(t, 36);
   if (!Number.isFinite(minted) || now - minted > ELICIT_STATE_TTL_MS || minted > now + 60_000)
-    return false;
+    return undefined;
   const want = Buffer.from(stateMac(binding, t, nonce));
   const got = Buffer.from(mac);
-  return want.length === got.length && timingSafeEqual(want, got);
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return undefined;
+  // MC-7: single use. A round already answered must not authorise a second destructive apply.
+  return CONSUMED_STATES.has(nonce) ? undefined : nonce;
 }
 
 interface RequestCtxLike {
@@ -242,9 +259,13 @@ export async function elicitConfirm(
   if (!supportsFormElicitation(caps)) return { action: "unsupported" };
 
   const now = Date.now();
-  if (stateValid(extra.mcpReq.requestState(), req.binding, now)) {
+  const nonce = stateNonce(extra.mcpReq.requestState(), req.binding, now);
+  if (nonce !== undefined) {
     const answer = inputResponse(extra.mcpReq.inputResponses, ELICIT_CONFIRM_KEY);
     if (answer.kind === "elicit") {
+      // The round is spent NOW, before the caller acts on the answer: a replay inside the TTL is
+      // a fresh question rather than a second authorisation (MC-7).
+      rememberConsumed(nonce, now);
       return answer.content === undefined
         ? { action: answer.action }
         : { action: answer.action, content: answer.content };
