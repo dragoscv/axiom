@@ -164,6 +164,47 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     expect((await client.listTools()).tools).toHaveLength(TOOL_DEFS.length);
   });
 
+  it("refuses a request from a foreign Origin and allows a loopback page (MC-4)", async () => {
+    await start();
+    const foreign = await raw({
+      method: "POST",
+      headers: { ...mcpHeaders, origin: "http://evil.example" },
+      body: initBody,
+    });
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers.get("mcp-session-id")).toBeNull();
+    // An opaque origin (a sandboxed iframe, a file: page) is not a loopback page either.
+    const opaque = await raw({
+      method: "POST",
+      headers: { ...mcpHeaders, origin: "null" },
+      body: initBody,
+    });
+    expect(opaque.status).toBe(403);
+    expect(handle.sessions()).toBe(0);
+    // A local UI may still connect.
+    const local = await raw({
+      method: "POST",
+      headers: { ...mcpHeaders, origin: "http://localhost:3000" },
+      body: initBody,
+    });
+    expect(local.status).toBe(200);
+  });
+
+  it("refuses to open more sessions than the cap (MC-4)", async () => {
+    await start({ sessionMax: 2 });
+    const a = await connect();
+    const b = await connect();
+    expect(handle.sessions()).toBe(2);
+    const init = await raw({ method: "POST", headers: mcpHeaders, body: initBody });
+    expect(init.status).toBe(503);
+    expect(handle.sessions()).toBe(2);
+    // Freeing one lets the next client in.
+    await a.transport.terminateSession();
+    const again = await raw({ method: "POST", headers: mcpHeaders, body: initBody });
+    expect(again.status).toBe(200);
+    await b.transport.terminateSession();
+  });
+
   it("gives each client its own session and DELETE closes it", async () => {
     await start();
     const a = await connect();

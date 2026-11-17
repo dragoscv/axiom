@@ -21,6 +21,7 @@ import {
   type DigestRef,
   DigestRefSchema,
   ErrorCodeSchema,
+  isAxiomError,
   JournalPhaseSchema,
   type ManifestBundle,
   ManifestBundleSchema,
@@ -741,8 +742,7 @@ export const TOOL_DEFS: readonly AnyToolDef[] = [
         );
         return { ok: true, planDigest: bundle.manifest.planDigest, errors: [] };
       } catch (err) {
-        if (err instanceof AxiomError && err.code === "ERR_BLOB_MISSING")
-          return { ok: true, errors: [] };
+        if (isAxiomError(err) && err.code === "ERR_BLOB_MISSING") return { ok: true, errors: [] };
         throw err;
       }
     },

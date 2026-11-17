@@ -40,6 +40,8 @@ import { SERVER_VERSION } from "./server.js";
 
 export const HTTP_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
+/** MC-4: concurrent 2025-era sessions one endpoint keeps (a caller must not pin memory). */
+export const HTTP_SESSION_MAX = 256;
 export const HTTP_DEFAULT_HOST = "127.0.0.1";
 export const HTTP_TOKEN_ENV_DEFAULT = "AXIOM_HTTP_TOKEN";
 
@@ -48,6 +50,8 @@ export interface StartHttpOptions {
   port: number;
   /** Bearer token. Mandatory when `host` is not loopback. */
   token?: string;
+  /** MC-4: concurrent 2025-era sessions allowed (default {@link HTTP_SESSION_MAX}). */
+  sessionMax?: number;
   log: Logger;
   /** D-19 wire mode; default `2026` (both eras). */
   wire?: WireMode;
@@ -80,6 +84,28 @@ export function isLoopbackHost(host: string): boolean {
   if (v === 4) return h.startsWith("127.");
   if (v === 6) return h === "::1" || /^(?:0*:)+0*1$/.test(h) || /^::ffff:127\./i.test(h);
   return false;
+}
+
+/**
+ * MC-4: may a request carrying this `Origin` run tools? Only a loopback page can (a local UI,
+ * the MCP Inspector); an opaque `null` origin (a sandboxed iframe, a `file:` page) and any remote
+ * page are refused, which is what the spec's Origin validation is for.
+ */
+export function originAllowed(origin: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const trimmed = origin.trim();
+  if (trimmed === "" || trimmed === "null") return false;
+  if (env.AXIOM_HTTP_ALLOW_ORIGIN !== undefined) {
+    // An operator may add a browser client on the LAN; the token is still required for the request.
+    return env.AXIOM_HTTP_ALLOW_ORIGIN.split(",")
+      .map((o) => o.trim())
+      .some((o) => o === trimmed);
+  }
+  try {
+    const u = new URL(trimmed);
+    return isLoopbackHost(u.hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** `host:port` (or `:port` / `port`) → parts. Port 0 = ephemeral. */
@@ -210,6 +236,7 @@ export async function startHttp(
     throw new AxiomError("ERR_INTERNAL", "http bearer token must be at least 16 characters");
   }
   const idleMs = opts.idleMs ?? HTTP_SESSION_IDLE_MS;
+  const sessionMax = opts.sessionMax ?? HTTP_SESSION_MAX;
   const sessions = new Map<string, Session>();
   const wire = opts.wire ?? "2026";
   // Modern leg: strict — everything with a 2026 envelope claim (and every malformed claim) is
@@ -224,6 +251,15 @@ export async function startHttp(
     let allowedHosts: string[] | undefined;
 
     const handleMcp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      // MC-4: the spec requires Origin validation on every connection. A page on the internet can
+      // aim a request at loopback, and without this check the DNS-rebinding allowlist alone let
+      // `Origin: http://evil.example` (and `Origin: null` from a sandboxed iframe) open a session
+      // and run tools. A loopback origin (any port) is a local client and is allowed.
+      const origin = req.headers.origin;
+      if (typeof origin === "string" && !originAllowed(origin)) {
+        jsonError(res, 403, -32000, "Forbidden: the Origin header is not a loopback origin");
+        return;
+      }
       if (!authorize(opts.token, req.headers.authorization)) {
         res.setHeader("www-authenticate", 'Bearer realm="axiom"');
         jsonError(res, 401, -32000, "Unauthorized");
@@ -274,6 +310,11 @@ export async function startHttp(
           return;
         }
         // New session: the SDK validates that this POST is an `initialize`.
+        if (sessions.size >= sessionMax) {
+          // A cap keeps an unauthenticated loopback caller from pinning memory with sessions.
+          jsonError(res, 503, -32000, `Too many sessions (max ${sessionMax})`);
+          return;
+        }
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
           ...(allowedHosts === undefined

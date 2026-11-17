@@ -1,7 +1,7 @@
 import { lockStatus } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
 import type { EmitterRegistry } from "@codai/axiom-plan";
-import { AxiomError, type ErrorCode } from "@codai/axiom-schema";
+import { AxiomError, type ErrorCode, isAxiomError } from "@codai/axiom-schema";
 import { z } from "zod";
 import {
   CACHE_HINTS,
@@ -26,6 +26,22 @@ import { PACKAGE_VERSION } from "./version.js";
 
 export const SERVER_NAME = "axiom";
 export const SERVER_VERSION: string = PACKAGE_VERSION;
+
+/**
+ * MC-18: the one paragraph a client reads before its first tool call. The tool descriptions say
+ * what each tool does; this says what the SERVER is for and the two rules that apply to all of
+ * them — without it an agent discovered `axiom_write` by trying it.
+ */
+export const SERVER_INSTRUCTIONS = [
+  "AXIOM is a transactional write gate: it compiles a Plan into a canonical Manifest, judges it",
+  "with the repository's checks and then applies it atomically with a journal and rollback.",
+  "",
+  "Rules that apply to every tool here:",
+  "1. Never write the files of a change directly when a gate is active: build the change with",
+  "   `axiom_write` (or `plan_compile` + `axiom_apply`) so it is checked, journaled and reversible.",
+  "2. `axiom_apply` is two-phase and destructive: ALWAYS inspect the dry run first, then pass the",
+  "   `confirmDigest` the dry run returned. A digest that does not match is refused.",
+].join("\n");
 export { DEFAULT_TOOLSET, parseToolset, TOOLSETS, type Toolset } from "./toolset.js";
 
 export interface CreateServerOptions {
@@ -64,7 +80,17 @@ export interface StructuredError {
 }
 
 export function toStructuredError(err: unknown): StructuredError {
-  if (err instanceof AxiomError) return err.toJSON();
+  // MC-3: a cross-chunk `instanceof` failed and every tool error became ERR_INTERNAL, losing the
+  // code the caller dispatches on. `isAxiomError` matches `name` + a code from the closed enum.
+  // Fields, not `toJSON()`: an error raised in another chunk carries the shape, not the methods.
+  if (isAxiomError(err)) {
+    return {
+      code: err.code,
+      message: err.message,
+      ...(err.path === undefined ? {} : { path: err.path }),
+      ...(err.details === undefined ? {} : { details: err.details }),
+    };
+  }
   if (err instanceof z.ZodError) {
     return {
       code: "ERR_INVALID_PLAN",
@@ -136,12 +162,21 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
   if (opts.requireHuman === true) ctx.requireHuman = true;
   if (opts.emitters !== undefined) ctx.emitters = opts.emitters;
   const server = new McpServer(
-    { name: SERVER_NAME, version: SERVER_VERSION },
+    {
+      name: SERVER_NAME,
+      version: SERVER_VERSION,
+      title: "AXIOM write gate",
+      websiteUrl: "https://axiom.codai.ro",
+    },
     // AXIOM's catalogue never changes at runtime: say so (SDK v2 would otherwise advertise
     // `listChanged: true` for every declared primitive). cacheHints only reach 2026-era wires.
     {
       capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
       cacheHints: CACHE_HINTS,
+      // MC-18: what the server is for, and the two rules a client must follow. The tool
+      // descriptions cover each tool; this is the part that applies to all of them, and it is the
+      // one place a client reads before its first call.
+      instructions: SERVER_INSTRUCTIONS,
     },
   );
 

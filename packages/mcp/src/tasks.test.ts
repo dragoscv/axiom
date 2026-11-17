@@ -3,7 +3,28 @@ import { compilePlan } from "@codai/axiom-plan";
 import { AxiomError, type PlanInput } from "@codai/axiom-schema";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { PlanSessionStore, TaskStore } from "./tasks.js";
+import { PlanSessionStore, TaskStore, toTaskError } from "./tasks.js";
+
+describe("toTaskError is chunk-safe (MC-3)", () => {
+  it("keeps a documented code that crossed a bundle boundary", () => {
+    // What a cross-chunk AxiomError looks like: the same shape, but NOT the same class object, so
+    // `instanceof` is false and the code used to be replaced by ERR_INTERNAL.
+    const foreign = Object.assign(new Error("no task t1"), {
+      name: "AxiomError",
+      code: "ERR_TASK_NOT_FOUND",
+      details: { taskId: "t1" },
+    });
+    expect(toTaskError(foreign)).toEqual({
+      code: "ERR_TASK_NOT_FOUND",
+      message: "no task t1",
+      details: { taskId: "t1" },
+    });
+  });
+
+  it("still reports a real non-axiom failure as ERR_INTERNAL", () => {
+    expect(toTaskError(new Error("boom"))).toEqual({ code: "ERR_INTERNAL", message: "boom" });
+  });
+});
 
 const codeOf = (fn: () => unknown): string => {
   try {

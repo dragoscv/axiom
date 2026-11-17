@@ -18,7 +18,7 @@
  * same `compilePlan`, so the digest is identical to a one-shot compile (property test).
  */
 import { randomUUID } from "node:crypto";
-import { AxiomError, type PlanArtifact, type PlanInput } from "@codai/axiom-schema";
+import { AxiomError, isAxiomError, type PlanArtifact, type PlanInput } from "@codai/axiom-schema";
 import { z } from "zod";
 
 export const TASK_STATUSES = ["working", "completed", "failed", "cancelled"] as const;
@@ -188,10 +188,14 @@ export class TaskStore {
 }
 
 export function toTaskError(err: unknown): z.output<typeof TaskErrorSchema> {
-  if (err instanceof AxiomError) {
-    const j = err.toJSON();
-    const out: z.output<typeof TaskErrorSchema> = { code: j.code, message: j.message };
-    if (j.details !== undefined) out.details = j.details;
+  // MC-3: `instanceof` fails across bundle chunks (the store is built in `cli-main.js`, the
+  // error may be raised in `mcp-lazy.js`), which turned a documented ERR_TASK_NOT_FOUND into
+  // ERR_INTERNAL. `isAxiomError` matches on `name` + a code from the closed enum instead.
+  if (isAxiomError(err)) {
+    // Read the FIELDS, never `toJSON()`: an error raised in another chunk has the shape but not
+    // the methods (the prototype is a different AxiomError class object).
+    const out: z.output<typeof TaskErrorSchema> = { code: err.code, message: err.message };
+    if (err.details !== undefined) out.details = err.details;
     return out;
   }
   return { code: "ERR_INTERNAL", message: err instanceof Error ? err.message : String(err) };
