@@ -136,6 +136,14 @@ describe("startHttp — MCP over Streamable HTTP", () => {
     };
     expect(rawList.ttlMs).toBe(300_000);
     expect(rawList.cacheScope).toBe("public");
+    // MC-5: `resources/read` serves mutable URIs too (`axiom://lock`, `axiom://profile/<name>`),
+    // and the protocol keys cache hints by METHOD, so the hint must stay short and private.
+    const rawRead = (await client.request({
+      method: "resources/read",
+      params: { uri: "axiom://lock" },
+    })) as unknown as { ttlMs?: number; cacheScope?: string };
+    expect(rawRead.ttlMs).toBe(10_000);
+    expect(rawRead.cacheScope).toBe("private");
     // Every modern response identifies the server (spec PR #3002).
     expect(client.getServerVersion()).toMatchObject({ name: "axiom", version: pkg.version });
   });

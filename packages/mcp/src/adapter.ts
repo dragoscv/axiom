@@ -66,8 +66,14 @@ export { isWireMode, WIRE_MODES, type WireMode } from "./wire.js";
 
 /**
  * Cache policy AXIOM advertises on 2026-era `tools/list` & co. The tool catalogue is static
- * for the life of a process, so a shared 5-minute TTL is safe; `resources/read` is content
- * addressed (`axiom://manifest/<sha>`) and therefore immutable → public, 1 day.
+ * for the life of a process, so a shared 5-minute TTL is safe.
+ *
+ * MC-5: `resources/read` serves BOTH immutable, content-addressed URIs (`axiom://manifest/<sha>`,
+ * `axiom://report/<sha>`, `axiom://applied/<sha>`) and MUTABLE ones (`axiom://lock`, the live lock
+ * holder and queue; `axiom://profile/<name>`, which the policy resolver re-reads; `axiom://status`
+ * style snapshots). The protocol keys these hints by METHOD, not by URI, so claiming 24 h `public`
+ * told a client it could cache a lock status for a day. The conservative value is the only correct
+ * one for a method that serves both.
  */
 export const CACHE_HINTS: NonNullable<ServerOptions["cacheHints"]> = {
   "tools/list": { ttlMs: 5 * 60_000, cacheScope: "public" },
@@ -75,7 +81,8 @@ export const CACHE_HINTS: NonNullable<ServerOptions["cacheHints"]> = {
   "server/discover": { ttlMs: 5 * 60_000, cacheScope: "public" },
   // Stored digests appear as roots are touched — short, private.
   "resources/list": { ttlMs: 10_000, cacheScope: "private" },
-  "resources/read": { ttlMs: 24 * 3_600_000, cacheScope: "public" },
+  // Mutable URIs are served by the same method: short and private, never a day and public.
+  "resources/read": { ttlMs: 10_000, cacheScope: "private" },
 };
 
 /**
