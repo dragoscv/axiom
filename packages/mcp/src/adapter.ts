@@ -32,6 +32,7 @@ import {
   type McpRequestContext,
   McpServer,
   type McpServerFactory,
+  ResourceNotFoundError,
   ResourceTemplate,
   type ServerOptions,
   createMcpHandler as sdkCreateMcpHandler,
@@ -55,7 +56,12 @@ export type {
   ServeStdioOptions,
   StdioServerHandle,
 };
-export { McpServer, ResourceTemplate, WebStandardStreamableHTTPServerTransport };
+export {
+  McpServer,
+  ResourceNotFoundError,
+  ResourceTemplate,
+  WebStandardStreamableHTTPServerTransport,
+};
 
 /** Wire era a connection/request is served on (`legacy` = 2024-10-07 … 2025-11-25). */
 export type WireEra = McpRequestContext["era"];

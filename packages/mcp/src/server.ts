@@ -1,7 +1,7 @@
 import { lockStatus } from "@codai/axiom-apply";
 import { loadProfile } from "@codai/axiom-checks";
 import type { EmitterRegistry } from "@codai/axiom-plan";
-import { AxiomError, type ErrorCode, isAxiomError } from "@codai/axiom-schema";
+import { type ErrorCode, isAxiomError } from "@codai/axiom-schema";
 import { z } from "zod";
 import {
   CACHE_HINTS,
@@ -11,6 +11,7 @@ import {
   McpServer,
   type McpServerFactory,
   pendingInputOf,
+  ResourceNotFoundError,
   ResourceTemplate,
   type WireEra,
 } from "./adapter.js";
@@ -169,7 +170,10 @@ function json(uri: string, value: unknown) {
 }
 
 function notFound(uri: string): never {
-  throw new AxiomError("ERR_NOT_FOUND", `resource not found: ${uri}`);
+  // MC-6: an unknown URI is a bad PARAMETER, and the SDK's own error carries the spec's code
+  // (-32602). A plain AxiomError was flattened to -32603 (internal error), so a client could not
+  // tell "you asked for something that does not exist" from "the server is broken" (SEP-2164).
+  throw new ResourceNotFoundError(uri);
 }
 
 export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}): McpServer {

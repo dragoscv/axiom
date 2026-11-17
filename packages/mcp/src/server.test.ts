@@ -103,6 +103,17 @@ describe("tools/list", () => {
 });
 
 describe("full pipeline", () => {
+  it("an unknown resource is a parameter error, not an internal one (MC-6)", async () => {
+    // SEP-2164: a URI that does not exist is bad input (-32602). An AxiomError was flattened by
+    // the SDK into -32603, so a client could not tell "no such resource" from "server is broken".
+    const err = await h.client
+      .readResource({ uri: "axiom://no-such-thing" })
+      .then(() => undefined)
+      .catch((e: unknown) => e as { code?: number; message?: string });
+    expect(err?.code).toBe(-32602);
+    expect(err?.message).toContain("axiom://no-such-thing");
+  });
+
   it("a failed call conforms to the schema it advertises (MC-2)", async () => {
     // Every tool declares an `outputSchema`. Attaching `{code, message}` as `structuredContent`
     // without declaring it made the result violate that schema, and a conforming SDK client throws
