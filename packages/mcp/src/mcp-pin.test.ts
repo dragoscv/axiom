@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { canonicalize, sha256Hex } from "@codai/axiom-canon";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectPins, diffPins, MCP_PINS_FILE, pinMain, serverShape } from "./mcp-pin.js";
+import { collectPins, diffPins, MCP_PINS_FILE, pinMain, pinOf, serverShape } from "./mcp-pin.js";
 import { tmpRepo } from "./test-helpers.js";
 
 let repo: Awaited<ReturnType<typeof tmpRepo>>;
@@ -112,5 +112,24 @@ describe("axiom pin", () => {
         { v: 1, servers: { b: p("3"), c: p("4") } },
       ),
     ).toEqual({ added: ["c"], removed: ["a"], changed: ["b"] });
+  });
+
+  it("pins what changes WHICH server runs, not only its command line (MC-10)", () => {
+    // `cwd` decides which relative script resolves, `envFile` supplies a different environment:
+    // both used to be invisible, so a repointed server still reported "match".
+    const base = { command: "npx", args: ["-y", "srv"] };
+    const a = serverShape(base);
+    expect(serverShape({ ...base, cwd: "/elsewhere" })).not.toEqual(a);
+    expect(pinOf(serverShape({ ...base, cwd: "/elsewhere" }))).not.toBe(pinOf(a));
+    expect(serverShape({ ...base, envFile: ".env.prod" })).not.toEqual(a);
+
+    // An HTTP entry's header SET is part of its contract, but the VALUES carry tokens: names only.
+    const http = serverShape({
+      url: "https://x/mcp",
+      headers: { Authorization: "Bearer secret-token", "x-extra": "1" },
+    });
+    expect(http.headerKeys).toEqual(["Authorization", "x-extra"]);
+    expect(JSON.stringify(http)).not.toContain("secret-token");
+    expect(serverShape({ ...base, headers: { Authorization: "Bearer other" } })).not.toEqual(a);
   });
 });

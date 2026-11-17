@@ -5,8 +5,11 @@
  * Reads only the configs that exist: `<root>/.vscode/mcp.json` (`servers`),
  * `<root>/.cursor/mcp.json`, `<root>/.mcp.json` and `~/.copilot/mcp-config.json`
  * (`mcpServers`; both keys are accepted everywhere). JSONC is tolerated. Each server's pin is
- * `sha256(JCS({command, args, url, envKeys}))` — env VALUES are never read into the pin or the
- * pin file, only the sorted key names. Pins live in `<root>/.axiom/mcp-pins.json`;
+ * `sha256(JCS(shape))`, where the shape is every field that changes what RUNS:
+ * `{command, args, url, cwd, envFile, envKeys, headerKeys}` — `env` and `headers` contribute their
+ * sorted KEY NAMES only, never their values (which carry tokens), and `cwd` / `envFile` matter
+ * because they decide which relative command, script or environment the server starts with (MC-10).
+ * Pins live in `<root>/.axiom/mcp-pins.json`;
  * `--check` reports added / removed / changed servers and exits 1 on any difference.
  *
  * Future work (deliberately not done): pinning the tool DESCRIPTIONS a server advertises
@@ -40,8 +43,16 @@ export interface PinnedServer {
   source: string;
   name: string;
   pin: `sha256:${string}`;
-  /** What was pinned, minus env values. */
-  shape: { command?: string; args?: string[]; url?: string; envKeys: string[] };
+  /** What was pinned, minus env and header VALUES. */
+  shape: {
+    command?: string;
+    args?: string[];
+    url?: string;
+    cwd?: string;
+    envFile?: string;
+    envKeys: string[];
+    headerKeys?: string[];
+  };
 }
 
 export interface PinsFile {
@@ -69,13 +80,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** The pinned shape of one server entry (env values dropped). */
+/**
+ * The pinned shape of one server entry: everything that changes which server runs and with what
+ * (MC-10). `envFile` and `cwd` were missing, so repointing a server at another environment file or
+ * another working directory still reported "match"; `headers` joins them as sorted key names only.
+ */
 export function serverShape(entry: Record<string, unknown>): PinnedServer["shape"] {
   const shape: PinnedServer["shape"] = { envKeys: [] };
   if (typeof entry.command === "string") shape.command = entry.command;
   if (Array.isArray(entry.args)) shape.args = entry.args.map((a) => String(a));
   if (typeof entry.url === "string") shape.url = entry.url;
+  if (typeof entry.cwd === "string") shape.cwd = entry.cwd;
+  if (typeof entry.envFile === "string") shape.envFile = entry.envFile;
   if (isRecord(entry.env)) shape.envKeys = Object.keys(entry.env).sort();
+  if (isRecord(entry.headers)) shape.headerKeys = Object.keys(entry.headers).sort();
   return shape;
 }
 
