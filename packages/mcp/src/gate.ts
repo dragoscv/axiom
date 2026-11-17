@@ -140,6 +140,20 @@ export {
 const realpathNative: (p: string) => Promise<string> = promisify(realpathCb.native);
 const IS_WIN32 = process.platform === "win32";
 
+/**
+ * A policy source as the journal should name it (4.0, S-1414): root-relative when it lies inside
+ * the root, otherwise unchanged. A journal that names `E:\gh\...` is not portable and leaks the
+ * machine layout into anything the journal is exported to.
+ */
+function relProfile(source: string, root: string): string {
+  if (source === "builtin" || source.startsWith("axiom:") || source.startsWith("npm:")) {
+    return source;
+  }
+  const rel = path.relative(root, source);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return source;
+  return rel.split(path.sep).join("/");
+}
+
 // ---------------------------------------------------------------- resolve --
 
 export interface ResolvedGateTarget {
@@ -918,7 +932,7 @@ export async function runGate(
   const agentId = `${payload.harness ?? (format === "auto" ? "unknown" : format)}:${payload.sessionId ?? "unknown"}`;
 
   /** Set once the main root and its profile are known: what the decision journal needs. */
-  let rec: { root: string; profile: GateProfile; source: string } | undefined;
+  let rec: { root: string; profile: GateProfile; source: string; digest?: string } | undefined;
   /** Profile file of the root that produced the blocking finding, when not the main one. */
   let decidingProfile: string | undefined;
   const judgedPaths: string[] = [];
@@ -990,14 +1004,23 @@ export async function runGate(
         paths: [...new Set(judgedPaths)],
         // 4.0: a write-named tool with nothing on disk to judge is allowed and marked as such.
         ...(extracted.noTarget === true ? { no_target: true as const } : {}),
-        profile: rec.source,
+        // 4.0 (S-1414): the decision names the POLICY, not a machine path.
+        profile: relProfile(rec.source, rec.root),
+        ...(rec.digest === undefined ? {} : { policy_digest: rec.digest }),
+        ...(payload.harness === undefined ? {} : { harness: payload.harness }),
+        ...(payload.sessionId === undefined ? {} : { session: payload.sessionId }),
         ...(decidingProfile !== undefined && decidingProfile !== rec.source
-          ? { profile_decided: decidingProfile }
+          ? { profile_decided: relProfile(decidingProfile, rec.root) }
           : {}),
         ms: Math.round(judged.durationMs * 10) / 10,
         ...(rec.profile.shadow ? { shadow: true as const } : {}),
-        // Shadow records carry the command so `guard-parity.mjs --replay` can diff it (S-1216).
-        ...((rec.profile.shadow || relaxedAllow) && command !== undefined ? { command } : {}),
+        // Shadow records carry the command so `guard-parity.mjs --replay` can diff it (S-1216);
+        // 4.0 keeps it (redacted) on every non-allow line, because "what exactly was refused" is
+        // the first question asked of a deny and the harness log only keeps the message.
+        ...(command !== undefined &&
+        (rec.profile.shadow || relaxedAllow || judged.decision !== "allow")
+          ? { command }
+          : {}),
         ...(ruleOf !== undefined &&
         (judged.code === ruleOf || (relaxedAllow && relaxedCode === ruleOf))
           ? { rule: ruleOf }
@@ -1051,8 +1074,10 @@ export async function runGate(
       }
     }
     rootUsed = rootReal;
-    const profiles = new Map<string, { profile: GateProfile; source: string }>();
-    const loadFor = async (root: string): Promise<{ profile: GateProfile; source: string }> => {
+    const profiles = new Map<string, { profile: GateProfile; source: string; digest?: string }>();
+    const loadFor = async (
+      root: string,
+    ): Promise<{ profile: GateProfile; source: string; digest?: string }> => {
       const hit = profiles.get(root);
       if (hit !== undefined) return hit;
       // ONE resolver for every consumer of the policy (4.0, S-1407).
@@ -1061,14 +1086,23 @@ export async function runGate(
         ...(opts.home === undefined ? {} : { home: opts.home }),
       });
       for (const w of policy.warnings) log("warn", `${policy.source}: ${w}`);
-      const loaded = { profile: policy.gate, source: policy.source };
+      const loaded = {
+        profile: policy.gate,
+        source: policy.source,
+        digest: policy.policyDigest,
+      };
       log("debug", `root=${root} profile=${loaded.source}`);
       profiles.set(root, loaded);
       return loaded;
     };
     const main = await loadFor(rootReal);
     const profile = main.profile;
-    rec = { root: rootReal, profile, source: main.source };
+    rec = {
+      root: rootReal,
+      profile,
+      source: main.source,
+      ...(main.digest === undefined ? {} : { digest: main.digest }),
+    };
     log("debug", `class=${extracted.cls} targets=${targets.length}`);
     // 4.0: nothing on disk to judge (`noTarget`): allow it here, where the profile - and with it
     // the decision journal - is known, so the call leaves a trace instead of vanishing.

@@ -114,7 +114,7 @@ Nothing else is read: there is no root, profile or allowlist environment fallbac
 | `axiom plan emitters` | `emitters` | list the template emitters available to plan compile |
 | `axiom journal log` | `log` | the journal chain, newest first |
 | `axiom journal status` | `status` | lock holder, queue, intents, interrupted journals, last applied, chain |
-| `axiom journal verify` | - | verify the journal hash chain (broken -> exit 1, ERR_JOURNAL_CHAIN) |
+| `axiom journal verify` | - | verify a hash chain: the apply journal, or the decision journal with --decisions (broken -> exit 1, ERR_JOURNAL_CHAIN) |
 | `axiom journal undo` | `undo` | restore every file one agent session wrote through the gate |
 | `axiom journal rollback` | `rollback` | reverse-replay the journal of an applied manifest |
 | `axiom journal attest` | `attest` | gate decision journal -> in-toto agent-decision Statements (JSON Lines) |
@@ -440,18 +440,20 @@ registered under `.axiom/intents/` (see `apply`). Exit `0`.
 
 ### `axiom journal verify`
 
-verify the journal hash chain (broken -> exit 1, ERR_JOURNAL_CHAIN).
+verify a hash chain: the apply journal, or the decision journal with --decisions (broken -> exit 1, ERR_JOURNAL_CHAIN).
 
 ```
-axiom journal verify --root <dir>
+axiom journal verify --root <dir> [--decisions]
 ```
 
 | Option | Default | Description |
 |---|---|---|
 | `--root <dir>` | - | repository root (required; no cwd fallback) |
+| `--decisions` | - | verify .axiom/decisions.jsonl and its rotated months instead of the apply journal |
 
 ```sh
 axiom journal verify --root .
+axiom journal verify --root . --decisions
 ```
 
 <!-- notes:journal verify -->

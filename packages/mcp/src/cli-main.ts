@@ -41,6 +41,7 @@ import {
   topLevelCandidates,
   wantsHelp,
 } from "./cli-commands.js";
+import { verifyDecisions } from "./decisions.js";
 import { emitterCatalogue, loadEmitters, withEmitterHint } from "./emitters.js";
 import type { GcOptions } from "./gc.js";
 import { isSchemaKind, jsonSchemaFor, SCHEMA_KINDS } from "./jsonschema.js";
@@ -437,7 +438,13 @@ export async function cmdVerify(argv: string[]): Promise<number> {
     pre: { type: "boolean" },
     attest: { type: "string" },
     journal: { type: "boolean" },
+    decisions: { type: "boolean" },
   });
+  if (values.decisions === true) {
+    if (positionals.length > 0 || values.tree !== undefined || values.attest !== undefined)
+      throw new UsageError("verify --decisions takes only --root <dir>");
+    return cmdVerifyDecisions(await realRootArg(values.root));
+  }
   if (values.journal === true) {
     if (positionals.length > 0 || values.tree !== undefined || values.attest !== undefined)
       throw new UsageError("verify --journal takes only --root <dir>");
@@ -467,6 +474,22 @@ export async function cmdVerify(argv: string[]): Promise<number> {
 /** `axiom verify --journal --root <dir>` (S-706): the journal hash chain. */
 async function cmdVerifyJournal(rootReal: string): Promise<number> {
   const r = await verifyChain(rootReal);
+  if (r.ok) {
+    out(r);
+    return EXIT_OK;
+  }
+  out({ ...r, code: "ERR_JOURNAL_CHAIN" });
+  return EXIT_FAIL;
+}
+
+/**
+ * `axiom verify --decisions --root <dir>` (S-1414 / EN-5): the DECISION journal's hash chain.
+ * Exit 1 when a line was edited, removed or reordered. `gaps` counts the documented sentinels
+ * (`unknown` for an append that could not take the lock, `pruned` after retention rewrote the
+ * file, and a 3.x line with no link) — a gap is reported, not treated as tampering.
+ */
+async function cmdVerifyDecisions(rootReal: string): Promise<number> {
+  const r = await verifyDecisions(rootReal);
   if (r.ok) {
     out(r);
     return EXIT_OK;

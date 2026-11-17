@@ -455,10 +455,19 @@ export const COMMANDS: readonly CommandDef[] = [
   },
   {
     path: ["journal", "verify"],
-    summary: "verify the journal hash chain (broken -> exit 1, ERR_JOURNAL_CHAIN)",
-    usage: "axiom journal verify --root <dir>",
-    options: [rootRequired],
-    examples: ["axiom journal verify --root ."],
+    summary:
+      "verify a hash chain: the apply journal, or the decision journal with --decisions (broken -> exit 1, ERR_JOURNAL_CHAIN)",
+    usage: "axiom journal verify --root <dir> [--decisions]",
+    options: [
+      rootRequired,
+      {
+        name: "decisions",
+        type: "boolean",
+        description:
+          "verify .axiom/decisions.jsonl and its rotated months instead of the apply journal",
+      },
+    ],
+    examples: ["axiom journal verify --root .", "axiom journal verify --root . --decisions"],
     run: (a) => cmdVerify(["--journal", ...a]),
   },
   {

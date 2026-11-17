@@ -3,7 +3,7 @@ import { readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises
 import * as path from "node:path";
 import { acquireLock, listJournals } from "@codai/axiom-apply";
 import { AxiomError, ManifestBundleSchema } from "@codai/axiom-schema";
-import { DECISIONS_FILE } from "./decisions.js";
+import { DECISIONS_FILE, rechainLines, refreshHead } from "./decisions.js";
 import { manifestsDir } from "./store.js";
 import { pruneUndo, UNDO_TTL_MS_DEFAULT, undoLiveDigests } from "./undo.js";
 
@@ -247,9 +247,15 @@ async function pruneDecisionsUnlocked(
     // The gate appends without `.axiom/lock`: carry over anything appended while we read.
     const now = await readOrEmpty(file);
     const appended = now.startsWith(before) ? now.slice(before.length) : "";
-    const body = keep.length === 0 ? "" : `${keep.join("\n")}\n`;
-    await writeFile(tmp, body + appended, "utf8");
+    // S-1414: retention removes lines, which would leave every later line pointing at a hash that
+    // no longer exists. Rebuild the chain instead: `seq` restarts at 1 and the first line is
+    // anchored at `pruned`, which `verifyDecisions` reports as a documented gap.
+    const all = [...keep, ...appended.split(/\r?\n/).filter((l) => l.trim() !== "")];
+    const rechained = rechainLines(all);
+    const body = rechained.length === 0 ? "" : `${rechained.join("\n")}\n`;
+    await writeFile(tmp, body, "utf8");
     await rename(tmp, file);
+    await refreshHead(root);
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => undefined);
     throw err;

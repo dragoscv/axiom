@@ -43,7 +43,8 @@ describe("decisions journal", () => {
   });
   /** What appendDecision adds/rewrites, so round-trips compare only the caller's fields. */
   const strip = (r: DecisionRecord) => {
-    const { id: _id, enforced: _e, principal: _p, ...rest } = r;
+    // 4.0 (S-1414): `seq` / `prev` join the chain and are asserted by decisions-chain.test.ts.
+    const { id: _id, enforced: _e, principal: _p, seq: _s, prev: _pv, ...rest } = r;
     return rest;
   };
 
@@ -70,6 +71,8 @@ describe("decisions journal", () => {
       strip(rec({ decision: "deny", code: "path.deny", reason: "r" })),
     ]);
     expect(all.every((r) => r.enforced === true)).toBe(true);
+    expect(all.map((r) => r.seq)).toEqual([1, 2]);
+    expect(all[1]?.prev).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(all.every((r) => r.principal.subject === sha256Hex("dev").slice(0, 16))).toBe(true);
     expect(new Set(all.map((r) => r.id)).size).toBe(2);
   });
