@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { toolJsonSchema } from "./jsonschema.js";
+import { toolOutputSchema } from "./server.js";
 import { TOOL_DEFS } from "./tools.js";
 import { type Toolset, toolsetOf } from "./toolset.js";
 
@@ -31,7 +32,9 @@ export function buildToolsSpec(): ToolSpecEntry[] {
     toolset: toolsetOf(t.name),
     annotations: t.annotations,
     inputSchema: toolJsonSchema(z.object(t.inputSchema)),
-    outputSchema: toolJsonSchema(t.outputSchema),
+    // MC-2: the wire advertises `toolOutputSchema(t.outputSchema)` (the value OR the error
+    // object), so the spec of record must show the same thing or the two disagree.
+    outputSchema: toolJsonSchema(toolOutputSchema(t.outputSchema)),
   }));
 }
 

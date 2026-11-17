@@ -115,6 +115,27 @@ function errorResult(err: unknown): CallToolResult {
 }
 
 /**
+ * MC-2: the error object a failed call returns as its `structuredContent`. Without it the result
+ * VIOLATED the `outputSchema` the tool announces (every tool declares a value schema), and a
+ * conforming SDK client throws "Structured content does not match the tool's output schema"
+ * instead of surfacing the error. `toolOutputSchema` therefore declares the real contract: the
+ * tool's value, OR this error object (the failure also carries `isError: true`).
+ */
+export const TOOL_ERROR_SCHEMA = z
+  .looseObject({
+    code: z.string(),
+    message: z.string(),
+    path: z.string().optional(),
+    details: z.unknown().optional(),
+  })
+  .describe("Error object of a failed call (isError: true)");
+
+/** The schema advertised and enforced for one tool: its value, or {@link TOOL_ERROR_SCHEMA}. */
+export function toolOutputSchema<T extends z.ZodType>(value: T): z.ZodType {
+  return z.union([value, TOOL_ERROR_SCHEMA]);
+}
+
+/**
  * Wrap a tool handler: never throws; AxiomError → isError result with the closed code. With
  * `server`, each call gets an elicitation seam bound to its request context (S-1206); a pending
  * human confirmation is returned as the SDK's `input_required` result.
@@ -125,6 +146,8 @@ export function wrapHandler(def: AnyToolDef, ctx: ToolContext, server?: McpServe
       server === undefined ? ctx : { ...ctx, elicit: (req) => elicitConfirm(server, extra, req) };
     try {
       const output = await def.handler(callCtx, input as never);
+      // Validate against the VALUE half: the union of the advertised schema also accepts
+      // `TOOL_ERROR_SCHEMA`, which a successful handler must never produce.
       const structured = def.outputSchema.parse(output) as Record<string, unknown>;
       return {
         content: [{ type: "text", text: JSON.stringify(def.summarize(structured)) }],
@@ -189,7 +212,7 @@ export function createServer(policy: RootsPolicy, opts: CreateServerOptions = {}
         // SDK v2 wants Standard Schema objects; the raw-shape overload is deprecated and would
         // wrap with the SDK's bundled zod. Wrap with OUR zod so `.describe()` docs survive.
         inputSchema: z.object(def.inputSchema),
-        outputSchema: def.outputSchema,
+        outputSchema: toolOutputSchema(def.outputSchema),
         annotations: { title: def.title, ...def.annotations },
         ...(def.meta === undefined ? {} : { _meta: { ...def.meta } }),
       },

@@ -4,7 +4,7 @@ import type { ApplyResult, CheckReport, ManifestBundle } from "@codai/axiom-sche
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRootsPolicy } from "./roots.js";
-import { createServer } from "./server.js";
+import { createServer, toolOutputSchema } from "./server.js";
 import { type Harness, harness, makePlan, structured, textOf, tmpRepo } from "./test-helpers.js";
 import { BUNDLE_BYTES_MAX, CORE_TOOL_NAMES, parseToolset, TOOL_DEFS } from "./tools.js";
 
@@ -103,6 +103,26 @@ describe("tools/list", () => {
 });
 
 describe("full pipeline", () => {
+  it("a failed call conforms to the schema it advertises (MC-2)", async () => {
+    // Every tool declares an `outputSchema`. Attaching `{code, message}` as `structuredContent`
+    // without declaring it made the result violate that schema, and a conforming SDK client throws
+    // "Structured content does not match the tool's output schema" instead of showing the error.
+    // The advertised schema is now a union (the value, or the error object), so both conform.
+    const r = await h.call("axiom_task_get", { taskId: "no-such-task" });
+    expect(r.isError).toBe(true);
+    const body = r.structuredContent as { code: string; message: string };
+    expect(body.code).toBe("ERR_TASK_NOT_FOUND");
+    expect(body.message.length).toBeGreaterThan(0);
+    // The failure really is accepted by the schema the tool announces...
+    const advertised = TOOL_DEFS.find((d) => d.name === "axiom_task_get");
+    expect(advertised).toBeDefined();
+    expect(toolOutputSchema(advertised?.outputSchema as never).safeParse(body).success).toBe(true);
+    // ...and the union did not become permissive: a random object is still rejected.
+    expect(toolOutputSchema(advertised?.outputSchema as never).safeParse({ nope: 1 }).success).toBe(
+      false,
+    );
+  });
+
   it("validate → compile → check → dry-run → apply → resource → rollback", async () => {
     const v = await h.call("axiom_plan_validate", { plan: plan() });
     expect(v.isError).toBeUndefined();
