@@ -9,7 +9,7 @@
  * machines this was built on, so there is nothing honest to parse. Its gate decisions still show
  * up under `decisions.byHarness.claude` when the profile records.
  */
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { type DecisionRecord, readDecisions } from "./decisions.js";
@@ -27,6 +27,7 @@ import {
   samePathLoose,
   summarizeRuns,
 } from "./hooklog.js";
+import { resolvePolicy } from "./policy.js";
 
 export interface StatsBucket {
   total: number;
@@ -48,11 +49,21 @@ export interface HarnessLogStats {
   gateRuns: number;
   silent: boolean;
   nonBlockingErrors?: number;
+  /**
+   * 4.0 (OPS-4): gate runs whose wall time reached the hook's own `timeout` — the harness then
+   * fails OPEN, so the tool ran unjudged. Invisible before this; `stats` alarms on it.
+   */
+  timeouts?: number;
   p50?: number;
   p95?: number;
 }
 
-export type StatsAlarmId = "gate.silent" | "gate.nonBlocking" | "gate.slow" | "decisions.empty";
+export type StatsAlarmId =
+  | "gate.silent"
+  | "gate.nonBlocking"
+  | "gate.slow"
+  | "gate.timeout"
+  | "decisions.empty";
 
 export interface StatsResult {
   root: string;
@@ -82,6 +93,8 @@ export interface CollectStatsOptions {
 
 /** gate.slow threshold on a harness log's gate p95. */
 export const GATE_SLOW_P95_MS = 4000;
+/** Share of gate runs that reached the hook timeout above which `gate.timeout` fires. */
+export const GATE_TIMEOUT_WARN_SHARE = 0.01;
 
 /** Nearest-rank on sorted samples at index `floor((n-1)*q)` (scripts/check-gate-latency.mjs). */
 function rank(sorted: readonly number[], q: number): number | null {
@@ -201,6 +214,7 @@ async function vscodeLogStats(
     gateRuns: s.runs,
     silent: s.runs === 0 && s.preToolUseRuns >= GATE_SILENT_MIN_RUNS,
     nonBlockingErrors: s.nonBlockingErrors,
+    timeouts: s.timeouts,
     ...(s.runs > 0 ? { p50: s.p50, p95: s.p95 } : {}),
   };
 }
@@ -251,10 +265,12 @@ async function copilotCliLogStats(
   };
 }
 
-async function profileRecords(root: string): Promise<boolean> {
+async function profileRecords(root: string, home?: string): Promise<boolean> {
   try {
-    const doc = JSON.parse(await readFile(path.join(root, ".axiom", "gate-profile.json"), "utf8"));
-    return typeof doc === "object" && doc !== null && (doc as { record?: unknown }).record === true;
+    // 4.0 (S-1407/SR-20): the EFFECTIVE policy, so a repo whose policy is `.axiom/axiom.json` is
+    // not reported as "record: true but nothing was written".
+    const policy = await resolvePolicy(root, home === undefined ? {} : { home });
+    return policy.gate.record === true;
   } catch {
     return false;
   }
@@ -305,8 +321,19 @@ export async function collectStats(o: CollectStatsOptions): Promise<StatsResult>
         message: `gate p95 ${l.p95} ms > ${GATE_SLOW_P95_MS} ms - consider \`axiom setup init --daemon\` or check machine load`,
       });
     }
+    // OPS-4: a run that reached the hook timeout was answered by the HARNESS (fail open), so the
+    // tool ran with no decision at all. Nothing reported this before 4.0.
+    const timeouts = l.timeouts ?? 0;
+    if (timeouts > 0 && l.gateRuns > 0 && timeouts / l.gateRuns >= GATE_TIMEOUT_WARN_SHARE) {
+      const pct = ((timeouts / l.gateRuns) * 100).toFixed(1);
+      alarms.push({
+        id: "gate.timeout",
+        harness: l.harness,
+        message: `${timeouts} of ${l.gateRuns} gate runs (${pct}%) reached the hook timeout and were allowed by the harness - run \`axiom setup init --daemon\` or lower the gate latency`,
+      });
+    }
   }
-  if (records.length === 0 && (await profileRecords(root))) {
+  if (records.length === 0 && (await profileRecords(root, o.home))) {
     alarms.push({
       id: "decisions.empty",
       message:

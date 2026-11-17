@@ -173,7 +173,7 @@ describe("findHookLogs / readTail", () => {
     );
   });
 
-  it("returns only the newest session's window logs", async () => {
+  it("reads the newest sessions, newest first, and is not blinded by an empty one", async () => {
     const logs = join(home.root, ".config", "Code", "logs");
     const mk = async (session: string, window: string) => {
       const dir = join(logs, session, window, "exthost", "GitHub.copilot-chat");
@@ -181,11 +181,19 @@ describe("findHookLogs / readTail", () => {
       await writeFile(join(dir, HOOK_LOG_FILE), SAMPLE);
       return join(dir, HOOK_LOG_FILE);
     };
-    await mk("20261013T080000", "window1");
+    const old = await mk("20261013T080000", "window1");
     const a = await mk("20261014T080000", "window1");
     const b = await mk("20261014T080000", "window2");
     await mkdir(join(logs, "20261014T080000", "window3"), { recursive: true });
-    expect(await findHookLogs({ home: home.root, platform: "linux" })).toEqual([a, b]);
+    // OPS-6: VS Code creates the newest session directory at startup and keeps writing into an
+    // older one. Reading only the newest reported "harness logs: none found" for thousands of runs.
+    await mkdir(join(logs, "20261015T080000"), { recursive: true });
+    // The live session's logs, and only those: the scan stops at the first session that has any.
+    const listed = await findHookLogs({ home: home.root, platform: "linux" });
+    expect(listed).toEqual([a, b]);
+    expect(listed).not.toContain(old);
+    // One session of lookback is not enough when the newest is empty (the pre-4.0 behaviour).
+    expect(await findHookLogs({ home: home.root, platform: "linux", sessions: 1 })).toEqual([]);
     expect(await findHookLogs({ home: join(home.root, "none"), platform: "linux" })).toEqual([]);
     expect((await readHookLogStats([a, b, join(home.root, "missing.log")])).runs).toBe(4);
   });

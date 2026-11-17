@@ -204,9 +204,20 @@ describe("collectStats — VS Code hook log", () => {
         gateRuns: 0,
         silent: true,
         nonBlockingErrors: 0,
+        timeouts: 0,
       },
     ]);
     expect(s.alarms.map((a) => [a.id, a.harness])).toEqual([["gate.silent", "vscode"]]);
+  });
+
+  it("gate runs that reach the hook timeout (the harness then fails open) -> gate.timeout", async () => {
+    const f = join(home.root, "Hooks.log");
+    // The Running line carries `"timeout":10`; 10.5 s elapsed means the HARNESS answered.
+    await writeFile(f, vscodeLog(repo.root, { other: 0, gate: 100, gateMs: 10_500 }));
+    const s = await collectStats(isolated({ hookLogs: [f] }));
+    expect(s.logs[0]?.timeouts).toBe(100);
+    expect(s.alarms.map((a) => a.id)).toContain("gate.timeout");
+    expect(s.alarms.find((a) => a.id === "gate.timeout")?.message).toContain("100 of 100");
   });
 
   it("19 runs is below the threshold", async () => {

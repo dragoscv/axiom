@@ -220,7 +220,18 @@ export interface FindHookLogsOptions {
   /** `%APPDATA%` on win32 (defaults to `<home>/AppData/Roaming`). */
   appData?: string;
   platform?: NodeJS.Platform;
+  /**
+   * How far back to look for a session that HAS hook logs (default {@link HOOK_LOG_SESSIONS}).
+   * Reality check #2 (OPS-6): the newest `logs/<session>` was frequently EMPTY — VS Code creates
+   * the directory at startup and keeps writing into an older one — so `stats` and `doctor`
+   * reported "harness logs: none found" for repos with thousands of hook runs. The scan stops at
+   * the first session that yields a log, so a normal window behaves exactly as before.
+   */
+  sessions?: number;
 }
+
+/** Session directories read by default: enough to cover a VS Code restart. */
+export const HOOK_LOG_SESSIONS = 5;
 
 /** VS Code `logs` directories (stable + Insiders) for the platform. */
 export function hookLogRoots(opts: FindHookLogsOptions = {}): string[] {
@@ -248,26 +259,34 @@ async function dirs(abs: string): Promise<string[]> {
 }
 
 /**
- * Hook log files of the NEWEST session dir under each logs root:
+ * Hook log files of the newest session dir THAT HAS ANY, under each logs root:
  * `<session>/window*\/exthost/GitHub.copilot-chat/GitHub Copilot Chat Hooks.log`.
+ * Newest session first; an empty newest session is skipped rather than reported as "no logs".
  */
 export async function findHookLogs(opts: FindHookLogsOptions = {}): Promise<string[]> {
+  const limit = Math.max(1, opts.sessions ?? HOOK_LOG_SESSIONS);
   const found: string[] = [];
   for (const logs of hookLogRoots(opts)) {
     // Session dirs are named `YYYYMMDDTHHMMSS`; lexical order = chronological.
     const sessions = (await dirs(logs)).sort();
-    const newest = sessions[sessions.length - 1];
-    if (newest === undefined) continue;
-    const session = path.join(logs, newest);
-    for (const w of (await dirs(session)).filter((d) => d.startsWith("window")).sort()) {
-      const f = path.join(session, w, "exthost", "GitHub.copilot-chat", HOOK_LOG_FILE);
-      if (
-        await stat(f).then(
-          (s) => s.isFile(),
-          () => false,
+    const newest = sessions.slice(-limit).reverse();
+    for (const name of newest) {
+      const session = path.join(logs, name);
+      const here: string[] = [];
+      for (const w of (await dirs(session)).filter((d) => d.startsWith("window")).sort()) {
+        const f = path.join(session, w, "exthost", "GitHub.copilot-chat", HOOK_LOG_FILE);
+        if (
+          await stat(f).then(
+            (s) => s.isFile(),
+            () => false,
+          )
         )
-      )
-        found.push(f);
+          here.push(f);
+      }
+      if (here.length > 0) {
+        found.push(...here);
+        break;
+      }
     }
   }
   return found;
