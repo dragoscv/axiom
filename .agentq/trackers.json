@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "repo": "axiom",
+  "trackers": [
+    {
+      "id": "plan",
+      "file": "TRACKER.csv",
+      "format": "csv",
+      "columns": {
+        "id": "id",
+        "title": "title",
+        "status": "status",
+        "group": "phase",
+        "notes": "notes"
+      },
+      "idPattern": "^[DS]-\\d{1,4}$",
+      "status": {
+        "map": {
+          "done": "done",
+          "dropped": "dropped",
+          "blocked": "blocked",
+          "doing": "in-progress"
+        }
+      },
+      "index": {
+        "kind": "plan",
+        "order": 1
+      }
+    }
+  ]
+}
